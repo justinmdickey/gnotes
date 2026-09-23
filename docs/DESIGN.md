@@ -157,9 +157,10 @@ A client opens one websocket to `/api/ws` (authenticated by the session cookie) 
 
 // server -> client
 {"t":"joined", "note":"<id>", "role":"editor", "version":"<base64 version vector>"}
-{"t":"error",  "note":"<id>", "code":"not_found|forbidden|bad_update"}
+{"t":"error",  "note":"<id>", "code":"not_found|forbidden|bad_update|bad_version|out_of_sync"}
+{"t":"role",   "note":"<id>", "role":"viewer"}   // a share changed while the note is open
 {"t":"revoked","note":"<id>"}
-{"t":"tree_changed"}
+{"t":"tree_changed"}                          // sent to every connection; carries no content
 ```
 
 ### Join and catch-up
@@ -174,6 +175,7 @@ A client opens one websocket to `/api/ws` (authenticated by the session cookie) 
 
 - Each open note has one in-memory room holding the `LoroDoc`, the connected clients and the presence state. A room closes 60 seconds after its last client leaves.
 - `0x01` from a viewer is rejected with `forbidden`. Otherwise the server imports the update, appends it to `note_updates`, and forwards it to the room's other clients.
+- If an update depends on changes the server doesn't have, the server replies `out_of_sync` and doesn't forward it. The client rejoins with its version, which fills the gap.
 - `0x02` presence is relayed to other clients and never saved. Presence entries expire after 30 seconds without a refresh.
 - Loro peer ids are random for each session. The server tags every update with the sending user's id, so attribution never relies on peer ids.
 

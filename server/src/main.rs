@@ -1,32 +1,40 @@
-use std::{env, net::SocketAddr, path::PathBuf};
+use std::io::{BufRead, Write};
 
 use anyhow::Context;
-use axum::{Json, Router, routing::get};
-use serde_json::json;
-use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
-use tower_http::{
-    services::{ServeDir, ServeFile},
-    trace::TraceLayer,
-};
+use clap::{Parser, Subcommand};
+use gnotes_server::{Config, auth, build, open_db, serve};
 use tracing_subscriber::EnvFilter;
 
-struct Config {
-    data_dir: PathBuf,
-    bind: SocketAddr,
-    web_dir: PathBuf,
+#[derive(Parser)]
+#[command(name = "gnotes-server", about = "Self-hosted Gnotes server")]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
 }
 
-impl Config {
-    fn from_env() -> anyhow::Result<Self> {
-        Ok(Self {
-            data_dir: env::var("GNOTES_DATA_DIR").unwrap_or_else(|_| "./data".into()).into(),
-            bind: env::var("GNOTES_BIND")
-                .unwrap_or_else(|_| "0.0.0.0:8080".into())
-                .parse()
-                .context("GNOTES_BIND must be host:port")?,
-            web_dir: env::var("GNOTES_WEB_DIR").unwrap_or_else(|_| "./web/dist".into()).into(),
-        })
+#[derive(Subcommand)]
+enum Command {
+    /// Run the server (default).
+    Serve,
+    /// Create an account. Reads the password from GNOTES_PASSWORD or stdin.
+    CreateUser {
+        username: String,
+        #[arg(long, default_value = "")]
+        display_name: String,
+        #[arg(long)]
+        admin: bool,
+    },
+}
+
+fn read_password() -> anyhow::Result<String> {
+    if let Ok(p) = std::env::var("GNOTES_PASSWORD") {
+        return Ok(p);
     }
+    eprint!("Password: ");
+    std::io::stderr().flush()?;
+    let mut line = String::new();
+    std::io::stdin().lock().read_line(&mut line)?;
+    Ok(line.trim_end_matches(['\r', '\n']).to_owned())
 }
 
 #[tokio::main]
@@ -34,34 +42,25 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
-
+    let cli = Cli::parse();
     let config = Config::from_env()?;
-    std::fs::create_dir_all(&config.data_dir)
-        .with_context(|| format!("creating {}", config.data_dir.display()))?;
 
-    let db = SqlitePoolOptions::new()
-        .connect_with(
-            SqliteConnectOptions::new()
-                .filename(config.data_dir.join("gnotes.db"))
-                .create_if_missing(true)
-                .journal_mode(SqliteJournalMode::Wal)
-                .foreign_keys(true),
-        )
-        .await?;
-    sqlx::migrate!().run(&db).await?;
-
-    // Unknown paths fall back to index.html so the PWA's client-side routes load.
-    let web = ServeDir::new(&config.web_dir)
-        .fallback(ServeFile::new(config.web_dir.join("index.html")));
-
-    let app = Router::new()
-        .route("/api/health", get(|| async { Json(json!({ "ok": true })) }))
-        .fallback_service(web)
-        .layer(TraceLayer::new_for_http())
-        .with_state(db);
-
-    let listener = tokio::net::TcpListener::bind(config.bind).await?;
-    tracing::info!("listening on http://{}", config.bind);
-    axum::serve(listener, app).await?;
-    Ok(())
+    match cli.command.unwrap_or(Command::Serve) {
+        Command::Serve => {
+            let listener = tokio::net::TcpListener::bind(config.bind)
+                .await
+                .with_context(|| format!("binding {}", config.bind))?;
+            tracing::info!("listening on http://{}", config.bind);
+            serve(build(config).await?, listener).await
+        }
+        Command::CreateUser { username, display_name, admin } => {
+            let db = open_db(&config).await?;
+            let password = read_password()?;
+            let user = auth::create_user(&db, &username.to_lowercase(), &display_name, &password, admin)
+                .await
+                .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+            println!("Created {} ({})", user.username, if admin { "admin" } else { "user" });
+            Ok(())
+        }
+    }
 }
