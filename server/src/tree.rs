@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -34,6 +34,7 @@ pub struct TreeNote {
     id: String,
     notebook_id: Option<String>,
     title: String,
+    preview: String,
     owner: String,
     role: Role,
     updated_at: i64,
@@ -56,7 +57,7 @@ pub struct Tree {
 }
 
 type NotebookRow = (String, Option<String>, String, String, i64);
-type NoteRow = (String, Option<String>, String, String, i64);
+type NoteRow = (String, Option<String>, String, String, String, i64);
 
 pub async fn get_tree(State(state): State<AppState>, CurrentUser(me): CurrentUser) -> ApiResult<Json<Tree>> {
     let db = &state.db;
@@ -102,7 +103,7 @@ pub async fn get_tree(State(state): State<AppState>, CurrentUser(me): CurrentUse
     let shared_ids: Vec<&String> =
         notebooks.values().filter(|nb| nb.role != Role::Owner).map(|nb| &nb.id).collect();
     let own_notes: Vec<NoteRow> = sqlx::query_as(
-        "SELECT n.id, n.notebook_id, n.title, u.display_name, n.updated_at
+        "SELECT n.id, n.notebook_id, n.title, n.preview, u.display_name, n.updated_at
          FROM notes n JOIN users u ON u.id = n.owner_id
          WHERE n.owner_id = ? AND n.deleted_at IS NULL",
     )
@@ -110,7 +111,7 @@ pub async fn get_tree(State(state): State<AppState>, CurrentUser(me): CurrentUse
     .fetch_all(db)
     .await?;
     let notebook_notes: Vec<NoteRow> = sqlx::query_as(
-        "SELECT n.id, n.notebook_id, n.title, u.display_name, n.updated_at
+        "SELECT n.id, n.notebook_id, n.title, n.preview, u.display_name, n.updated_at
          FROM notes n JOIN users u ON u.id = n.owner_id
          WHERE n.deleted_at IS NULL AND n.owner_id != ?
            AND n.notebook_id IN (SELECT value FROM json_each(?))",
@@ -119,8 +120,8 @@ pub async fn get_tree(State(state): State<AppState>, CurrentUser(me): CurrentUse
     .bind(serde_json::to_string(&shared_ids)?)
     .fetch_all(db)
     .await?;
-    let direct_notes: Vec<(String, Option<String>, String, String, i64, String)> = sqlx::query_as(
-        "SELECT n.id, n.notebook_id, n.title, u.display_name, n.updated_at, s.role
+    let direct_notes: Vec<(String, Option<String>, String, String, String, i64, String)> = sqlx::query_as(
+        "SELECT n.id, n.notebook_id, n.title, n.preview, u.display_name, n.updated_at, s.role
          FROM shares s JOIN notes n ON n.id = s.resource_id JOIN users u ON u.id = n.owner_id
          WHERE s.user_id = ?1 AND s.resource_type = 'note' AND n.deleted_at IS NULL AND n.owner_id != ?1",
     )
@@ -129,19 +130,19 @@ pub async fn get_tree(State(state): State<AppState>, CurrentUser(me): CurrentUse
     .await?;
 
     let mut notes: HashMap<String, TreeNote> = HashMap::new();
-    for (id, notebook_id, title, owner, updated_at) in own_notes {
-        notes.insert(id.clone(), TreeNote { id, notebook_id, title, owner, role: Role::Owner, updated_at });
+    for (id, notebook_id, title, preview, owner, updated_at) in own_notes {
+        notes.insert(id.clone(), TreeNote { id, notebook_id, title, preview, owner, role: Role::Owner, updated_at });
     }
-    for (id, notebook_id, title, owner, updated_at) in notebook_notes {
+    for (id, notebook_id, title, preview, owner, updated_at) in notebook_notes {
         let role = notebook_id.as_ref().and_then(|nb| notebooks.get(nb)).map_or(Role::Viewer, |nb| nb.role);
-        notes.insert(id.clone(), TreeNote { id, notebook_id, title, owner, role, updated_at });
+        notes.insert(id.clone(), TreeNote { id, notebook_id, title, preview, owner, role, updated_at });
     }
-    for (id, notebook_id, title, owner, updated_at, role) in direct_notes {
+    for (id, notebook_id, title, preview, owner, updated_at, role) in direct_notes {
         let role = Role::parse(&role).unwrap_or(Role::Viewer);
         notes
             .entry(id.clone())
             .and_modify(|n| n.role = n.role.max(role))
-            .or_insert(TreeNote { id, notebook_id, title, owner, role, updated_at });
+            .or_insert(TreeNote { id, notebook_id, title, preview, owner, role, updated_at });
     }
 
     let shared: Vec<SharedRoot> = sqlx::query_as::<_, (String, String, String, bool)>(
@@ -409,17 +410,33 @@ pub async fn update_note(
     Ok(Json(json!({ "ok": true })))
 }
 
+#[derive(Deserialize)]
+pub struct DeleteNoteQuery {
+    /// Permanently delete, but only if the note is blank. Used when leaving a new note untouched.
+    #[serde(default)]
+    discard: bool,
+}
+
 pub async fn delete_note(
     State(state): State<AppState>,
     CurrentUser(me): CurrentUser,
     Path(id): Path<String>,
+    Query(query): Query<DeleteNoteQuery>,
 ) -> ApiResult<Json<Value>> {
     require_note(&state, &me.id, &id, Role::Owner).await?;
-    sqlx::query("UPDATE notes SET deleted_at = ? WHERE id = ?")
-        .bind(now_ms())
-        .bind(&id)
-        .execute(&state.db)
-        .await?;
+    if query.discard {
+        let uuid = uuid::Uuid::parse_str(&id).map_err(|_| AppError::NotFound)?;
+        if !crate::rooms::note_body(&state, uuid).await?.trim().is_empty() {
+            return Err(AppError::Conflict("The note isn't empty".into()));
+        }
+        sqlx::query("DELETE FROM notes WHERE id = ?").bind(&id).execute(&state.db).await?;
+    } else {
+        sqlx::query("UPDATE notes SET deleted_at = ? WHERE id = ?")
+            .bind(now_ms())
+            .bind(&id)
+            .execute(&state.db)
+            .await?;
+    }
     state.recheck_access().await;
     state.hub.tree_changed();
     Ok(Json(json!({ "ok": true })))

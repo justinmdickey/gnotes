@@ -357,3 +357,27 @@ async fn trash_and_restore_notebook() {
     assert_eq!(tree["notebooks"].as_array().unwrap().len(), 2);
     assert_eq!(tree["notes"].as_array().unwrap().len(), 1);
 }
+
+#[tokio::test]
+async fn discard_only_removes_blank_notes() {
+    let dir = TempDir::new().unwrap();
+    let server = start(&dir).await;
+    let alice = user(&server, "alice").await;
+
+    let blank = alice.post("/notes", json!({})).await["id"].as_str().unwrap().to_owned();
+    let res = alice.send(reqwest::Method::DELETE, &format!("/notes/{blank}?discard=true"), json!({})).await;
+    assert!(res.status().is_success());
+    assert_eq!(alice.get("/trash").await.as_array().unwrap().len(), 0, "discarded notes skip the trash");
+
+    let note = alice.post("/notes", json!({})).await["id"].as_str().unwrap().to_owned();
+    let mut ws = alice.ws().await;
+    ws.join_and_sync(&note, None).await;
+    ws.send_frame(0x01, &note, &edit(&LoroDoc::new(), 0, "Keep me\n- [ ] **second** line")).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let res = alice.send(reqwest::Method::DELETE, &format!("/notes/{note}?discard=true"), json!({})).await;
+    assert_eq!(res.status(), 409);
+
+    let tree = alice.get("/tree").await;
+    assert_eq!(tree["notes"][0]["title"], "Keep me");
+    assert_eq!(tree["notes"][0]["preview"], "second line");
+}

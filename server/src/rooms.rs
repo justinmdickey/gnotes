@@ -81,6 +81,7 @@ struct RoomState {
     last_seq: i64,
     unsnapshotted: usize,
     title: String,
+    preview: String,
     /// Bumped on every join so a pending idle close can tell someone came back.
     generation: u64,
     closed: bool,
@@ -109,10 +110,44 @@ impl RoomError {
     }
 }
 
-/// The first non-empty line, without Markdown heading marks.
-pub fn derive_title(body: &str) -> String {
-    let line = body.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
-    line.trim_start_matches('#').trim().chars().take(120).collect()
+/// A line without its Markdown block marks (headings, bullets, checkboxes, quotes).
+fn plain_line(line: &str) -> String {
+    let mut l = line.trim();
+    l = l.trim_start_matches('#').trim_start();
+    l = l.trim_start_matches('>').trim_start();
+    for marker in ["- [ ] ", "- [x] ", "- [X] ", "* ", "- ", "+ "] {
+        if let Some(rest) = l.strip_prefix(marker) {
+            l = rest;
+            break;
+        }
+    }
+    if let Some((num, rest)) = l.split_once(". ")
+        && !num.is_empty()
+        && num.chars().all(|c| c.is_ascii_digit())
+    {
+        l = rest;
+    }
+    l.replace("**", "").replace("~~", "").replace('`', "").trim().chars().take(120).collect()
+}
+
+/// Title (first non-empty line) and preview (the next one), as shown in note lists.
+pub fn summarize(body: &str) -> (String, String) {
+    let mut lines = body.lines().map(plain_line).filter(|l| !l.is_empty());
+    let title = lines.next().unwrap_or_default();
+    let preview = lines.next().unwrap_or_default();
+    (title, preview)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::summarize;
+
+    #[test]
+    fn summary_skips_markdown_marks() {
+        assert_eq!(summarize("\n# Groceries\n\n- [ ] **milk**\n- eggs"), ("Groceries".into(), "milk".into()));
+        assert_eq!(summarize("1. first\n> quoted"), ("first".into(), "quoted".into()));
+        assert_eq!(summarize(""), (String::new(), String::new()));
+    }
 }
 
 #[derive(Default)]
@@ -160,7 +195,7 @@ async fn load(db: &sqlx::SqlitePool, id: Uuid) -> anyhow::Result<Room> {
         doc.import(data)?;
         last_seq = *seq;
     }
-    let title: String = sqlx::query_scalar("SELECT title FROM notes WHERE id = ?")
+    let (title, preview): (String, String) = sqlx::query_as("SELECT title, preview FROM notes WHERE id = ?")
         .bind(&key)
         .fetch_optional(db)
         .await?
@@ -174,6 +209,7 @@ async fn load(db: &sqlx::SqlitePool, id: Uuid) -> anyhow::Result<Room> {
             last_seq,
             unsnapshotted: updates.len(),
             title,
+            preview,
             generation: 0,
             closed: false,
         }),
@@ -273,8 +309,8 @@ impl Room {
         st.unsnapshotted += 1;
         let key = self.id.to_string();
         let now = now_ms();
-        let title = derive_title(&st.doc.get_text("body").to_string());
-        let title_changed = title != st.title;
+        let (title, preview) = summarize(&st.doc.get_text("body").to_string());
+        let summary_changed = title != st.title || preview != st.preview;
         let persisted = async {
             sqlx::query("INSERT INTO note_updates (note_id, seq, data, user_id, created_at) VALUES (?, ?, ?, ?, ?)")
                 .bind(&key)
@@ -284,8 +320,9 @@ impl Room {
                 .bind(now)
                 .execute(&state.db)
                 .await?;
-            sqlx::query("UPDATE notes SET title = ?, updated_at = ? WHERE id = ?")
+            sqlx::query("UPDATE notes SET title = ?, preview = ?, updated_at = ? WHERE id = ?")
                 .bind(&title)
+                .bind(&preview)
                 .bind(now)
                 .bind(&key)
                 .execute(&state.db)
@@ -296,8 +333,9 @@ impl Room {
         if let Err(e) = persisted {
             tracing::error!("saving update for note {key}: {e:#}");
         }
-        if title_changed {
+        if summary_changed {
             st.title = title;
+            st.preview = preview;
             state.hub.tree_changed();
         }
         if st.unsnapshotted >= SNAPSHOT_EVERY
@@ -323,6 +361,16 @@ impl Room {
         Self::broadcast(&st, conn, &frame(KIND_PRESENCE, &self.id, data));
         Ok(())
     }
+}
+
+/// The note's current Markdown, from its open room or from storage.
+pub async fn note_body(state: &AppState, note: Uuid) -> anyhow::Result<String> {
+    let room = match state.rooms.get(&note).await {
+        Some(room) => room,
+        None => Arc::new(load(&state.db, note).await?),
+    };
+    let st = room.state.lock().await;
+    Ok(st.doc.get_text("body").to_string())
 }
 
 /// Joins `conn` to a note's room, loading it if needed.
