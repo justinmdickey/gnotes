@@ -14,7 +14,7 @@
   import { livePreview } from "./lib/livePreview";
   import { sync } from "./lib/sync";
   import Menu from "./lib/Menu.svelte";
-  import { app, colorFor, composeNote, goBack, trashNote, viewTitle } from "./lib/store.svelte";
+  import { app, colorFor, composeNote, goBack, navigate, trashNote, viewTitle } from "./lib/store.svelte";
   import { bloom, media, scrollEdge } from "./lib/ui.svelte";
   import { fly } from "svelte/transition";
   import FormatBar from "./FormatBar.svelte";
@@ -24,6 +24,13 @@
   const noteId = $derived(props.noteId);
 
   const note = $derived(app.tree.notes.find((n) => n.id === noteId));
+  const notebook = $derived(note?.notebook_id ? app.tree.notebooks.find((n) => n.id === note.notebook_id) : undefined);
+
+  /** Wide: show that notebook's list beside this note. Phone: go to the list. */
+  function openNotebook() {
+    if (!notebook) return;
+    navigate({ kind: "notebook", id: notebook.id }, media.phone ? null : noteId);
+  }
   let role = $state<Role | null>(null);
   let loaded = $state(false);
   let lost = $state<"revoked" | "not_found" | null>(null);
@@ -276,7 +283,14 @@
 
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
   <div class="scroll" class:gone={lost} onclick={focusEnd} use:scrollEdge bind:this={scroller}>
-    <div class="page" class:hidden={!loaded} bind:this={parent}></div>
+    <div class="column" class:hidden={!loaded}>
+      {#if notebook}
+        <button class="flat notebook-chip" title="Open the {notebook.name} notebook" onclick={(e) => (e.stopPropagation(), openNotebook())}>
+          <Icon name="folder" size={14} /><span>{notebook.name}</span>
+        </button>
+      {/if}
+      <div class="page" class:with-chip={notebook} bind:this={parent}></div>
+    </div>
   </div>
 
   {#if canEdit && !focused}
@@ -448,14 +462,38 @@
     display: none;
   }
 
-  .page {
+  .column {
     width: 100%;
     max-width: 760px;
-    padding: 28px 24px 40vh;
+    transition: opacity 220ms ease;
   }
 
   .page {
-    transition: opacity 220ms ease;
+    padding: 28px 24px 40vh;
+  }
+
+  .page.with-chip {
+    padding-top: 10px;
+  }
+
+  /* Which notebook this note lives in; tap to open it. */
+  .notebook-chip {
+    gap: 6px;
+    min-height: 28px;
+    margin: 20px 0 0 18px;
+    padding: 0 12px 0 10px;
+    border-radius: 999px;
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-size: 0.85rem;
+    font-weight: 700;
+    max-width: calc(100% - 36px);
+  }
+
+  .notebook-chip span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .hidden {
@@ -571,6 +609,14 @@
 
     .page {
       padding: 20px 18px 50vh;
+    }
+
+    .page.with-chip {
+      padding-top: 8px;
+    }
+
+    .notebook-chip {
+      margin: 14px 0 0 12px;
     }
   }
 </style>

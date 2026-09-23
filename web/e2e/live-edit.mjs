@@ -209,6 +209,28 @@ try {
   await alice.waitForFunction(() => !document.querySelector(".settings-layer"));
   await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("bread"));
 
+  // Inside a nested notebook the list shows its path and name, and its notes show a notebook chip.
+  const kitchen = await alice.evaluate(async () => {
+    const post = (path, body) => fetch(`/api${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then((r) => r.json());
+    const home = await post("/notebooks", { name: "Home", parent_id: null });
+    const kitchen = await post("/notebooks", { name: "Kitchen", parent_id: home.id });
+    return kitchen.id;
+  });
+  await alice.evaluate((id) => (location.hash = `#/nb/${id}`), kitchen);
+  await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Kitchen" && document.querySelector(".hero .path")?.textContent.includes("Home"));
+  check(true, "nested notebook shows its path and name");
+  await alice.click(".list header button[aria-label='New note']");
+  await alice.waitForSelector(".cm-content[contenteditable=true]");
+  await alice.keyboard.type("Pantry");
+  await alice.waitForFunction(() => document.querySelector(".notebook-chip")?.textContent.trim() === "Kitchen");
+  check(true, "a note in a notebook shows the notebook chip");
+  if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-notebook.png") });
+  await alice.evaluate(() => [...document.querySelectorAll(".path .crumb")].find((b) => b.textContent === "Home").click());
+  await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Home");
+  await alice.evaluate(() => (location.hash = "#/all"));
+  await alice.waitForFunction(() => [...document.querySelectorAll("li button")].some((b) => b.textContent.includes("Groceries")));
+  await alice.evaluate(() => [...document.querySelectorAll("li button")].find((b) => b.textContent.includes("Groceries")).click());
+
   if (process.env.SHOTS) {
     // Let slide and fade animations settle first.
     const shot = async (name) => (await new Promise((r) => setTimeout(r, 450)), alice.screenshot({ path: join(process.env.SHOTS, `${name}.png`) }));

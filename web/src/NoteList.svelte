@@ -5,7 +5,7 @@
   import Dialog from "./lib/Dialog.svelte";
   import Icon from "./lib/Icon.svelte";
   import Menu from "./lib/Menu.svelte";
-  import { app, composeNote, goBack, notesFor, openNote, trashNotebook, viewTitle } from "./lib/store.svelte";
+  import { app, composeNote, goBack, navigate, notesFor, openNote, trashNotebook, viewTitle } from "./lib/store.svelte";
   import { media, scrollEdge } from "./lib/ui.svelte";
   import ShareDialog from "./ShareDialog.svelte";
 
@@ -16,6 +16,30 @@
   const canCreate = $derived(app.view.kind === "all" || (notebook !== undefined && notebook.role !== "viewer"));
 
   let query = $state("");
+  /** The big title has scrolled away, so the headerbar shows the name instead. */
+  let compact = $state(false);
+
+  /** Parent notebooks, outermost first, for the path above the title. */
+  const path = $derived.by(() => {
+    const out = [];
+    let parent = notebook?.parent_id;
+    while (parent) {
+      const nb = app.tree.notebooks.find((n) => n.id === parent);
+      if (!nb) break;
+      out.unshift(nb);
+      parent = nb.parent_id;
+    }
+    return out;
+  });
+  const heroIcon = $derived(app.view.kind === "notebook" ? "folder" : app.view.kind === "shared-notes" ? "people" : "note");
+  const countLabel = $derived(`${notesFor(app.view, app.tree).length} ${notesFor(app.view, app.tree).length === 1 ? "note" : "notes"}`);
+  const subtitle = $derived(
+    notebook && notebook.role !== "owner"
+      ? `${notebook.owner}'s notebook · ${notebook.role === "viewer" ? "view only" : "can edit"} · ${countLabel}`
+      : notebook
+        ? `Notebook · ${countLabel}`
+        : countLabel,
+  );
   let renaming = $state(false);
   let newName = $state("");
   let sharing = $state(false);
@@ -73,9 +97,8 @@
     <button class="flat back phone-only" onclick={goBack}>
       <Icon name="back" /><span>Notebooks</span>
     </button>
-    <div class="title">
+    <div class="title" class:shown={compact} aria-hidden={!compact}>
       <strong>{title}</strong>
-      <span>{notes.length} {notes.length === 1 ? "note" : "notes"}</span>
     </div>
     {#if notebook?.role === "owner"}
       <button class="flat accent share" title="Share this notebook" onclick={() => (sharing = true)}>
@@ -96,7 +119,28 @@
     {/if}
   </header>
 
-  <div class="scroll" use:scrollEdge>
+  <div class="scroll" use:scrollEdge onscroll={(e) => (compact = e.currentTarget.scrollTop > 56)}>
+    <!-- Where you are: the notebook's path, icon and name, big enough to notice. -->
+    {#key app.view.kind === "notebook" ? app.view.id : app.view.kind}
+      <div class="hero">
+        {#if path.length}
+          <nav class="path" aria-label="Notebook path">
+            {#each path as nb (nb.id)}
+              <button class="flat crumb" onclick={() => navigate({ kind: "notebook", id: nb.id })}>{nb.name}</button>
+              <Icon name="next" size={12} />
+            {/each}
+          </nav>
+        {/if}
+        <div class="hero-row">
+          <span class="tile" class:folder={app.view.kind === "notebook"}><Icon name={heroIcon} size={22} /></span>
+          <div class="hero-text">
+            <h1>{title}</h1>
+            <span class="dim">{subtitle}</span>
+          </div>
+        </div>
+      </div>
+    {/key}
+
     <label class="search">
       <Icon name="search" />
       <input type="search" placeholder="Search notes" aria-label="Search notes" bind:value={query} />
@@ -177,6 +221,85 @@
   .share {
     gap: 6px;
     padding: 0 12px;
+  }
+
+  /* The small headerbar title only appears once the big one scrolls away. */
+  .headerbar .title {
+    opacity: 0;
+    transform: translateY(4px);
+    transition:
+      opacity var(--fast) ease,
+      transform var(--fast) ease;
+  }
+
+  .headerbar .title.shown {
+    opacity: 1;
+    transform: none;
+  }
+
+  .hero {
+    padding: 4px 4px 14px;
+    animation: rise 260ms var(--ease-out) both;
+  }
+
+  .path {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 2px;
+    margin: 0 0 6px -8px;
+    color: var(--dim-fg);
+  }
+
+  .crumb {
+    min-height: 26px;
+    padding: 0 8px;
+    border-radius: 999px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--accent);
+  }
+
+  .hero-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .tile {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+    background: var(--hover);
+    color: var(--dim-fg);
+  }
+
+  .tile.folder {
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+
+  .hero-text {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .hero h1 {
+    margin: 0;
+    font-size: 1.5rem;
+    font-weight: 800;
+    line-height: 1.2;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .hero-text span {
+    font-size: 0.88rem;
   }
 
   .new {

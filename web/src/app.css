@@ -348,7 +348,7 @@ button.fab {
   background: var(--accent-bg);
   color: var(--accent-fg);
   font-size: 1.02rem;
-  box-shadow: 0 4px 14px color-mix(in srgb, var(--accent-bg) 45%, transparent), 0 1px 3px rgb(0 0 6 / 20%);
+  box-shadow: 0 1px 3px rgb(0 0 6 / 25%);
   animation: rise 260ms var(--ease-spring) both;
 }
 
