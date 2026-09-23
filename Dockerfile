@@ -14,6 +14,8 @@ COPY server/ server/
 RUN CARGO_BUILD_JOBS=2 cargo build --release -p gnotes-server
 
 FROM debian:trixie-slim
+# CA roots for outgoing HTTPS, e.g. a hosted speech-to-text service.
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 RUN useradd --system --home /data gnotes && mkdir -p /data && chown gnotes /data
 COPY --from=server /src/target/release/gnotes-server /usr/local/bin/gnotes-server
 COPY --from=web /src/web/dist /app/web
