@@ -36,6 +36,9 @@ function check(cond, msg) {
   console.log(`ok - ${msg}`);
 }
 
+// Dialogs animate out, so wait for them to leave before clicking what's underneath.
+const closed = (page) => page.waitForFunction(() => !document.querySelector("dialog"));
+
 const text = (page) => page.$eval(".cm-content", (el) => el.innerText);
 
 async function login(browser, username) {
@@ -66,7 +69,7 @@ try {
   await alice.waitForSelector(".cm-content[contenteditable=true]");
   await alice.click(".cm-content");
   await alice.keyboard.type("# Groceries\nmilk");
-  await alice.waitForFunction(() => document.querySelector("main section header .title")?.textContent === "Groceries", { timeout: 5000 });
+  await alice.waitForFunction(() => document.querySelector(".editor .headerbar .title strong")?.textContent === "Groceries", { timeout: 5000 });
   check(true, "title follows the first line");
 
   await alice.click("button[aria-label='Share']");
@@ -74,6 +77,7 @@ try {
   await alice.click("dialog button.add");
   await alice.waitForFunction(() => document.querySelector("dialog ul")?.textContent.includes("Bob"));
   await alice.click("dialog .actions button");
+  await closed(alice);
   check(true, "alice shared the note with bob");
 
   // Bob sees it appear without reloading, and opens it.
@@ -144,13 +148,14 @@ try {
   await alice.waitForSelector("dialog button[aria-label='Remove Bob']");
   await alice.click("dialog button[aria-label='Remove Bob']");
   await alice.waitForSelector("dialog button.add");
-  await bob.waitForFunction(() => document.querySelector(".banner")?.textContent.includes("no longer have access"), { timeout: 5000 });
+  await bob.waitForFunction(() => document.querySelector(".lost")?.textContent.includes("no longer have access"), { timeout: 5000 });
   check(true, "bob loses access when alice unshares");
 
   // Invite someone new from the same dialog; they join from the link and see the note.
   await alice.click("dialog button.invite");
   const link = await alice.waitForSelector("dialog input.link").then((el) => el.evaluate((i) => i.value));
   await alice.click("dialog .actions button");
+  await closed(alice);
   check(link.startsWith(`${base}/join/`), "invite link created");
   const carol = await (await browser.createBrowserContext()).newPage();
   await carol.setViewport({ width: 390, height: 844 });
@@ -195,15 +200,18 @@ try {
   await alice.evaluate(() => [...document.querySelectorAll("[role=menuitem]")].find((b) => b.textContent.includes("Reset Password")).click());
   await alice.type("#reset-password input", "bobsnewpass");
   await alice.click("dialog button[form=reset-password]");
+  await closed(alice);
   await alice.waitForFunction(() => document.body.innerText.includes("password was reset"));
   await bob.waitForFunction(() => document.body.innerText.includes("You were signed out"), { timeout: 10000 });
   check(true, "admin reset signs the user out of their open app");
   if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-settings.png") });
-  await alice.click(".page header .back");
+  await alice.click(".settings-layer .back");
+  await alice.waitForFunction(() => !document.querySelector(".settings-layer"));
   await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("bread"));
 
   if (process.env.SHOTS) {
-    const shot = (name) => alice.screenshot({ path: join(process.env.SHOTS, `${name}.png`) });
+    // Let slide and fade animations settle first.
+    const shot = async (name) => (await new Promise((r) => setTimeout(r, 450)), alice.screenshot({ path: join(process.env.SHOTS, `${name}.png`) }));
     await alice.click(".cm-content");
     await shot("desktop-editing");
     await alice.evaluate(() => document.activeElement?.blur());
@@ -218,20 +226,37 @@ try {
     await shot("phone-settings");
     await alice.goto(noteUrl);
     await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("bread"));
-    await alice.tap("button[aria-label='Share']");
+    await alice.tap(".toolbar button:nth-child(2)");
     await alice.waitForSelector("dialog button.add");
     await shot("phone-share");
     await alice.tap("dialog .actions button");
+    await closed(alice);
     await alice.tap(".cm-content");
     await shot("phone-editing");
+    // Typing a long note on a phone keeps the cursor clear of the format bar, with room below it.
+    await alice.keyboard.down("Control");
+    await alice.keyboard.press("End");
+    await alice.keyboard.up("Control");
+    for (let i = 0; i < 40; i++) await alice.keyboard.type(`\nline ${i}`);
+    await new Promise((r) => setTimeout(r, 700));
+    const gap = await alice.evaluate(() => {
+      const caret = [...document.querySelectorAll(".cm-line")].at(-1).getBoundingClientRect();
+      const bar = document.querySelector(".format").getBoundingClientRect();
+      return Math.round(bar.top - caret.bottom);
+    });
+    await shot("phone-typing-long");
+    check(gap >= 100, `cursor stays above the phone format bar with room (${gap}px)`);
+    await shot("phone-typing-long");
     await alice.tap("button[aria-label='Text styles']");
     await shot("phone-editing-styles");
     await alice.tap("button[aria-label='Text styles']");
     await alice.evaluate(() => document.activeElement?.blur());
-    await alice.click("main .back");
+    await alice.click(".editor .back");
+    await new Promise((r) => setTimeout(r, 500));
     await shot("phone-list");
     await alice.emulateMediaFeatures([{ name: "prefers-color-scheme", value: "dark" }]);
     await alice.click(".list .back");
+    await new Promise((r) => setTimeout(r, 500));
     await shot("phone-sidebar-dark");
   }
   console.log("all checks passed");
