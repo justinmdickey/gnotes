@@ -150,9 +150,11 @@
       }
     }, 10_000);
 
+    // Android (interactive-widget=resizes-content) shrinks the layout to fit above the
+    // keyboard, so this is 0 there. iOS overlays the keyboard; this is its height.
     const vv = window.visualViewport;
     const onViewport = () => {
-      if (vv) keyboard = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+      if (vv) keyboard = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
     };
     vv?.addEventListener("resize", onViewport);
     vv?.addEventListener("scroll", onViewport);
@@ -414,7 +416,7 @@
       z-index: 5;
       border-top: 1px solid var(--border);
       border-bottom: none;
-      padding-bottom: env(safe-area-inset-bottom);
+      /* No safe-area padding: the bar only shows while typing, sitting on the keyboard. */
       background: var(--headerbar-bg);
       display: none;
     }

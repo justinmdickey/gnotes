@@ -174,6 +174,9 @@ try {
     await shot("phone-editor");
     await alice.tap(".cm-content");
     await shot("phone-editing");
+    await alice.tap("button[aria-label='Text styles']");
+    await shot("phone-editing-styles");
+    await alice.tap("button[aria-label='Text styles']");
     await alice.evaluate(() => document.activeElement?.blur());
     await alice.click("main .back");
     await shot("phone-list");
