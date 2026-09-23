@@ -3,11 +3,14 @@
   import { api } from "./lib/api";
   import { app, readHash, startSession } from "./lib/store.svelte";
   import Editor from "./Editor.svelte";
+  import Join from "./Join.svelte";
   import Login from "./Login.svelte";
   import NoteList from "./NoteList.svelte";
   import Sidebar from "./Sidebar.svelte";
 
   let checked = $state(false);
+  // Invite links are real paths (/join/<token>) so they survive being texted and opened cold.
+  const joinToken = location.pathname.match(/^\/join\/([A-Za-z0-9_-]+)$/)?.[1] ?? null;
 
   onMount(() => {
     api
@@ -22,6 +25,8 @@
 
 {#if !checked}
   <div class="splash"></div>
+{:else if joinToken}
+  <Join token={joinToken} />
 {:else if !app.user}
   <Login />
 {:else}

@@ -99,7 +99,7 @@ A user's effective role on a note is the highest of:
 
 - Username and password, hashed with argon2id.
 - Sessions use an HttpOnly, Secure, SameSite=Lax cookie holding a random token. The database stores only the token's hash.
-- The first admin is created with `gnotes-server create-user --admin <username>`. Admins create other accounts from the admin page. Invite links can come later.
+- The first admin is created with `gnotes-server create-user --admin <username>`. Admins invite others with one-time links (7 days) that can also share a note or notebook.
 - Browsers only allow service workers and microphone access over HTTPS. The server expects a reverse proxy that handles TLS, such as Caddy or Tailscale Serve. The docs should make that the default setup.
 
 ## REST API
@@ -131,6 +131,11 @@ POST   /attachments                multipart {note_id, file}   (phase 2)
 GET    /attachments/:id                                        (phase 2)
 
 POST   /admin/users                admin only
+GET    /invites                    admin: pending invite links
+POST   /invites                    admin: {resource_type?, resource_id?, role} -> {token}; link is /join/<token>
+DELETE /invites/:id                admin: revoke
+GET    /join/:token                (public) who invited you and what's shared
+POST   /join/:token                (public) {username, display_name, password}; logs in, applies the share
 GET    /health                     (public)
 ```
 

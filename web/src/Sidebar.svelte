@@ -2,7 +2,11 @@
   import { api, type TreeNotebook } from "./lib/api";
   import Dialog from "./lib/Dialog.svelte";
   import Icon from "./lib/Icon.svelte";
-  import { app, endSession, type View } from "./lib/store.svelte";
+  import { app, composeNote, endSession, navigate, notesFor, type View } from "./lib/store.svelte";
+  import PeopleDialog from "./PeopleDialog.svelte";
+
+  let people = $state(false);
+  const count = (view: View) => notesFor(view, app.tree).length;
 
   let creating = $state<{ parent: string | null } | null>(null);
   let name = $state("");
@@ -23,8 +27,7 @@
   const hasSharedNotes = $derived(app.tree.shared.some((s) => s.resource_type === "note" && !s.hidden));
 
   function select(view: View) {
-    app.view = view;
-    app.pane = "list";
+    navigate(view);
   }
 
   function isSelected(view: View) {
@@ -51,6 +54,7 @@
     <Icon name="folder" />
     <span class="label">{nb.name}</span>
     {#if nb.role !== "owner"}<span class="dim owner">{nb.owner}</span>{/if}
+    <span class="dim count">{count({ kind: "notebook", id: nb.id })}</span>
   </button>
   {#each byParent.get(nb.id) ?? [] as child (child.id)}
     {@render notebookRow(child, depth + 1)}
@@ -65,6 +69,7 @@
   <div class="scroll">
     <button class="row flat" class:selected={isSelected({ kind: "all" })} onclick={() => select({ kind: "all" })}>
       <Icon name="note" /><span class="label">All Notes</span>
+      <span class="dim count">{count({ kind: "all" })}</span>
     </button>
 
     <div class="section">
@@ -84,18 +89,35 @@
       {#if hasSharedNotes}
         <button class="row flat" class:selected={isSelected({ kind: "shared-notes" })} onclick={() => select({ kind: "shared-notes" })}>
           <Icon name="people" /><span class="label">Shared Notes</span>
+          <span class="dim count">{count({ kind: "shared-notes" })}</span>
         </button>
       {/if}
       {#each sharedRoots as nb (nb.id)}
         {@render notebookRow(nb, 0)}
       {/each}
     {/if}
+
+    {#if app.user?.is_admin}
+      <div class="section"><span>Server</span></div>
+      <button class="row flat" onclick={() => (people = true)}>
+        <Icon name="person_add" /><span class="label">People &amp; Invites</span>
+      </button>
+    {/if}
   </div>
   <footer class="dim">
     <span class="dot {app.status}"></span>
     {app.user?.display_name} · {app.status === "online" ? "Connected" : app.status === "connecting" ? "Connecting…" : "Offline"}
   </footer>
+  <!-- Phone home screen toolbar, like Apple Notes' Folders screen. -->
+  <div class="toolbar phone-only">
+    <button class="flat icon tool" aria-label="New notebook" onclick={() => (creating = { parent: null })}><Icon name="newfolder" /></button>
+    <button class="flat icon tool" aria-label="New note" onclick={() => composeNote({ kind: "all" })}><Icon name="compose" /></button>
+  </div>
 </nav>
+
+{#if people}
+  <PeopleDialog onclose={() => (people = false)} />
+{/if}
 
 {#if creating}
   <Dialog title="New Notebook" onclose={() => (creating = null)}>
@@ -159,8 +181,45 @@
     text-align: left;
   }
 
-  .owner {
+  .owner,
+  .count {
     font-size: 0.8rem;
+  }
+
+  .count {
+    min-width: 1.5em;
+    text-align: right;
+  }
+
+  .toolbar {
+    display: flex;
+    justify-content: space-between;
+    padding: 2px 8px env(safe-area-inset-bottom);
+    border-top: 1px solid var(--border);
+    background: var(--headerbar-bg);
+  }
+
+  .tool {
+    min-width: 44px;
+    min-height: 44px;
+    color: var(--accent);
+  }
+
+  .tool :global(svg) {
+    width: 22px;
+    height: 22px;
+  }
+
+  /* Phone: bigger rows, like the Folders list in Apple Notes. */
+  @media (max-width: 700px) {
+    .row {
+      min-height: 48px;
+      font-size: 1.05rem;
+    }
+
+    footer {
+      padding-bottom: 10px;
+    }
   }
 
   .section {

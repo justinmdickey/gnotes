@@ -2,7 +2,8 @@
   import { api, type TreeNote } from "./lib/api";
   import Dialog from "./lib/Dialog.svelte";
   import Icon from "./lib/Icon.svelte";
-  import { app, composeNote, notesFor, openNote, viewTitle } from "./lib/store.svelte";
+  import Menu from "./lib/Menu.svelte";
+  import { app, composeNote, goBack, navigate, notesFor, openNote, viewTitle } from "./lib/store.svelte";
   import ShareDialog from "./ShareDialog.svelte";
 
   const notebook = $derived(
@@ -15,7 +16,6 @@
   let renaming = $state(false);
   let newName = $state("");
   let sharing = $state(false);
-  let menuOpen = $state(false);
 
   const notes = $derived.by(() => {
     const all = notesFor(app.view, app.tree);
@@ -54,10 +54,9 @@
   }
 
   async function remove() {
-    menuOpen = false;
     if (!notebook || !confirm(`Move “${notebook.name}” and everything in it to the trash?`)) return;
     await api.deleteNotebook(notebook.id);
-    app.view = { kind: "all" };
+    navigate({ kind: "all" }, null, true);
   }
 
   function when(ms: number) {
@@ -69,28 +68,22 @@
 
 <section>
   <header>
-    <button class="flat back narrow-only" onclick={() => (app.pane = "sidebar")}>
+    <button class="flat back narrow-only" onclick={goBack}>
       <Icon name="back" /><span>Notebooks</span>
     </button>
     <span class="title">{title}</span>
     {#if notebook?.role === "owner"}
-      <button class="flat icon" title="Share notebook" aria-label="Share notebook" onclick={() => (sharing = true)}><Icon name="share" /></button>
-      <div class="menu-wrap">
-        <button class="flat icon" title="Notebook menu" aria-label="Notebook menu" aria-expanded={menuOpen} onclick={() => (menuOpen = !menuOpen)}>
-          <Icon name="more" />
-        </button>
-        {#if menuOpen}
-          <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-          <div class="scrim" onclick={() => (menuOpen = false)}></div>
-          <div class="popover" role="menu">
-            <button class="flat" role="menuitem" onclick={() => ((menuOpen = false), (newName = notebook.name), (renaming = true))}>Rename…</button>
-            <button class="flat destructive" role="menuitem" onclick={remove}>Move to Trash</button>
-          </div>
-        {/if}
-      </div>
+      <button class="flat share" onclick={() => (sharing = true)}><Icon name="people" /><span>Share</span></button>
+      <Menu
+        label="Notebook menu"
+        items={[
+          { label: "Rename…", onselect: () => ((newName = notebook.name), (renaming = true)) },
+          { label: "Move to Trash", destructive: true, onselect: remove },
+        ]}
+      />
     {/if}
     {#if canCreate}
-      <button class="flat icon wide-only" title="New note" aria-label="New note" onclick={composeNote}><Icon name="compose" /></button>
+      <button class="flat icon wide-only" title="New note" aria-label="New note" onclick={() => composeNote()}><Icon name="compose" /></button>
     {/if}
   </header>
 
@@ -121,7 +114,7 @@
           No results
         {:else}
           <p>No notes yet</p>
-          {#if canCreate}<button class="suggested" onclick={composeNote}>New Note</button>{/if}
+          {#if canCreate}<button class="suggested" onclick={() => composeNote()}>New Note</button>{/if}
         {/if}
       </div>
     {/each}
@@ -132,7 +125,7 @@
     <span class="dim count">{notes.length} {notes.length === 1 ? "Note" : "Notes"}</span>
     <span class="spacer compose-slot">
       {#if canCreate}
-        <button class="flat icon compose" aria-label="New note" onclick={composeNote}><Icon name="compose" /></button>
+        <button class="flat icon compose" aria-label="New note" onclick={() => composeNote()}><Icon name="compose" /></button>
       {/if}
     </span>
   </footer>
@@ -179,6 +172,12 @@
     font-weight: 400;
   }
 
+  .share {
+    gap: 6px;
+    padding: 0 12px;
+    color: var(--accent);
+  }
+
   .title {
     flex: 1;
     min-width: 0;
@@ -187,35 +186,6 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-
-  .menu-wrap {
-    position: relative;
-  }
-
-  .scrim {
-    position: fixed;
-    inset: 0;
-    z-index: 9;
-  }
-
-  .popover {
-    position: absolute;
-    right: 0;
-    top: calc(100% + 4px);
-    z-index: 10;
-    display: flex;
-    flex-direction: column;
-    min-width: 180px;
-    padding: 6px;
-    border-radius: var(--radius-lg);
-    background: var(--dialog-bg);
-    box-shadow: 0 2px 12px rgb(0 0 0 / 25%), 0 0 0 1px var(--border);
-  }
-
-  .popover button {
-    justify-content: flex-start;
-    font-weight: 400;
   }
 
   .search {

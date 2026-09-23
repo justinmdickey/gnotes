@@ -13,7 +13,8 @@
   import Icon from "./lib/Icon.svelte";
   import { livePreview } from "./lib/livePreview";
   import { sync } from "./lib/sync";
-  import { app, colorFor, openNote, viewTitle } from "./lib/store.svelte";
+  import Menu from "./lib/Menu.svelte";
+  import { app, colorFor, composeNote, goBack, navigate, viewTitle } from "./lib/store.svelte";
   import FormatBar from "./FormatBar.svelte";
   import ShareDialog from "./ShareDialog.svelte";
 
@@ -175,16 +176,31 @@
     };
   });
 
+  /** Adds a checklist item at the end of the note and starts typing in it. */
+  function startChecklist() {
+    if (!view) return;
+    const { doc: text } = view.state;
+    const last = text.line(text.lines);
+    const insert = last.text.trim() === "" ? "- [ ] " : "\n- [ ] ";
+    const from = last.text.trim() === "" ? last.from : text.length;
+    view.dispatch({
+      changes: { from, to: text.length, insert },
+      selection: { anchor: from + insert.length },
+      scrollIntoView: true,
+    });
+    view.focus();
+  }
+
   async function remove() {
     if (!confirm("Move this note to the trash?")) return;
     await api.deleteNote(noteId);
-    openNote(null);
+    navigate(app.view, null, true);
   }
 </script>
 
 <section class:focused>
   <header>
-    <button class="flat back phone-only" onclick={() => openNote(null)}>
+    <button class="flat back phone-only" onclick={goBack}>
       <Icon name="back" /><span>{viewTitle(app.view, app.tree)}</span>
     </button>
     <span class="title">{note?.title || "New Note"}</span>
@@ -195,8 +211,8 @@
     </div>
     {#if role === "viewer"}<span class="badge dim">View only</span>{/if}
     {#if role === "owner"}
-      <button class="flat icon" title="Share" aria-label="Share" onclick={() => (sharing = true)}><Icon name="share" /></button>
-      <button class="flat icon" title="Move to trash" aria-label="Move to trash" onclick={remove}><Icon name="trash" /></button>
+      <button class="flat share" aria-label="Share" onclick={() => (sharing = true)}><Icon name="people" /><span>Share</span></button>
+      <Menu label="Note menu" items={[{ label: "Move to Trash", destructive: true, onselect: remove }]} />
     {/if}
     {#if focused}
       <button class="flat done phone-only" onclick={() => view?.contentDOM.blur()}>Done</button>
@@ -221,6 +237,14 @@
   <div class="scroll" onclick={focusEnd}>
     <div class="page" class:hidden={!loaded} bind:this={parent}></div>
   </div>
+
+  {#if canEdit && !focused}
+    <!-- Phone, not typing: Apple Notes' bottom toolbar. -->
+    <div class="toolbar phone-only">
+      <button class="flat icon tool" aria-label="Add checklist item" onclick={startChecklist}><Icon name="checklist" /></button>
+      <button class="flat icon tool" aria-label="New note" onclick={() => composeNote()}><Icon name="compose" /></button>
+    </div>
+  {/if}
 </section>
 
 {#if sharing}
@@ -261,6 +285,31 @@
 
   .done {
     color: var(--accent);
+  }
+
+  .share {
+    gap: 6px;
+    padding: 0 12px;
+    color: var(--accent);
+  }
+
+  .toolbar {
+    display: flex;
+    justify-content: space-between;
+    padding: 2px 8px env(safe-area-inset-bottom);
+    border-top: 1px solid var(--border);
+    background: var(--headerbar-bg);
+  }
+
+  .tool {
+    min-width: 44px;
+    min-height: 44px;
+    color: var(--accent);
+  }
+
+  .tool :global(svg) {
+    width: 22px;
+    height: 22px;
   }
 
   .title {
@@ -409,6 +458,10 @@
 
   /* Phone: the toolbar floats on top of the keyboard while typing, like Apple Notes. */
   @media (max-width: 700px) {
+    header .title {
+      visibility: hidden;
+    }
+
     .format {
       position: fixed;
       left: 0;

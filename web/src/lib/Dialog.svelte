@@ -40,6 +40,8 @@
   }
 
   .body {
+    max-height: calc(100dvh - 120px);
+    overflow-y: auto;
     padding: 24px 24px 16px;
   }
 

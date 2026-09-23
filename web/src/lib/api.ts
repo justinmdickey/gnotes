@@ -52,6 +52,27 @@ export interface UserSummary {
   display_name: string;
 }
 
+export interface CreatedInvite {
+  id: string;
+  token: string;
+  expires_at: number;
+}
+
+export interface PendingInvite {
+  id: string;
+  resource_type: "note" | "notebook" | null;
+  resource_id: string | null;
+  role: string;
+  created_at: number;
+  expires_at: number;
+}
+
+export interface InvitePreview {
+  inviter: string;
+  shared: string | null;
+  expires_at: number;
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -96,4 +117,18 @@ export const api = {
     request<{ id: string }>("POST", "/shares", { resource_type, resource_id, username, role }),
   setShareRole: (id: string, role: string) => request("PATCH", `/shares/${id}`, { role }),
   unshare: (id: string) => request("DELETE", `/shares/${id}`),
+
+  invite: (resource?: { kind: "note" | "notebook"; id: string }, role = "editor") =>
+    request<CreatedInvite>("POST", "/invites", {
+      resource_type: resource?.kind ?? null,
+      resource_id: resource?.id ?? null,
+      role,
+    }),
+  invites: () => request<PendingInvite[]>("GET", "/invites"),
+  revokeInvite: (id: string) => request("DELETE", `/invites/${id}`),
+  previewJoin: (token: string) => request<InvitePreview>("GET", `/join/${token}`),
+  join: (token: string, username: string, display_name: string, password: string) =>
+    request<User>("POST", `/join/${token}`, { username, display_name, password }),
 };
+
+export const inviteUrl = (token: string) => `${location.origin}/join/${token}`;

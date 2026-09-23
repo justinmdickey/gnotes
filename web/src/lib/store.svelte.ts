@@ -26,11 +26,11 @@ export function viewTitle(view: View, tree: Tree): string {
 }
 
 /** Apple Notes-style compose: make the note and drop straight into it. */
-export async function composeNote() {
-  const notebook = app.view.kind === "notebook" ? app.view.id : null;
+export async function composeNote(view: View = app.view) {
+  const notebook = view.kind === "notebook" ? view.id : null;
   const { id } = await api.createNote(notebook);
   app.freshNote = id;
-  openNote(id);
+  navigate(view.kind === "shared-notes" ? { kind: "all" } : view, id);
   void refreshTree();
 }
 
@@ -72,17 +72,62 @@ export async function endSession() {
   app.user = null;
 }
 
-export function openNote(id: string | null) {
-  app.noteId = id;
-  app.pane = id ? "editor" : "list";
-  const hash = id ? `#/note/${id}` : "#/";
-  if (location.hash !== hash) history.pushState(null, "", hash);
+// Routes live in the hash so every screen change is a history entry and the phone's
+// back button steps back through them:
+//   #/                       notebooks (the phone's home screen)
+//   #/all  #/shared  #/nb/<id>            a note list
+//   #/all/note/<id>  #/nb/<id>/note/<id>  a note, remembering the list it came from
+
+function viewPath(view: View): string {
+  if (view.kind === "notebook") return `nb/${view.id}`;
+  return view.kind === "shared-notes" ? "shared" : "all";
+}
+
+function hashFor(view: View | null, noteId: string | null): string {
+  if (!view) return "#/";
+  return `#/${viewPath(view)}${noteId ? `/note/${noteId}` : ""}`;
+}
+
+function apply(view: View | null, noteId: string | null) {
+  if (view) app.view = view;
+  app.noteId = noteId;
+  app.pane = noteId ? "editor" : view ? "list" : "sidebar";
+}
+
+/** Goes to a screen: a view's note list, a note inside it, or home with `view` null. */
+export function navigate(view: View | null, noteId: string | null = null, replace = false) {
+  apply(view, noteId);
+  const hash = hashFor(view, noteId);
+  if (location.hash === hash) return;
+  if (replace) history.replaceState(history.state, "", hash);
+  else history.pushState({ from: location.hash }, "", hash);
+}
+
+export function openNote(id: string) {
+  navigate(app.view, id);
+}
+
+/**
+ * In-app back always goes to the parent screen (note -> its list -> notebooks). It pops
+ * history when the previous entry is that parent, so the phone's back button stays in step.
+ */
+export function goBack() {
+  const parent = app.noteId ? app.view : null;
+  if (history.state?.from === hashFor(parent, null)) return history.back();
+  navigate(parent, null, true);
 }
 
 export function readHash() {
-  const m = location.hash.match(/^#\/note\/([0-9a-f-]{36})$/);
-  app.noteId = m ? m[1] : null;
-  if (m) app.pane = "editor";
+  const h = location.hash.replace(/^#\/?/, "");
+  const id = "([0-9a-f-]{36})";
+  const note = h.match(new RegExp(`(?:^|/)note/${id}$`))?.[1] ?? null;
+  const base = h.replace(/\/?note\/[0-9a-f-]{36}$/, "");
+  let view: View | null = null;
+  const nb = base.match(new RegExp(`^nb/${id}$`));
+  if (nb) view = { kind: "notebook", id: nb[1] };
+  else if (base === "shared") view = { kind: "shared-notes" };
+  else if (base === "all" || note) view = { kind: "all" };
+  apply(view, note);
 }
 
 export function notesFor(view: View, tree: Tree): TreeNote[] {

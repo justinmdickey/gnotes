@@ -15,7 +15,8 @@ const base = `http://127.0.0.1:${port}`;
 const env = { ...process.env, GNOTES_DATA_DIR: data, GNOTES_BIND: `127.0.0.1:${port}`, GNOTES_WEB_DIR: join(root, "web/dist") };
 
 for (const [name, display] of [["alice", "Alice"], ["bob", "Bob"]]) {
-  const r = spawnSync(bin, ["create-user", name, "--display-name", display], { env: { ...env, GNOTES_PASSWORD: "password123" } });
+  const admin = name === "alice" ? ["--admin"] : [];
+  const r = spawnSync(bin, ["create-user", name, "--display-name", display, ...admin], { env: { ...env, GNOTES_PASSWORD: "password123" } });
   if (r.status !== 0) throw new Error(`create-user ${name}: ${r.stderr}`);
 }
 const server = spawn(bin, [], { env, stdio: "inherit" });
@@ -61,7 +62,7 @@ try {
   const bob = await login(browser, "bob");
 
   // Alice writes a note and shares it with Bob.
-  await alice.click("button[aria-label='New note']");
+  await alice.click(".list header button[aria-label='New note']");
   await alice.waitForSelector(".cm-content[contenteditable=true]");
   await alice.click(".cm-content");
   await alice.keyboard.type("# Groceries\nmilk");
@@ -69,9 +70,9 @@ try {
   check(true, "title follows the first line");
 
   await alice.click("button[aria-label='Share']");
-  await alice.waitForSelector("dialog form select");
-  await alice.click("dialog form button[type=submit]");
-  await alice.waitForFunction(() => document.querySelector("dialog ul li")?.textContent.includes("Bob"));
+  await alice.waitForSelector("dialog button.add");
+  await alice.click("dialog button.add");
+  await alice.waitForFunction(() => document.querySelector("dialog ul")?.textContent.includes("Bob"));
   await alice.click("dialog .actions button");
   check(true, "alice shared the note with bob");
 
@@ -140,17 +141,42 @@ try {
 
   // Revoking removes access live.
   await alice.click("button[aria-label='Share']");
-  await alice.waitForSelector("dialog ul li button");
-  await alice.click("dialog ul li button");
-  await alice.waitForFunction(() => document.querySelector("dialog ul li")?.textContent.includes("Only you"));
-  await alice.click("dialog .actions button");
+  await alice.waitForSelector("dialog button[aria-label='Remove Bob']");
+  await alice.click("dialog button[aria-label='Remove Bob']");
+  await alice.waitForSelector("dialog button.add");
   await bob.waitForFunction(() => document.querySelector(".banner")?.textContent.includes("no longer have access"), { timeout: 5000 });
   check(true, "bob loses access when alice unshares");
+
+  // Invite someone new from the same dialog; they join from the link and see the note.
+  await alice.click("dialog button.invite");
+  const link = await alice.waitForSelector("dialog input.link").then((el) => el.evaluate((i) => i.value));
+  await alice.click("dialog .actions button");
+  check(link.startsWith(`${base}/join/`), "invite link created");
+  const carol = await (await browser.createBrowserContext()).newPage();
+  await carol.setViewport({ width: 390, height: 844 });
+  await carol.goto(link);
+  await carol.waitForFunction(() => document.body.innerText.includes("Alice invited you"));
+  await carol.type("input[name=name]", "Carol");
+  await carol.type("input[name=password]", "password123");
+  await carol.click("button[type=submit]");
+  await carol.waitForSelector("nav");
+  await carol.evaluate(() => [...document.querySelectorAll("nav button")].find((b) => b.textContent.includes("Shared Notes")).click());
+  await carol.waitForFunction(() => [...document.querySelectorAll("li button")].some((b) => b.textContent.includes("Groceries")));
+  check(true, "invitee joins from the link and sees the shared note");
+
+  // The phone back button walks back through screens: note -> list -> notebooks.
+  await carol.evaluate(() => [...document.querySelectorAll("li button")].find((b) => b.textContent.includes("Groceries")).click());
+  await carol.waitForSelector(".cm-content");
+  await carol.goBack();
+  await carol.waitForFunction(() => location.hash === "#/shared");
+  await carol.goBack();
+  await carol.waitForFunction(() => location.hash === "#/");
+  check(true, "back button goes note -> list -> notebooks");
 
   // A new note that's left blank is thrown away, like Apple Notes.
   const count = () => alice.$$eval("li button .note-title", (els) => els.length);
   const before = await count();
-  await alice.click("button[aria-label='New note']");
+  await alice.click(".list header button[aria-label='New note']");
   await alice.waitForFunction((n) => document.querySelectorAll("li button .note-title").length === n + 1, {}, before);
   await alice.waitForSelector(".cm-content[contenteditable=true]");
   await alice.evaluate(() => [...document.querySelectorAll("li button")].find((b) => b.textContent.includes("Groceries")).click());
@@ -172,6 +198,10 @@ try {
     await alice.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true });
     await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("bread"));
     await shot("phone-editor");
+    await alice.tap("button[aria-label='Share']");
+    await alice.waitForSelector("dialog button.add");
+    await shot("phone-share");
+    await alice.tap("dialog .actions button");
     await alice.tap(".cm-content");
     await shot("phone-editing");
     await alice.tap("button[aria-label='Text styles']");
