@@ -110,6 +110,7 @@
     }
   }
 
+  /* .narrow-only: shown while the sidebar is hidden. .phone-only / .wide-only: one pane vs several. */
   @media (min-width: 1001px) {
     .shell :global(.narrow-only) {
       display: none;
@@ -117,7 +118,13 @@
   }
 
   @media (min-width: 701px) {
-    .shell :global(.editor .narrow-only) {
+    .shell :global(.phone-only) {
+      display: none;
+    }
+  }
+
+  @media (max-width: 700px) {
+    .shell :global(.wide-only) {
       display: none;
     }
   }

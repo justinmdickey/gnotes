@@ -99,6 +99,8 @@ try {
   await alice.keyboard.up("Control");
   await alice.keyboard.type(" and bread");
   await bob.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("bread"), { timeout: 5000 });
+  // Blur both so no line shows its raw Markdown, then compare what each person sees.
+  for (const p of [alice, bob]) await p.evaluate(() => document.activeElement?.blur());
   const [a, b] = [await text(alice), await text(bob)];
   check(a === b, `both editors converge (${JSON.stringify(a)})`);
 
@@ -107,6 +109,20 @@ try {
   check(true, "alice sees bob's cursor labelled Bob");
   await bob.waitForSelector(".peers .avatar[title='Alice is here']", { timeout: 5000 });
   check(true, "bob sees alice in the presence list");
+
+  // The checklist button turns the current line into a task; tapping the circle ticks it for everyone.
+  await alice.click(".cm-content");
+  await alice.keyboard.down("Control");
+  await alice.keyboard.press("End");
+  await alice.keyboard.up("Control");
+  await alice.keyboard.press("Enter");
+  await alice.keyboard.type("butter");
+  await alice.click("button[aria-label='Checklist']");
+  await alice.evaluate(() => document.activeElement?.blur());
+  await alice.waitForSelector(".cm-checkbox:not(.checked)");
+  await alice.$eval(".cm-checkbox", (el) => el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })));
+  await bob.waitForSelector(".cm-checkbox.checked", { timeout: 5000 });
+  check(true, "checklist item created and ticked live");
 
   // Revoking removes access live.
   await alice.click("button[aria-label='Share']");
@@ -117,22 +133,39 @@ try {
   await bob.waitForFunction(() => document.querySelector(".banner")?.textContent.includes("no longer have access"), { timeout: 5000 });
   check(true, "bob loses access when alice unshares");
 
+  // A new note that's left blank is thrown away, like Apple Notes.
+  const count = () => alice.$$eval("li button .note-title", (els) => els.length);
+  const before = await count();
+  await alice.click("button[aria-label='New note']");
+  await alice.waitForFunction((n) => document.querySelectorAll("li button .note-title").length === n + 1, {}, before);
+  await alice.waitForSelector(".cm-content[contenteditable=true]");
+  await alice.evaluate(() => [...document.querySelectorAll("li button")].find((b) => b.textContent.includes("Groceries")).click());
+  await alice.waitForFunction((n) => document.querySelectorAll("li button .note-title").length === n, { timeout: 5000 }, before);
+  check(true, "blank new note is discarded on leaving");
+
   // Content survives a reload.
   await alice.reload();
   await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("bread"));
   check(true, "alice's note reloads from the server");
 
   if (process.env.SHOTS) {
-    await alice.screenshot({ path: join(process.env.SHOTS, "desktop.png") });
+    const shot = (name) => alice.screenshot({ path: join(process.env.SHOTS, `${name}.png`) });
+    await alice.click(".cm-content");
+    await shot("desktop-editing");
+    await alice.evaluate(() => document.activeElement?.blur());
+    await shot("desktop");
     // Switching to mobile emulation reloads the page.
     await alice.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true });
     await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("bread"));
-    await alice.screenshot({ path: join(process.env.SHOTS, "phone-editor.png") });
-    await alice.click("button[aria-label='Back']");
-    await alice.screenshot({ path: join(process.env.SHOTS, "phone-list.png") });
+    await shot("phone-editor");
+    await alice.tap(".cm-content");
+    await shot("phone-editing");
+    await alice.evaluate(() => document.activeElement?.blur());
+    await alice.click("main .back");
+    await shot("phone-list");
     await alice.emulateMediaFeatures([{ name: "prefers-color-scheme", value: "dark" }]);
-    await alice.click("button[aria-label='Show sidebar']");
-    await alice.screenshot({ path: join(process.env.SHOTS, "phone-sidebar-dark.png") });
+    await alice.click(".list .back");
+    await shot("phone-sidebar-dark");
   }
   console.log("all checks passed");
 } finally {

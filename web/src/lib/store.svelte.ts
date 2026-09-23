@@ -15,7 +15,24 @@ export const app = $state({
   noteId: null as string | null,
   /** Which pane is visible on narrow screens. */
   pane: "list" as "sidebar" | "list" | "editor",
+  /** A note just created here, which should open with the cursor ready. */
+  freshNote: null as string | null,
 });
+
+export function viewTitle(view: View, tree: Tree): string {
+  if (view.kind === "all") return "All Notes";
+  if (view.kind === "shared-notes") return "Shared Notes";
+  return tree.notebooks.find((n) => n.id === view.id)?.name ?? "Notes";
+}
+
+/** Apple Notes-style compose: make the note and drop straight into it. */
+export async function composeNote() {
+  const notebook = app.view.kind === "notebook" ? app.view.id : null;
+  const { id } = await api.createNote(notebook);
+  app.freshNote = id;
+  openNote(id);
+  void refreshTree();
+}
 
 let refreshing: Promise<void> | null = null;
 let stale = false;

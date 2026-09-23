@@ -1,17 +1,20 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { Compartment, EditorState } from "@codemirror/state";
-  import { EditorView, keymap } from "@codemirror/view";
+  import { Compartment, EditorSelection, EditorState } from "@codemirror/state";
+  import { EditorView, keymap, placeholder } from "@codemirror/view";
   import { defaultKeymap } from "@codemirror/commands";
-  import { markdown } from "@codemirror/lang-markdown";
+  import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
   import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
   import { tags } from "@lezer/highlight";
   import { EphemeralStore, LoroDoc, UndoManager, type VersionVector } from "loro-crdt";
   import { LoroExtensions, getCursorEphemeralKey, getUserEphemeralKey } from "loro-codemirror";
   import { api, type Role } from "./lib/api";
+  import { activeFormats, formatKeymap, type Block, type Inline } from "./lib/format";
   import Icon from "./lib/Icon.svelte";
+  import { livePreview } from "./lib/livePreview";
   import { sync } from "./lib/sync";
-  import { app, colorFor, openNote } from "./lib/store.svelte";
+  import { app, colorFor, openNote, viewTitle } from "./lib/store.svelte";
+  import FormatBar from "./FormatBar.svelte";
   import ShareDialog from "./ShareDialog.svelte";
 
   let { noteId }: { noteId: string } = $props();
@@ -22,33 +25,35 @@
   let lost = $state<"revoked" | "not_found" | null>(null);
   let peers = $state<{ name: string; color: string }[]>([]);
   let sharing = $state(false);
+  let focused = $state(false);
+  let block = $state<Block>("body");
+  let inline = $state<Set<Inline>>(new Set());
+  /** Height covered by the on-screen keyboard, so the phone toolbar can sit on top of it. */
+  let keyboard = $state(0);
+  let view = $state<EditorView>();
   let parent: HTMLDivElement;
+
+  const canEdit = $derived(loaded && !lost && role !== null && role !== "viewer");
 
   const doc = new LoroDoc();
   const ephemeral = new EphemeralStore(30_000);
   const undoManager = new UndoManager(doc, {});
   const editable = new Compartment();
-  let view: EditorView;
   let hasData = false;
 
   const markdownStyle = HighlightStyle.define([
-    { tag: tags.heading1, fontSize: "1.6em", fontWeight: "800" },
-    { tag: tags.heading2, fontSize: "1.35em", fontWeight: "800" },
-    { tag: tags.heading3, fontSize: "1.15em", fontWeight: "700" },
-    { tag: [tags.heading4, tags.heading5, tags.heading6], fontWeight: "700" },
+    { tag: [tags.heading1, tags.heading2, tags.heading3, tags.heading4, tags.heading5, tags.heading6], fontWeight: "inherit" },
     { tag: tags.strong, fontWeight: "700" },
     { tag: tags.emphasis, fontStyle: "italic" },
     { tag: tags.strikethrough, textDecoration: "line-through" },
     { tag: [tags.link, tags.url], color: "var(--accent)" },
     { tag: tags.monospace, fontFamily: "'Adwaita Mono', 'Source Code Pro', monospace", fontSize: "0.92em" },
     { tag: [tags.processingInstruction, tags.contentSeparator, tags.meta], color: "var(--dim-fg)" },
-    { tag: tags.quote, color: "var(--dim-fg)", fontStyle: "italic" },
   ]);
 
   /** Editable only once content has arrived, so nothing is typed into a doc that's about to be replaced. */
   function refreshEditable() {
-    const on = loaded && !lost && role !== null && role !== "viewer";
-    view?.dispatch({ effects: editable.reconfigure(EditorView.editable.of(on)) });
+    view?.dispatch({ effects: editable.reconfigure(EditorView.editable.of(canEdit)) });
   }
 
   function setRole(r: Role) {
@@ -67,17 +72,31 @@
     peers = [...seen.values()];
   }
 
+  /** Tapping blank space below the text puts the cursor at the end, like a sheet of paper. */
+  function focusEnd(e: MouseEvent) {
+    if (!view || !canEdit || view.contentDOM.contains(e.target as Node)) return;
+    const end = view.state.doc.length;
+    view.dispatch({ selection: EditorSelection.cursor(end), scrollIntoView: true });
+    view.focus();
+  }
+
   onMount(() => {
-    view = new EditorView({
+    const v = new EditorView({
       parent,
       state: EditorState.create({
         extensions: [
-          markdown(),
+          markdown({ base: markdownLanguage }),
           syntaxHighlighting(markdownStyle),
+          livePreview,
           EditorView.lineWrapping,
-          keymap.of(defaultKeymap),
+          placeholder("Title"),
+          keymap.of([...formatKeymap, ...defaultKeymap]),
           editable.of(EditorView.editable.of(false)),
           EditorView.contentAttributes.of({ "aria-label": "Note text", autocapitalize: "sentences", spellcheck: "true" }),
+          EditorView.updateListener.of((u) => {
+            if (u.focusChanged) focused = u.view.hasFocus;
+            if (u.docChanged || u.selectionSet) ({ block, inline } = activeFormats(u.state));
+          }),
           LoroExtensions(
             doc,
             { ephemeral, user: { name: app.user!.display_name, colorClassName: colorFor(app.user!.id) } },
@@ -87,6 +106,7 @@
         ],
       }),
     });
+    view = v;
 
     const offDoc = doc.subscribeLocalUpdates((bytes) => sync.sendUpdate(noteId, bytes));
     const offPresence = ephemeral.subscribeLocalUpdates((bytes) => sync.sendPresence(noteId, bytes));
@@ -105,9 +125,12 @@
       update(data) {
         doc.import(data);
         hasData = true;
-        if (!loaded) {
-          loaded = true;
-          refreshEditable();
+        if (loaded) return;
+        loaded = true;
+        refreshEditable();
+        if (app.freshNote === noteId && canEdit) {
+          app.freshNote = null;
+          v.focus();
         }
       },
       presence: (data) => ephemeral.apply(data),
@@ -127,13 +150,25 @@
       }
     }, 10_000);
 
+    const vv = window.visualViewport;
+    const onViewport = () => {
+      if (vv) keyboard = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+    };
+    vv?.addEventListener("resize", onViewport);
+    vv?.addEventListener("scroll", onViewport);
+
     return () => {
       clearInterval(heartbeat);
+      vv?.removeEventListener("resize", onViewport);
+      vv?.removeEventListener("scroll", onViewport);
+      // Like Apple Notes, a note left blank doesn't stick around.
+      const blank = hasData && !lost && role === "owner" && doc.getText("body").toString().trim() === "";
       sync.close(noteId);
+      if (blank) api.discardNote(noteId).catch(() => {});
       offDoc();
       offPresence();
       offPeers();
-      view.destroy();
+      v.destroy();
       ephemeral.destroy();
     };
   });
@@ -145,10 +180,12 @@
   }
 </script>
 
-<section>
+<section class:focused>
   <header>
-    <button class="flat icon narrow-only" aria-label="Back" onclick={() => openNote(null)}><Icon name="back" /></button>
-    <span class="title">{note?.title || "Untitled"}</span>
+    <button class="flat back phone-only" onclick={() => openNote(null)}>
+      <Icon name="back" /><span>{viewTitle(app.view, app.tree)}</span>
+    </button>
+    <span class="title">{note?.title || "New Note"}</span>
     <div class="peers">
       {#each peers as peer (peer.name)}
         <span class="avatar {peer.color}" title="{peer.name} is here">{peer.name.slice(0, 1).toUpperCase()}</span>
@@ -159,7 +196,16 @@
       <button class="flat icon" title="Share" aria-label="Share" onclick={() => (sharing = true)}><Icon name="share" /></button>
       <button class="flat icon" title="Move to trash" aria-label="Move to trash" onclick={remove}><Icon name="trash" /></button>
     {/if}
+    {#if focused}
+      <button class="flat done phone-only" onclick={() => view?.contentDOM.blur()}>Done</button>
+    {/if}
   </header>
+
+  {#if canEdit && view}
+    <div class="format" style:bottom="{keyboard}px">
+      <FormatBar {view} {block} {inline} />
+    </div>
+  {/if}
 
   {#if lost}
     <div class="banner">
@@ -169,8 +215,9 @@
     <div class="banner dim">{app.status === "online" ? "Loading…" : "Waiting for the server…"}</div>
   {/if}
 
-  <div class="scroll">
-    <div class="editor" class:hidden={!loaded} bind:this={parent}></div>
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+  <div class="scroll" onclick={focusEnd}>
+    <div class="page" class:hidden={!loaded} bind:this={parent}></div>
   </div>
 </section>
 
@@ -194,6 +241,24 @@
     padding: 0 6px;
     padding-top: env(safe-area-inset-top);
     border-bottom: 1px solid var(--border);
+  }
+
+  .back {
+    padding: 0 10px 0 6px;
+    gap: 4px;
+    color: var(--accent);
+    font-weight: 400;
+    max-width: 40%;
+  }
+
+  .back span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .done {
+    color: var(--accent);
   }
 
   .title {
@@ -229,6 +294,10 @@
     font-size: 0.85rem;
   }
 
+  .format {
+    border-bottom: 1px solid var(--border);
+  }
+
   .banner {
     padding: 10px 16px;
     background: var(--hover);
@@ -240,35 +309,122 @@
     overflow-y: auto;
     display: flex;
     justify-content: center;
+    cursor: text;
   }
 
-  .editor {
+  .page {
     width: 100%;
     max-width: 760px;
-    padding: 24px 16px 40vh;
+    padding: 28px 24px 40vh;
   }
 
   .hidden {
     visibility: hidden;
   }
 
-  .editor :global(.cm-editor) {
+  .page :global(.cm-editor) {
     background: transparent;
     color: var(--fg);
-    font-size: 1rem;
+    font-size: 1.05rem;
   }
 
-  .editor :global(.cm-editor.cm-focused) {
+  .page :global(.cm-editor.cm-focused) {
     outline: none;
   }
 
-  .editor :global(.cm-content) {
-    caret-color: var(--accent);
-    line-height: 1.6;
-  }
-
-  .editor :global(.cm-scroller) {
+  .page :global(.cm-scroller) {
     overflow: visible;
     font-family: inherit;
+    line-height: 1.55;
+  }
+
+  .page :global(.cm-content) {
+    caret-color: var(--accent);
+    padding: 0;
+  }
+
+  .page :global(.cm-line) {
+    padding: 0;
+  }
+
+  .page :global(.cm-placeholder) {
+    color: var(--dim-fg);
+  }
+
+  .page :global(.cm-h1) {
+    font-size: 1.75em;
+    font-weight: 800;
+    line-height: 1.25;
+    padding-bottom: 0.2em;
+  }
+
+  .page :global(.cm-h2) {
+    font-size: 1.35em;
+    font-weight: 800;
+    padding-top: 0.4em;
+  }
+
+  .page :global(.cm-h3) {
+    font-size: 1.12em;
+    font-weight: 700;
+    padding-top: 0.3em;
+  }
+
+  .page :global(.cm-quote) {
+    border-left: 3px solid var(--border);
+    padding-left: 12px;
+    color: var(--dim-fg);
+  }
+
+  .page :global(.cm-bullet) {
+    display: inline-block;
+    width: 1.1em;
+    color: var(--dim-fg);
+  }
+
+  .page :global(.cm-checkbox) {
+    display: inline-block;
+    width: 1.15em;
+    height: 1.15em;
+    margin-right: 0.45em;
+    vertical-align: -0.2em;
+    border: 1.5px solid var(--dim-fg);
+    border-radius: 50%;
+    cursor: pointer;
+  }
+
+  .page :global(.cm-checkbox.checked) {
+    border-color: var(--accent-bg);
+    background: var(--accent-bg)
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 8.5l2.5 2.5L12 5.5' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
+      center / 80% no-repeat;
+  }
+
+  .page :global(.cm-task-done) {
+    color: var(--dim-fg);
+    text-decoration: line-through;
+  }
+
+  /* Phone: the toolbar floats on top of the keyboard while typing, like Apple Notes. */
+  @media (max-width: 700px) {
+    .format {
+      position: fixed;
+      left: 0;
+      right: 0;
+      z-index: 5;
+      border-top: 1px solid var(--border);
+      border-bottom: none;
+      padding-bottom: env(safe-area-inset-bottom);
+      background: var(--headerbar-bg);
+      display: none;
+    }
+
+    section.focused .format {
+      display: block;
+    }
+
+    .page {
+      padding: 20px 18px 50vh;
+    }
   }
 </style>

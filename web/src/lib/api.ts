@@ -20,6 +20,7 @@ export interface TreeNote {
   id: string;
   notebook_id: string | null;
   title: string;
+  preview: string;
   owner: string;
   role: Role;
   updated_at: number;
@@ -87,6 +88,8 @@ export const api = {
 
   createNote: (notebook_id: string | null) => request<{ id: string }>("POST", "/notes", { notebook_id }),
   deleteNote: (id: string) => request("DELETE", `/notes/${id}`),
+  /** Permanently removes the note only if it's blank; the server refuses otherwise. */
+  discardNote: (id: string) => request("DELETE", `/notes/${id}?discard=true`),
 
   shares: (kind: "note" | "notebook", id: string) => request<ShareInfo[]>("GET", `/${kind}s/${id}/shares`),
   share: (resource_type: "note" | "notebook", resource_id: string, username: string, role: string) =>
