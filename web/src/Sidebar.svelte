@@ -2,7 +2,7 @@
   import { api, type TreeNotebook } from "./lib/api";
   import Dialog from "./lib/Dialog.svelte";
   import Icon from "./lib/Icon.svelte";
-  import { app, composeNote, navigate, notesFor, openSettings, type View } from "./lib/store.svelte";
+  import { app, colorFor, composeNote, navigate, notesFor, openSettings, type View } from "./lib/store.svelte";
 
   const count = (view: View) => notesFor(view, app.tree).length;
 
@@ -62,7 +62,10 @@
 <nav>
   <header>
     <span class="title">Gnotes</span>
-    <button class="flat icon" title="Settings" aria-label="Settings" onclick={openSettings}><Icon name="settings" /></button>
+    <!-- Your avatar opens account settings, as in most phone apps. -->
+    <button class="flat icon account" title="Account and settings" aria-label="Settings" onclick={openSettings}>
+      <span class="avatar {colorFor(app.user?.id ?? '')}">{app.user?.display_name.slice(0, 1).toUpperCase()}</span>
+    </button>
   </header>
   <div class="scroll">
     <button class="row flat" class:selected={isSelected({ kind: "all" })} onclick={() => select({ kind: "all" })}>
@@ -139,6 +142,22 @@
   }
 
   .title {
+    font-weight: 700;
+  }
+
+  .account {
+    border-radius: 50%;
+  }
+
+  .avatar {
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: var(--user-color, var(--accent));
+    color: #fff;
+    font-size: 0.85rem;
     font-weight: 700;
   }
 
