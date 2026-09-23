@@ -381,3 +381,55 @@ async fn discard_only_removes_blank_notes() {
     assert_eq!(tree["notes"][0]["title"], "Keep me");
     assert_eq!(tree["notes"][0]["preview"], "second line");
 }
+
+#[tokio::test]
+async fn invite_link_creates_account_and_shares() {
+    let dir = TempDir::new().unwrap();
+    let server = start(&dir).await;
+    auth::create_user(&server.state.db, "justin", "Justin", "password123", true).await.unwrap();
+    let justin = login(&server.base, "justin").await;
+    let bob = user(&server, "bob").await;
+
+    let groceries = justin.post("/notebooks", json!({ "name": "Groceries" })).await["id"].as_str().unwrap().to_owned();
+    let note = justin.post("/notes", json!({ "notebook_id": groceries })).await["id"].as_str().unwrap().to_owned();
+
+    // Only admins invite, and only for things they own.
+    let res = bob.send(reqwest::Method::POST, "/invites", json!({})).await;
+    assert_eq!(res.status(), 403);
+
+    let invite = justin
+        .post("/invites", json!({ "resource_type": "notebook", "resource_id": groceries }))
+        .await;
+    let token = invite["token"].as_str().unwrap().to_owned();
+    assert_eq!(justin.get("/invites").await.as_array().unwrap().len(), 1);
+
+    let anon = reqwest::Client::builder().cookie_store(true).build().unwrap();
+    let join = format!("http://{}/api/join/{token}", server.base);
+    let preview: Value = anon.get(&join).send().await.unwrap().json().await.unwrap();
+    assert_eq!(preview["inviter"], "Justin");
+    assert_eq!(preview["shared"], "Groceries");
+
+    // A taken username fails without burning the link.
+    let res = anon.post(&join).json(&json!({ "username": "bob", "password": "password123" })).send().await.unwrap();
+    assert_eq!(res.status(), 409);
+
+    let res = anon
+        .post(&join)
+        .json(&json!({ "username": "sam", "display_name": "Sam", "password": "password123" }))
+        .send()
+        .await
+        .unwrap();
+    assert!(res.status().is_success());
+
+    // Logged in straight away, with the notebook shared.
+    let tree: Value = anon.get(format!("http://{}/api/tree", server.base)).send().await.unwrap().json().await.unwrap();
+    assert_eq!(tree["notebooks"][0]["name"], "Groceries");
+    assert_eq!(tree["notebooks"][0]["role"], "editor");
+    assert_eq!(tree["notes"][0]["id"], note);
+
+    // Single use.
+    assert_eq!(anon.get(&join).send().await.unwrap().status(), 404);
+    let res = anon.post(&join).json(&json!({ "username": "sam2", "password": "password123" })).send().await.unwrap();
+    assert_eq!(res.status(), 404);
+    assert_eq!(justin.get("/invites").await.as_array().unwrap().len(), 0);
+}

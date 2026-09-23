@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod error;
+pub mod invites;
 pub mod perms;
 pub mod rooms;
 pub mod shares;
@@ -88,6 +89,9 @@ pub fn router(state: AppState) -> Router {
         .route("/me", get(auth::me))
         .route("/users", get(auth::list_users))
         .route("/admin/users", post(auth::admin_create_user))
+        .route("/invites", get(invites::list_invites).post(invites::create_invite))
+        .route("/invites/{id}", axum::routing::delete(invites::delete_invite))
+        .route("/join/{token}", get(invites::preview_invite).post(invites::accept_invite))
         .route("/tree", get(tree::get_tree))
         .route("/notebooks", post(tree::create_notebook))
         .route("/notebooks/{id}", patch(tree::update_notebook).delete(tree::delete_notebook))

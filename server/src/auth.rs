@@ -43,7 +43,7 @@ fn verify_password(password: &str, hash: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn hash_token(token: &str) -> String {
+pub fn hash_token(token: &str) -> String {
     URL_SAFE_NO_PAD.encode(Sha256::digest(token.as_bytes()))
 }
 
@@ -146,15 +146,26 @@ pub async fn login(
         return Err(AppError::Unauthorized);
     }
 
+    let jar = start_session(&state, &id, &headers, jar).await?;
+    Ok((jar, Json(User { id, username, display_name, is_admin })))
+}
+
+/// A random URL-safe token; only its hash is ever stored.
+pub fn random_token() -> anyhow::Result<String> {
     let mut raw = [0u8; 32];
     getrandom::fill(&mut raw).map_err(|e| anyhow::anyhow!("getrandom: {e}"))?;
-    let token = URL_SAFE_NO_PAD.encode(raw);
+    Ok(URL_SAFE_NO_PAD.encode(raw))
+}
+
+/// Creates a session for `user_id` and adds its cookie to the jar.
+pub async fn start_session(state: &AppState, user_id: &str, headers: &HeaderMap, jar: CookieJar) -> ApiResult<CookieJar> {
+    let token = random_token()?;
     let now = now_ms();
     sqlx::query(
         "INSERT INTO sessions (token_hash, user_id, created_at, expires_at, user_agent) VALUES (?, ?, ?, ?, ?)",
     )
     .bind(hash_token(&token))
-    .bind(&id)
+    .bind(user_id)
     .bind(now)
     .bind(now + SESSION_DAYS * 24 * 60 * 60 * 1000)
     .bind(headers.get(USER_AGENT).and_then(|v| v.to_str().ok()))
@@ -168,7 +179,7 @@ pub async fn login(
         .path("/")
         .max_age(time::Duration::days(SESSION_DAYS))
         .build();
-    Ok((jar.add(cookie), Json(User { id, username, display_name, is_admin })))
+    Ok(jar.add(cookie))
 }
 
 pub async fn logout(State(state): State<AppState>, jar: CookieJar) -> ApiResult<(CookieJar, Json<Value>)> {
