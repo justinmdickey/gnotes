@@ -1,0 +1,71 @@
+name: Build and Push Docker Image
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*.*.*"]
+    paths-ignore:
+      - "**.md"
+      - ".forgejo/workflows/**"
+      - ".gitignore"
+
+env:
+  REGISTRY: git.erisdor.com
+  # Hardcoded on purpose — deriving from github.repository lets a repo rename
+  # silently move the published image out from under the Deployment.
+  IMAGE_NAME: justin/gnotes
+
+jobs:
+  test:
+    runs-on: ubuntu-latest # plain node:22-bookworm — install everything you use
+    steps:
+      - uses: actions/checkout@v4
+      # Server tests need a Rust toolchain the runner doesn't have; they run locally
+      # (cargo test), and the image build below still fails on any compile error.
+      - name: Install web dependencies
+        run: npm ci
+        working-directory: web
+      - name: Typecheck web
+        run: npm run check
+        working-directory: web
+      - name: Build web
+        run: npm run build
+        working-directory: web
+
+  build-and-push:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The runner image has no docker CLI; only the daemon socket is mounted in.
+      - name: Install the docker CLI
+        run: |
+          set -eu
+          curl -fsSL https://download.docker.com/linux/static/stable/x86_64/docker-29.7.1.tgz \
+            | tar xz -C /usr/local/bin --strip-components=1 docker/docker
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: justin
+          # write:package repo Actions secret; GITHUB_TOKEN cannot push packages here.
+          password: ${{ secrets.REGISTRY_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=ref,event=branch
+            type=sha
+            type=raw,value=latest,enable={{is_default_branch}}
+      # No cache-from/cache-to: type=gha is GitHub-hosted and type=registry
+      # fails the whole build on a cache miss.
+      - uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

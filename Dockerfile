@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM node:26-slim AS web
+FROM node:22-bookworm-slim AS web
 WORKDIR /src/web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci
@@ -10,7 +10,8 @@ FROM rust:1.97-slim AS server
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY server/ server/
-RUN cargo build --release -p gnotes-server
+# Two jobs keeps the build under the CI runner's memory limit.
+RUN CARGO_BUILD_JOBS=2 cargo build --release -p gnotes-server
 
 FROM debian:trixie-slim
 RUN useradd --system --home /data gnotes && mkdir -p /data && chown gnotes /data
