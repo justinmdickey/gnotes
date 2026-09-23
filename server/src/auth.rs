@@ -37,7 +37,7 @@ pub fn hash_password(password: &str) -> anyhow::Result<String> {
         .map_err(|e| anyhow::anyhow!("hashing password: {e}"))
 }
 
-fn verify_password(password: &str, hash: &str) -> bool {
+pub fn verify_password(password: &str, hash: &str) -> bool {
     PasswordHash::new(hash)
         .map(|parsed| Argon2::default().verify_password(password.as_bytes(), &parsed).is_ok())
         .unwrap_or(false)
@@ -107,7 +107,7 @@ impl FromRequestParts<AppState> for CurrentUser {
         let user = sqlx::query_as::<_, User>(
             "SELECT u.id, u.username, u.display_name, u.is_admin
              FROM sessions s JOIN users u ON u.id = s.user_id
-             WHERE s.token_hash = ? AND s.expires_at > ?",
+             WHERE s.token_hash = ? AND s.expires_at > ? AND u.disabled_at IS NULL",
         )
         .bind(hash_token(&token))
         .bind(now_ms())
@@ -131,7 +131,7 @@ pub async fn login(
     Json(body): Json<LoginBody>,
 ) -> ApiResult<(CookieJar, Json<User>)> {
     let row = sqlx::query_as::<_, (String, String, String, bool, String)>(
-        "SELECT id, username, display_name, is_admin, password_hash FROM users WHERE username = ?",
+        "SELECT id, username, display_name, is_admin, password_hash FROM users WHERE username = ? AND disabled_at IS NULL",
     )
     .bind(body.username.trim().to_lowercase())
     .fetch_optional(&state.db)
@@ -236,7 +236,7 @@ pub struct UserSummary {
 /// Everyone on the server, for picking who to share with.
 pub async fn list_users(State(state): State<AppState>, _: CurrentUser) -> ApiResult<Json<Vec<UserSummary>>> {
     let users = sqlx::query_as::<_, UserSummary>(
-        "SELECT id, username, display_name FROM users ORDER BY display_name COLLATE NOCASE",
+        "SELECT id, username, display_name FROM users WHERE disabled_at IS NULL ORDER BY display_name COLLATE NOCASE",
     )
     .fetch_all(&state.db)
     .await?;

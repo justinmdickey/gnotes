@@ -66,7 +66,7 @@ enum ClientMsg {
 async fn run(state: AppState, user: User, socket: WebSocket) {
     let (mut sink, mut stream) = socket.split();
     let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
-    let conn = state.hub.register(tx.clone());
+    let conn = state.hub.register(&user.id, tx.clone());
 
     let writer = tokio::spawn(async move {
         let mut ping = tokio::time::interval(PING_EVERY);
@@ -75,7 +75,8 @@ async fn run(state: AppState, user: User, socket: WebSocket) {
                 msg = rx.recv() => match msg { Some(m) => m, None => break },
                 _ = ping.tick() => Message::Ping(Default::default()),
             };
-            if sink.send(msg).await.is_err() {
+            let closing = matches!(msg, Message::Close(_));
+            if sink.send(msg).await.is_err() || closing {
                 break;
             }
         }

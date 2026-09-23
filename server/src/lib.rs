@@ -1,3 +1,4 @@
+pub mod account;
 pub mod auth;
 pub mod error;
 pub mod invites;
@@ -86,9 +87,13 @@ pub fn router(state: AppState) -> Router {
         .route("/health", get(|| async { Json(json!({ "ok": true })) }))
         .route("/auth/login", post(auth::login))
         .route("/auth/logout", post(auth::logout))
-        .route("/me", get(auth::me))
+        .route("/me", get(auth::me).patch(account::update_me))
+        .route("/me/password", post(account::change_password))
+        .route("/me/logout-others", post(account::logout_others))
         .route("/users", get(auth::list_users))
-        .route("/admin/users", post(auth::admin_create_user))
+        .route("/admin/users", get(account::admin_list_users).post(auth::admin_create_user))
+        .route("/admin/users/{id}", patch(account::admin_update_user))
+        .route("/admin/users/{id}/password", post(account::admin_reset_password))
         .route("/invites", get(invites::list_invites).post(invites::create_invite))
         .route("/invites/{id}", axum::routing::delete(invites::delete_invite))
         .route("/join/{token}", get(invites::preview_invite).post(invites::accept_invite))

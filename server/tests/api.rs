@@ -433,3 +433,64 @@ async fn invite_link_creates_account_and_shares() {
     assert_eq!(res.status(), 404);
     assert_eq!(justin.get("/invites").await.as_array().unwrap().len(), 0);
 }
+
+#[tokio::test]
+async fn settings_password_and_admin_controls() {
+    let dir = TempDir::new().unwrap();
+    let server = start(&dir).await;
+    auth::create_user(&server.state.db, "justin", "Justin", "password123", true).await.unwrap();
+    let justin = login(&server.base, "justin").await;
+    let phone = login(&server.base, "justin").await;
+    let bob = user(&server, "bob").await;
+    let bob_id = bob.get("/me").await["id"].as_str().unwrap().to_owned();
+
+    // Rename.
+    let res = justin.send(reqwest::Method::PATCH, "/me", json!({ "display_name": "Dad" })).await;
+    assert!(res.status().is_success());
+    assert_eq!(justin.get("/me").await["display_name"], "Dad");
+
+    // Password change needs the current one, and signs out other devices but not this one.
+    let res = justin.send(reqwest::Method::POST, "/me/password", json!({ "current": "nope-nope", "new": "newpassword1" })).await;
+    assert_eq!(res.status(), 400);
+    justin.post("/me/password", json!({ "current": "password123", "new": "newpassword1" })).await;
+    assert!(justin.http.get(justin.url("/me")).send().await.unwrap().status().is_success());
+    assert_eq!(phone.http.get(phone.url("/me")).send().await.unwrap().status(), 401);
+
+    // Admin-only listing; bob can't see it.
+    assert_eq!(bob.http.get(bob.url("/admin/users")).send().await.unwrap().status(), 403);
+    assert_eq!(justin.get("/admin/users").await.as_array().unwrap().len(), 2);
+
+    // Can't lock yourself out.
+    let justin_id = justin.get("/me").await["id"].as_str().unwrap().to_owned();
+    let res = justin.send(reqwest::Method::PATCH, &format!("/admin/users/{justin_id}"), json!({ "is_admin": false })).await;
+    assert_eq!(res.status(), 400);
+
+    // Reset bob's password: his session ends, his open connection closes, and the new password works.
+    let mut bob_ws = bob.ws().await;
+    justin.post(&format!("/admin/users/{bob_id}/password"), json!({ "password": "bobsnewpass" })).await;
+    assert_eq!(bob.http.get(bob.url("/me")).send().await.unwrap().status(), 401);
+    let closed = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match bob_ws.stream.next().await {
+                None | Some(Err(_)) | Some(Ok(Message::Close(_))) => break,
+                _ => {}
+            }
+        }
+    })
+    .await;
+    assert!(closed.is_ok(), "bob's websocket should be closed");
+    let http = reqwest::Client::new();
+    let login_url = format!("http://{}/api/auth/login", server.base);
+    let ok = http.post(&login_url).json(&json!({ "username": "bob", "password": "bobsnewpass" })).send().await.unwrap();
+    assert!(ok.status().is_success());
+
+    // Disabled accounts can't log in and drop out of the share picker; re-enabling restores them.
+    let res = justin.send(reqwest::Method::PATCH, &format!("/admin/users/{bob_id}"), json!({ "disabled": true })).await;
+    assert!(res.status().is_success());
+    let denied = http.post(&login_url).json(&json!({ "username": "bob", "password": "bobsnewpass" })).send().await.unwrap();
+    assert_eq!(denied.status(), 401);
+    assert_eq!(justin.get("/users").await.as_array().unwrap().len(), 1);
+    justin.send(reqwest::Method::PATCH, &format!("/admin/users/{bob_id}"), json!({ "disabled": false })).await;
+    let back = http.post(&login_url).json(&json!({ "username": "bob", "password": "bobsnewpass" })).send().await.unwrap();
+    assert!(back.status().is_success());
+}

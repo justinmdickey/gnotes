@@ -44,14 +44,23 @@ pub fn control(value: serde_json::Value) -> Message {
 #[derive(Default)]
 pub struct Hub {
     next_id: AtomicU64,
-    conns: std::sync::Mutex<HashMap<u64, Tx>>,
+    conns: std::sync::Mutex<HashMap<u64, (String, Tx)>>,
 }
 
 impl Hub {
-    pub fn register(&self, tx: Tx) -> u64 {
+    pub fn register(&self, user_id: &str, tx: Tx) -> u64 {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        self.conns.lock().unwrap().insert(id, tx);
+        self.conns.lock().unwrap().insert(id, (user_id.to_owned(), tx));
         id
+    }
+
+    /// Closes every live connection a user has, e.g. after disabling them or resetting their password.
+    pub fn disconnect_user(&self, user_id: &str) {
+        for (owner, tx) in self.conns.lock().unwrap().values() {
+            if owner == user_id {
+                let _ = tx.send(Message::Close(None));
+            }
+        }
     }
 
     pub fn unregister(&self, id: u64) {
@@ -61,7 +70,7 @@ impl Hub {
     /// Tells every client to refetch /tree. It carries no content, so it goes to everyone.
     pub fn tree_changed(&self) {
         let msg = control(json!({ "t": "tree_changed" }));
-        for tx in self.conns.lock().unwrap().values() {
+        for (_, tx) in self.conns.lock().unwrap().values() {
             let _ = tx.send(msg.clone());
         }
     }
