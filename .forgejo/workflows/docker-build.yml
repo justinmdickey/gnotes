@@ -1,13 +1,10 @@
 name: Build and Push Docker Image
 
+# Tags only: a release is `git tag vX.Y.Z && git push --tags`. Building every push
+# to main as well doubled the queue on the one-job runner and delayed releases.
 on:
   push:
-    branches: [main]
     tags: ["v*.*.*"]
-    paths-ignore:
-      - "**.md"
-      - ".forgejo/workflows/**"
-      - ".gitignore"
 
 env:
   REGISTRY: git.erisdor.com
