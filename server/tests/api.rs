@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use futures_util::{SinkExt, StreamExt};
-use gnotes_server::{AppState, Config, auth, build, serve};
+use gnotes_server::{AppState, Config, WhisperConfig, auth, build, serve};
 use loro::{ExportMode, LoroDoc, VersionVector, awareness::EphemeralStore};
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -17,11 +17,16 @@ struct Server {
 }
 
 async fn start(dir: &TempDir) -> Server {
+    start_with(dir, None).await
+}
+
+async fn start_with(dir: &TempDir, whisper: Option<WhisperConfig>) -> Server {
     let config = Config {
         data_dir: dir.path().to_path_buf(),
         bind: "127.0.0.1:0".parse().unwrap(),
         web_dir: dir.path().join("web"),
         public_url: None,
+        whisper,
     };
     let state = build(config).await.unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -493,4 +498,113 @@ async fn settings_password_and_admin_controls() {
     justin.send(reqwest::Method::PATCH, &format!("/admin/users/{bob_id}"), json!({ "disabled": false })).await;
     let back = http.post(&login_url).json(&json!({ "username": "bob", "password": "bobsnewpass" })).send().await.unwrap();
     assert!(back.status().is_success());
+}
+
+async fn upload(user: &User, note: &str, name: &str, mime: &str, bytes: Vec<u8>) -> reqwest::Response {
+    let file = reqwest::multipart::Part::bytes(bytes).file_name(name.to_owned()).mime_str(mime).unwrap();
+    let form = reqwest::multipart::Form::new().text("note_id", note.to_owned()).part("file", file);
+    user.http.post(user.url("/attachments")).multipart(form).send().await.unwrap()
+}
+
+#[tokio::test]
+async fn attachments_follow_note_access() {
+    let dir = TempDir::new().unwrap();
+    let server = start(&dir).await;
+    let alice = user(&server, "alice").await;
+    let bob = user(&server, "bob").await;
+    let note = alice.post("/notes", json!({})).await["id"].as_str().unwrap().to_owned();
+
+    let png = b"\x89PNG fake image bytes".to_vec();
+    let res = upload(&alice, &note, "photo.png", "image/png", png.clone()).await;
+    assert!(res.status().is_success(), "{}", res.status());
+    let att: Value = res.json().await.unwrap();
+    let id = att["id"].as_str().unwrap();
+    assert_eq!(att["mime"], "image/png");
+
+    // Stored once by hash, served with its type.
+    let res = alice.http.get(alice.url(&format!("/attachments/{id}"))).send().await.unwrap();
+    assert_eq!(res.headers()["content-type"], "image/png");
+    assert_eq!(res.bytes().await.unwrap().to_vec(), png);
+    assert_eq!(alice.get(&format!("/attachments/{id}/meta")).await["filename"], "photo.png");
+
+    // Ranges work, for audio seeking on Safari.
+    let res = alice
+        .http
+        .get(alice.url(&format!("/attachments/{id}")))
+        .header("range", "bytes=0-3")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 206);
+    assert_eq!(res.bytes().await.unwrap().len(), 4);
+
+    // Bob sees nothing until the note is shared, and a viewer can't upload.
+    let res = bob.http.get(bob.url(&format!("/attachments/{id}"))).send().await.unwrap();
+    assert_eq!(res.status(), 404);
+    assert_eq!(upload(&bob, &note, "x.png", "image/png", png.clone()).await.status(), 404);
+    alice
+        .post("/shares", json!({ "resource_type": "note", "resource_id": note, "username": "bob", "role": "viewer" }))
+        .await;
+    let res = bob.http.get(bob.url(&format!("/attachments/{id}"))).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    assert_eq!(upload(&bob, &note, "x.png", "image/png", png).await.status(), 403);
+
+    // Only images and audio; SVG could carry script.
+    let res = upload(&alice, &note, "x.svg", "image/svg+xml", b"<svg/>".to_vec()).await;
+    assert_eq!(res.status(), 400);
+    let res = upload(&alice, &note, "x.html", "text/html", b"<p>".to_vec()).await;
+    assert_eq!(res.status(), 400);
+}
+
+#[tokio::test]
+async fn transcription_uses_the_configured_service() {
+    // A stand-in for an OpenAI-compatible speech-to-text server.
+    let fake = axum::Router::new().route(
+        "/v1/audio/transcriptions",
+        axum::routing::post(|headers: axum::http::HeaderMap, mut form: axum::extract::Multipart| async move {
+            let mut model = String::new();
+            let mut size = 0;
+            while let Some(field) = form.next_field().await.unwrap() {
+                match field.name() {
+                    Some("model") => model = field.text().await.unwrap(),
+                    Some("file") => size = field.bytes().await.unwrap().len(),
+                    _ => {}
+                }
+            }
+            let auth = headers.get("authorization").map(|v| v.to_str().unwrap().to_owned()).unwrap_or_default();
+            axum::Json(json!({ "text": format!(" heard {size} bytes with {model} ({auth}) ") }))
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let fake_url = format!("http://{}/v1", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, fake).await });
+
+    let dir = TempDir::new().unwrap();
+    let whisper = WhisperConfig { url: fake_url, model: "small".into(), key: Some("sekrit".into()) };
+    let server = start_with(&dir, Some(whisper)).await;
+    let alice = user(&server, "alice").await;
+    assert_eq!(alice.get("/features").await["transcription"], true);
+    let note = alice.post("/notes", json!({})).await["id"].as_str().unwrap().to_owned();
+
+    let att: Value = upload(&alice, &note, "memo.webm", "audio/webm;codecs=opus", vec![7; 1000]).await.json().await.unwrap();
+    assert_eq!(att["mime"], "audio/webm");
+    let out = alice.post(&format!("/attachments/{}/transcribe", att["id"].as_str().unwrap()), json!({})).await;
+    assert_eq!(out["text"], "heard 1000 bytes with small (Bearer sekrit)");
+
+    // Images aren't sent.
+    let img: Value = upload(&alice, &note, "a.png", "image/png", vec![1; 10]).await.json().await.unwrap();
+    let res = alice.send(reqwest::Method::POST, &format!("/attachments/{}/transcribe", img["id"].as_str().unwrap()), json!({})).await;
+    assert_eq!(res.status(), 400);
+}
+
+#[tokio::test]
+async fn transcription_off_without_config() {
+    let dir = TempDir::new().unwrap();
+    let server = start(&dir).await;
+    let alice = user(&server, "alice").await;
+    assert_eq!(alice.get("/features").await["transcription"], false);
+    let note = alice.post("/notes", json!({})).await["id"].as_str().unwrap().to_owned();
+    let att: Value = upload(&alice, &note, "memo.webm", "audio/webm", vec![7; 10]).await.json().await.unwrap();
+    let res = alice.send(reqwest::Method::POST, &format!("/attachments/{}/transcribe", att["id"].as_str().unwrap()), json!({})).await;
+    assert_eq!(res.status(), 409);
 }

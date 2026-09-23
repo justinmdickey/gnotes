@@ -174,7 +174,7 @@ async fn require_notebook(state: &AppState, user_id: &str, id: &str, min: Role) 
     }
 }
 
-async fn require_note(state: &AppState, user_id: &str, id: &str, min: Role) -> ApiResult<()> {
+pub(crate) async fn require_note(state: &AppState, user_id: &str, id: &str, min: Role) -> ApiResult<()> {
     match note_role(&state.db, user_id, id).await? {
         None => Err(AppError::NotFound),
         Some(r) if r < min => Err(AppError::Forbidden),

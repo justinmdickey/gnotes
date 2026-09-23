@@ -1,4 +1,5 @@
 pub mod account;
+pub mod attachments;
 pub mod auth;
 pub mod error;
 pub mod invites;
@@ -14,6 +15,7 @@ use std::{env, net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 use anyhow::Context;
 use axum::{
     Json, Router,
+    extract::DefaultBodyLimit,
     routing::{get, patch, post},
 };
 use serde_json::json;
@@ -32,6 +34,16 @@ pub struct Config {
     pub web_dir: PathBuf,
     /// e.g. `https://notes.example.com`. Enables Secure cookies and pins the websocket Origin.
     pub public_url: Option<String>,
+    /// Speech-to-text for voice notes. Off when unset.
+    pub whisper: Option<WhisperConfig>,
+}
+
+/// An OpenAI-compatible transcription API, e.g. faster-whisper-server or OpenAI itself.
+pub struct WhisperConfig {
+    /// Base URL including the version, e.g. `http://whisper:8000/v1`. `/audio/transcriptions` is appended.
+    pub url: String,
+    pub model: String,
+    pub key: Option<String>,
 }
 
 impl Config {
@@ -44,6 +56,11 @@ impl Config {
                 .context("GNOTES_BIND must be host:port")?,
             web_dir: env::var("GNOTES_WEB_DIR").unwrap_or_else(|_| "./web/dist".into()).into(),
             public_url: env::var("GNOTES_PUBLIC_URL").ok().filter(|s| !s.is_empty()),
+            whisper: env::var("GNOTES_WHISPER_URL").ok().filter(|s| !s.is_empty()).map(|url| WhisperConfig {
+                url,
+                model: env::var("GNOTES_WHISPER_MODEL").unwrap_or_else(|_| "whisper-1".into()),
+                key: env::var("GNOTES_WHISPER_KEY").ok().filter(|s| !s.is_empty()),
+            }),
         })
     }
 
@@ -58,6 +75,8 @@ pub struct AppState {
     pub config: Arc<Config>,
     pub rooms: Arc<rooms::Rooms>,
     pub hub: Arc<rooms::Hub>,
+    /// Outgoing HTTP, for transcription.
+    pub http: reqwest::Client,
 }
 
 impl AppState {
@@ -108,6 +127,14 @@ pub fn router(state: AppState) -> Router {
         .route("/trash/{kind}/{id}/restore", post(tree::restore))
         .route("/shares", post(shares::create_share))
         .route("/shares/{id}", patch(shares::update_share).delete(shares::delete_share))
+        .route(
+            "/attachments",
+            post(attachments::upload).layer(DefaultBodyLimit::max(attachments::MAX_UPLOAD + 64 * 1024)),
+        )
+        .route("/attachments/{id}", get(attachments::download))
+        .route("/attachments/{id}/meta", get(attachments::meta))
+        .route("/attachments/{id}/transcribe", post(attachments::transcribe))
+        .route("/features", get(attachments::features))
         .route("/ws", get(ws::handler))
         .fallback(|| async { error::AppError::NotFound });
 
@@ -129,6 +156,7 @@ pub async fn build(config: Config) -> anyhow::Result<AppState> {
         config: Arc::new(config),
         rooms: Default::default(),
         hub: Default::default(),
+        http: reqwest::Client::builder().timeout(Duration::from_secs(300)).build()?,
     })
 }
 
