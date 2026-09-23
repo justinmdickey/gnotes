@@ -82,6 +82,19 @@ export interface AdminUser {
   created_at: number;
 }
 
+export interface AttachmentMeta {
+  id: string;
+  note_id: string;
+  filename: string;
+  mime: string;
+  size: number;
+}
+
+export interface Features {
+  transcription: boolean;
+  max_upload: number;
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -125,6 +138,18 @@ export const api = {
 
   createNote: (notebook_id: string | null) => request<{ id: string }>("POST", "/notes", { notebook_id }),
   deleteNote: (id: string) => request("DELETE", `/notes/${id}`),
+  features: () => request<Features>("GET", "/features"),
+  attachmentMeta: (id: string) => request<AttachmentMeta>("GET", `/attachments/${id}/meta`),
+  transcribe: (id: string) => request<{ text: string }>("POST", `/attachments/${id}/transcribe`, {}),
+  async upload(noteId: string, file: File): Promise<AttachmentMeta> {
+    const form = new FormData();
+    form.append("note_id", noteId);
+    form.append("file", file, file.name);
+    const res = await fetch("/api/attachments", { method: "POST", body: form, credentials: "same-origin" });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new ApiError(res.status, data.error ?? "unknown", data.message ?? res.statusText);
+    return data as AttachmentMeta;
+  },
   restore: (kind: "note" | "notebook", id: string) => request("POST", `/trash/${kind}/${id}/restore`, {}),
   /** Permanently removes the note only if it's blank; the server refuses otherwise. */
   discardNote: (id: string) => request("DELETE", `/notes/${id}?discard=true`),

@@ -3,7 +3,13 @@
   import { setBlock, toggleInline, type Block, type Inline } from "./lib/format";
   import Icon from "./lib/Icon.svelte";
 
-  let { view, block, inline }: { view: EditorView; block: Block; inline: Set<Inline> } = $props();
+  let {
+    view,
+    block,
+    inline,
+    onphoto,
+    onrecord,
+  }: { view: EditorView; block: Block; inline: Set<Inline>; onphoto: () => void; onrecord: () => void } = $props();
 
   const styles: [Block, string][] = [
     ["title", "Title"],
@@ -43,7 +49,7 @@
   <span class="sep"></span>
 
   {#each marks as [m, glyph, label] (m)}
-    <button class="flat icon main mark-{m}" class:active={inline.has(m)} title={label} aria-label={label} aria-pressed={inline.has(m)} onclick={() => toggleInline(view, m)}>
+    <button class="flat icon mark-{m}" class:main={m !== "strike"} class:extra={m === "strike"} class:active={inline.has(m)} title={label} aria-label={label} aria-pressed={inline.has(m)} onclick={() => toggleInline(view, m)}>
       {glyph}
     </button>
   {/each}
@@ -53,13 +59,17 @@
   <span class="sep"></span>
 
   {#each lists as [b, icon, label] (b)}
-    <button class="flat icon main list" class:active={block === b} title={label} aria-label={label} aria-pressed={block === b} onclick={() => setBlock(view, b)}>
+    <button class="flat icon list" class:main={b !== "number"} class:extra={b === "number"} class:active={block === b} title={label} aria-label={label} aria-pressed={block === b} onclick={() => setBlock(view, b)}>
       <Icon name={icon} />
     </button>
   {/each}
   <button class="flat icon extra" class:active={block === "quote"} title="Quote" aria-label="Quote" aria-pressed={block === "quote"} onclick={() => setBlock(view, "quote")}>
     <Icon name="quote" />
   </button>
+  <span class="sep"></span>
+
+  <button class="flat icon main attach" title="Add photo" aria-label="Add photo" onclick={onphoto}><Icon name="camera" /></button>
+  <button class="flat icon main attach" title="Record voice memo" aria-label="Record voice memo" onclick={onrecord}><Icon name="mic" /></button>
 </div>
 
 <style>
@@ -87,13 +97,13 @@
     flex: none;
     width: 1px;
     height: 20px;
-    margin: 0 6px;
+    margin: 0 4px;
     background: var(--border);
   }
 
   .chip {
     flex: none;
-    padding: 0 10px;
+    padding: 0 8px;
     font-weight: 400;
   }
 
@@ -174,5 +184,6 @@
     .aa { order: 0; }
     .list { order: 1; }
     .main[class*="mark-"] { order: 2; }
+    .attach { order: 3; color: var(--accent); }
   }
 </style>

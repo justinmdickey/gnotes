@@ -3,6 +3,145 @@
 import { syntaxTree } from "@codemirror/language";
 import type { EditorState, Range } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate, WidgetType } from "@codemirror/view";
+import { EMBED, attachmentMeta, attachmentUrl, isTranscribing, onTranscribingChange } from "./attachments";
+
+/** Full-screen photo viewer that zooms out of the tapped image. */
+function openLightbox(src: string, from: HTMLElement) {
+  const r = from.getBoundingClientRect();
+  const shade = document.createElement("div");
+  shade.className = "cm-lightbox";
+  const img = document.createElement("img");
+  img.src = src;
+  img.alt = "";
+  shade.append(img);
+  document.body.append(shade);
+  // Start where the thumbnail is, then grow to fit the screen.
+  const scale = Math.min(r.width / innerWidth, r.height / innerHeight);
+  img.style.transform = `translate(${r.left + r.width / 2 - innerWidth / 2}px, ${r.top + r.height / 2 - innerHeight / 2}px) scale(${scale})`;
+  requestAnimationFrame(() => {
+    shade.classList.add("open");
+    img.style.transform = "";
+  });
+  const close = () => {
+    shade.classList.remove("open");
+    shade.addEventListener("transitionend", () => shade.remove(), { once: true });
+    setTimeout(() => shade.remove(), 400);
+    removeEventListener("keydown", onKey);
+  };
+  const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
+  shade.addEventListener("click", close);
+  addEventListener("keydown", onKey);
+}
+
+function formatTime(s: number) {
+  if (!Number.isFinite(s)) return "0:00";
+  return `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+}
+
+/** A compact player: play/pause, a scrubbable progress bar and the time. */
+function audioPlayer(src: string, label: string): HTMLElement {
+  const wrap = document.createElement("div");
+  wrap.className = "cm-audio";
+  const audio = new Audio();
+  audio.preload = "metadata";
+  audio.src = src;
+  const play = document.createElement("button");
+  play.className = "cm-audio-play";
+  play.setAttribute("aria-label", `Play ${label}`);
+  const body = document.createElement("div");
+  body.className = "cm-audio-body";
+  const title = document.createElement("span");
+  title.className = "cm-audio-title";
+  title.textContent = label;
+  const bar = document.createElement("div");
+  bar.className = "cm-audio-bar";
+  const fill = document.createElement("div");
+  bar.append(fill);
+  const time = document.createElement("span");
+  time.className = "cm-audio-time";
+  time.textContent = "0:00";
+  const status = document.createElement("span");
+  status.className = "cm-audio-status";
+  body.append(title, bar);
+  wrap.append(play, body, time, status);
+
+  const sync = () => {
+    wrap.classList.toggle("playing", !audio.paused);
+    const d = audio.duration;
+    fill.style.width = Number.isFinite(d) && d > 0 ? `${(audio.currentTime / d) * 100}%` : "0";
+    time.textContent = audio.paused && audio.currentTime === 0 ? formatTime(d) : formatTime(audio.currentTime);
+  };
+  for (const ev of ["play", "pause", "timeupdate", "loadedmetadata", "durationchange", "ended"]) audio.addEventListener(ev, sync);
+  audio.addEventListener("ended", () => (audio.currentTime = 0));
+  play.addEventListener("click", () => (audio.paused ? audio.play() : audio.pause()));
+  bar.addEventListener("click", (e) => {
+    const r = bar.getBoundingClientRect();
+    if (Number.isFinite(audio.duration)) audio.currentTime = ((e.clientX - r.left) / r.width) * audio.duration;
+  });
+  return wrap;
+}
+
+/** A photo or voice memo, drawn in place of its `![label](att:id)` line. */
+class AttachmentWidget extends WidgetType {
+  private off?: () => void;
+
+  constructor(
+    readonly id: string,
+    readonly label: string,
+  ) {
+    super();
+  }
+
+  eq(other: AttachmentWidget) {
+    return other.id === this.id && other.label === this.label;
+  }
+
+  toDOM(view: EditorView) {
+    const box = document.createElement("div");
+    box.className = "cm-attachment loading";
+    const src = attachmentUrl(this.id);
+    attachmentMeta(this.id).then(
+      (meta) => {
+        box.classList.remove("loading");
+        if (meta.mime.startsWith("audio/")) {
+          box.classList.add("is-audio");
+          box.append(audioPlayer(src, this.label || "Voice memo"));
+          const update = () => box.classList.toggle("transcribing", isTranscribing(this.id));
+          update();
+          this.off = onTranscribingChange(update);
+        } else {
+          box.classList.add("is-image");
+          const img = document.createElement("img");
+          img.src = src;
+          img.alt = this.label;
+          img.decoding = "async";
+          img.addEventListener("load", () => view.requestMeasure());
+          img.addEventListener("click", () => openLightbox(src, img));
+          box.append(img);
+        }
+        view.requestMeasure();
+      },
+      () => {
+        box.classList.remove("loading");
+        box.classList.add("missing");
+        box.textContent = "Attachment unavailable";
+      },
+    );
+    return box;
+  }
+
+  destroy() {
+    this.off?.();
+  }
+
+  get estimatedHeight() {
+    return 200;
+  }
+
+  ignoreEvent() {
+    return true;
+  }
+}
 
 class CheckboxWidget extends WidgetType {
   constructor(
@@ -54,6 +193,7 @@ const lineClass = (cls: string) => Decoration.line({ class: cls });
 const headingLines = [1, 2, 3, 4, 5, 6].map((n) => lineClass(`cm-h${Math.min(n, 3)}`));
 const quoteLine = lineClass("cm-quote");
 const doneText = Decoration.mark({ class: "cm-task-done" });
+const embedLine = lineClass("cm-embed-line");
 
 /** Line numbers touched by the selection. Their marks stay visible so they can be edited. */
 function activeLines(view: EditorView): Set<number> {
@@ -77,6 +217,22 @@ function build(view: EditorView): { decorations: DecorationSet; atomic: Decorati
   const decos: Range<Decoration>[] = [];
   const lineAt = (pos: number) => state.doc.lineAt(pos);
   let firstLineIsHeading = false;
+
+  // Embeds always show as the photo or player; deleting the line removes them.
+  const embedLines = new Set<number>();
+  for (const { from, to } of view.visibleRanges) {
+    for (let pos = from; pos <= to; ) {
+      const line = state.doc.lineAt(pos);
+      const m = EMBED.exec(line.text);
+      if (m && line.length) {
+        embedLines.add(line.number);
+        decos.push(embedLine.range(line.from));
+        decos.push(Decoration.replace({ widget: new AttachmentWidget(m[2], m[1]) }).range(line.from, line.to));
+      }
+      pos = line.to + 1;
+    }
+  }
+  if (embedLines.has(1)) firstLineIsHeading = true;
 
   for (const { from, to } of view.visibleRanges) {
     syntaxTree(state).iterate({

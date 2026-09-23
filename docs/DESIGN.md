@@ -13,7 +13,7 @@ Gnotes is a self-hosted Markdown notes app. One server holds a household's accou
 | Sharing | Single notes and whole notebooks, with other accounts on the same server only. |
 | Roles | Owner, editor, viewer. |
 | Encryption | TLS in transit. No end-to-end encryption, so the server admin can read notes. |
-| Speech-to-text | whisper.cpp on the server (phase 3). |
+| Speech-to-text | The server forwards voice memos to an external OpenAI-compatible transcription API (e.g. faster-whisper). The note keeps the recording and the transcript. |
 
 **CRDT** (conflict-free replicated data type): a data structure where edits made on different devices, even offline, merge automatically without conflicts.
 
@@ -191,7 +191,8 @@ A client opens one websocket to `/api/ws` (authenticated by the session cookie) 
 - **Views:** notebook tree, note list, editor, "Shared with me", trash, share dialog, settings. The layout adapts from a phone (one pane) to a desktop (sidebar, list and editor side by side), the same way libadwaita's split views do.
 - **Editor:** CodeMirror 6 with Markdown highlighting and in-place styling instead of a separate preview pane. `LoroExtensions(doc, {ephemeral, user}, undoManager, doc => doc.getText("body"))` handles sync, cursors and undo.
 - **Offline:** each note's Loro snapshot is saved in IndexedDB after every change, along with a cached copy of `/tree`. On reconnect the client rejoins open notes with its saved version, so offline edits merge on their own. Creating a note offline gives it a client-made UUIDv7 id that the server accepts.
-- **Voice notes:** recorded with MediaRecorder (Opus in WebM on Chrome and Firefox, AAC in MP4 on Safari), uploaded as an attachment, and linked into the note.
+- **Voice notes:** recorded with MediaRecorder (Opus in WebM on Chrome and Firefox, AAC in MP4 on Safari), uploaded as an attachment, and linked into the note. When the server has speech-to-text, the transcript goes on the line under the player. Recording needs HTTPS.
+- **Photos:** picked from the camera or library, pasted, or dropped. Images over 2048px or 1.5 MB are shrunk to JPEG in the browser before upload.
 - **Install:** a web app manifest plus a service worker that caches the app shell. The UI encourages installing to the home screen, because iOS can clear storage for tabs that aren't installed.
 
 ## Deployment
@@ -201,6 +202,7 @@ docker run -v gnotes-data:/data -p 8080:8080 gnotes
 ```
 
 - Config comes from environment variables: `GNOTES_DATA_DIR` (default `./data`), `GNOTES_BIND` (default `0.0.0.0:8080`), `GNOTES_PUBLIC_URL` (used to validate the websocket Origin header).
+- Speech-to-text is off unless `GNOTES_WHISPER_URL` points at an OpenAI-compatible API, including the version (e.g. `http://whisper:8000/v1`). `GNOTES_WHISPER_MODEL` picks the model (default `whisper-1`) and `GNOTES_WHISPER_KEY` is sent as a bearer token if set.
 - The data folder holds everything: `gnotes.db`, `blobs/` and `export/`. Backing up means copying that folder.
 
 ## Phases
@@ -214,4 +216,3 @@ docker run -v gnotes-data:/data -p 8080:8080 gnotes
 
 - **Search:** server-only full-text search, or also a local index on devices so offline search works?
 - **Accounts:** should people be able to sign up themselves with an invite link, or only through the admin?
-- **Transcription:** automatic for every recording, or on request?

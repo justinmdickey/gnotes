@@ -18,6 +18,10 @@
   import { bloom, media, scrollEdge } from "./lib/ui.svelte";
   import { fly } from "svelte/transition";
   import FormatBar from "./FormatBar.svelte";
+  import Recorder from "./Recorder.svelte";
+  import { addImages, addRecording } from "./lib/attachments";
+  import { toast } from "./lib/ui.svelte";
+  import { ApiError } from "./lib/api";
   import ShareDialog from "./ShareDialog.svelte";
 
   const props: { noteId: string } = $props();
@@ -36,6 +40,11 @@
   let lost = $state<"revoked" | "not_found" | null>(null);
   let peers = $state<{ name: string; color: string }[]>([]);
   let sharing = $state(false);
+  let recording = $state(false);
+  let photoInput: HTMLInputElement;
+  /** Captured when an add button is pressed: not typing means "add to the end of the note". */
+  let addAtEnd = false;
+  let adding = $state(0);
   let focused = $state(false);
   let block = $state<Block>("body");
   let inline = $state<Set<Inline>>(new Set());
@@ -108,6 +117,7 @@
           markdown({ base: markdownLanguage }),
           syntaxHighlighting(markdownStyle),
           livePreview,
+          dropImages,
           EditorView.lineWrapping,
           placeholder("Title"),
           keymap.of([...formatKeymap, ...defaultKeymap]),
@@ -237,6 +247,68 @@
     view.focus();
   }
 
+  function failed(err: unknown) {
+    toast(err instanceof ApiError ? err.message : "Couldn't add that. Check your connection.");
+  }
+
+  async function withBusy(work: () => Promise<void>) {
+    adding++;
+    try {
+      await work();
+    } catch (err) {
+      failed(err);
+    } finally {
+      adding--;
+    }
+  }
+
+  function pickPhoto() {
+    addAtEnd = !view?.hasFocus;
+    photoInput.click();
+  }
+
+  function onPhotos(e: Event) {
+    const input = e.currentTarget as HTMLInputElement;
+    const files = [...(input.files ?? [])];
+    input.value = "";
+    if (view && files.length) void withBusy(() => addImages(view!, noteId, files, addAtEnd));
+  }
+
+  function startRecording() {
+    addAtEnd = !view?.hasFocus;
+    view?.contentDOM.blur();
+    recording = true;
+  }
+
+  function saveRecording(audio: File) {
+    recording = false;
+    if (!view) return;
+    const v = view;
+    void withBusy(async () => {
+      await addRecording(v, noteId, audio, app.features.transcription, addAtEnd);
+    });
+  }
+
+  /** Pasted or dropped images upload straight into the note. */
+  const dropImages = EditorView.domEventHandlers({
+    paste(e, v) {
+      const files = [...(e.clipboardData?.files ?? [])].filter((f) => f.type.startsWith("image/"));
+      if (!files.length || !canEdit) return false;
+      e.preventDefault();
+      void withBusy(() => addImages(v, noteId, files));
+      return true;
+    },
+    drop(e, v) {
+      const files = [...(e.dataTransfer?.files ?? [])].filter((f) => f.type.startsWith("image/"));
+      if (!files.length || !canEdit) return false;
+      e.preventDefault();
+      const pos = v.posAtCoords({ x: e.clientX, y: e.clientY });
+      if (pos !== null) v.dispatch({ selection: { anchor: pos } });
+      void withBusy(() => addImages(v, noteId, files));
+      return true;
+    },
+  });
+
   const toolbarIn = (node: Element) => fly(node, { y: 60, duration: media.reduced ? 0 : 220 });
 </script>
 
@@ -265,7 +337,7 @@
 
     {#if canEdit && view}
       <div class="format" style:bottom="{keyboard}px" bind:offsetHeight={formatHeight}>
-        <FormatBar {view} {block} {inline} />
+        <FormatBar {view} {block} {inline} onphoto={pickPhoto} onrecord={startRecording} />
       </div>
     {/if}
   </div>
@@ -297,6 +369,8 @@
     <!-- Phone, not typing: a bottom toolbar with labeled actions. -->
     <div class="toolbar phone-only" transition:toolbarIn>
       <button class="flat tool" onclick={startChecklist}><Icon name="checklist" /><span>Checklist</span></button>
+      <button class="flat tool" onclick={pickPhoto}><Icon name="camera" /><span>Photo</span></button>
+      <button class="flat tool" onclick={startRecording}><Icon name="mic" /><span>Record</span></button>
       {#if role === "owner"}
         <button class="flat tool" onclick={() => (sharing = true)}><Icon name="people" /><span>Share</span></button>
       {/if}
@@ -304,6 +378,16 @@
     </div>
   {/if}
 </section>
+
+<input bind:this={photoInput} class="file" type="file" accept="image/*" multiple onchange={onPhotos} aria-hidden="true" tabindex="-1" />
+
+{#if adding}
+  <div class="adding" transition:bloom><span class="spinner"></span>Adding…</div>
+{/if}
+
+{#if recording}
+  <Recorder onsave={saveRecording} onclose={() => (recording = false)} />
+{/if}
 
 {#if sharing}
   <ShareDialog kind="note" id={noteId} name={note?.title ?? ""} onclose={() => (sharing = false)} />
@@ -460,6 +544,188 @@
 
   .scroll.gone {
     display: none;
+  }
+
+  .file {
+    display: none;
+  }
+
+  .adding {
+    position: fixed;
+    top: calc(64px + env(safe-area-inset-top));
+    left: 50%;
+    z-index: 20;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 16px;
+    translate: -50% 0;
+    border-radius: 999px;
+    background: var(--popover-bg);
+    box-shadow: var(--shadow-md);
+    font-weight: 600;
+    font-size: 0.9rem;
+  }
+
+  .adding .spinner {
+    width: 14px;
+    height: 14px;
+    color: var(--accent);
+  }
+
+  /* Photos and voice memos embedded in the text. */
+  .page :global(.cm-embed-line) {
+    padding: 6px 0 !important;
+    font-size: 1rem !important;
+    font-weight: 400 !important;
+  }
+
+  .page :global(.cm-attachment) {
+    display: block;
+    width: fit-content;
+    max-width: 100%;
+    border-radius: 12px;
+    cursor: default;
+    animation: rise 220ms var(--ease-out) both;
+  }
+
+  .page :global(.cm-attachment.loading) {
+    width: min(100%, 320px);
+    height: 120px;
+    background: var(--hover);
+    animation: pulse-bg 1.2s ease-in-out infinite;
+  }
+
+  @keyframes -global-pulse-bg {
+    50% {
+      opacity: 0.5;
+    }
+  }
+
+  .page :global(.cm-attachment.missing) {
+    padding: 12px 16px;
+    background: var(--hover);
+    color: var(--dim-fg);
+    font-size: 0.9rem;
+  }
+
+  .page :global(.cm-attachment img) {
+    display: block;
+    max-width: 100%;
+    max-height: 70vh;
+    border-radius: 12px;
+    box-shadow: 0 0 0 1px var(--border);
+    cursor: zoom-in;
+  }
+
+  .page :global(.cm-audio) {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: min(100vw - 48px, 380px);
+    padding: 10px 14px 10px 10px;
+    border-radius: 14px;
+    background: var(--card-bg);
+    box-shadow: var(--shadow-sm), 0 0 0 1px var(--border);
+    user-select: none;
+  }
+
+  .page :global(.cm-audio-play) {
+    flex: none;
+    width: 40px;
+    height: 40px;
+    min-height: 40px;
+    padding: 0;
+    border-radius: 50%;
+    background: var(--accent-bg);
+    color: #fff;
+  }
+
+  /* Play triangle, or pause bars while playing. */
+  .page :global(.cm-audio-play::before) {
+    content: "";
+    width: 0;
+    height: 0;
+    margin-left: 3px;
+    border-style: solid;
+    border-width: 7px 0 7px 12px;
+    border-color: transparent transparent transparent currentColor;
+  }
+
+  .page :global(.cm-audio.playing .cm-audio-play::before) {
+    width: 12px;
+    height: 14px;
+    margin-left: 0;
+    border: none;
+    border-left: 4px solid currentColor;
+    border-right: 4px solid currentColor;
+  }
+
+  .page :global(.cm-audio-body) {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+  }
+
+  .page :global(.cm-audio-title) {
+    font-weight: 700;
+    font-size: 0.92rem;
+    line-height: 1.1;
+  }
+
+  .page :global(.cm-audio-bar) {
+    height: 5px;
+    border-radius: 3px;
+    background: var(--active);
+    cursor: pointer;
+    overflow: hidden;
+  }
+
+  .page :global(.cm-audio-bar div) {
+    height: 100%;
+    width: 0;
+    background: var(--accent-bg);
+    transition: width 250ms linear;
+  }
+
+  .page :global(.cm-audio-time) {
+    font-size: 0.85rem;
+    font-variant-numeric: tabular-nums;
+    color: var(--dim-fg);
+  }
+
+  .page :global(.cm-audio-status) {
+    display: none;
+  }
+
+  .page :global(.transcribing .cm-audio) {
+    flex-wrap: wrap;
+  }
+
+  .page :global(.transcribing .cm-audio-status) {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding-left: 52px;
+    font-size: 0.85rem;
+    color: var(--dim-fg);
+  }
+
+  .page :global(.transcribing .cm-audio-status::before) {
+    content: "";
+    width: 12px;
+    height: 12px;
+    border: 2px solid color-mix(in srgb, currentColor 25%, transparent);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+
+  .page :global(.transcribing .cm-audio-status::after) {
+    content: "Transcribing…";
   }
 
   .column {

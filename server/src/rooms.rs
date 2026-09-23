@@ -122,6 +122,13 @@ impl RoomError {
 /// A line without its Markdown block marks (headings, bullets, checkboxes, quotes).
 fn plain_line(line: &str) -> String {
     let mut l = line.trim();
+    // An embedded photo or recording reads as its label, e.g. "Voice memo".
+    if let Some(rest) = l.strip_prefix("![")
+        && let Some((alt, link)) = rest.split_once("](att:")
+        && link.ends_with(')')
+    {
+        return alt.trim().chars().take(120).collect();
+    }
     l = l.trim_start_matches('#').trim_start();
     l = l.trim_start_matches('>').trim_start();
     for marker in ["- [ ] ", "- [x] ", "- [X] ", "* ", "- ", "+ "] {
@@ -156,6 +163,8 @@ mod tests {
         assert_eq!(summarize("\n# Groceries\n\n- [ ] **milk**\n- eggs"), ("Groceries".into(), "milk".into()));
         assert_eq!(summarize("1. first\n> quoted"), ("first".into(), "quoted".into()));
         assert_eq!(summarize(""), (String::new(), String::new()));
+        let memo = "![Voice memo](att:01a0d056-667e-733b-a280-1d118b647773)\nbuy milk";
+        assert_eq!(summarize(memo), ("Voice memo".into(), "buy milk".into()));
     }
 }
 

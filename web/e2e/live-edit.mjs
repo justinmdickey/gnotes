@@ -2,7 +2,8 @@
 // Usage: npm run build && cargo build -p gnotes-server && node e2e/live-edit.mjs
 // Env: CHROME (default /usr/bin/chromium), SHOTS (directory for screenshots, optional).
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import puppeteer from "puppeteer-core";
@@ -12,7 +13,21 @@ const bin = join(root, "target/debug/gnotes-server");
 const data = mkdtempSync(join(tmpdir(), "gnotes-e2e-"));
 const port = 18000 + Math.floor(Math.random() * 1000);
 const base = `http://127.0.0.1:${port}`;
-const env = { ...process.env, GNOTES_DATA_DIR: data, GNOTES_BIND: `127.0.0.1:${port}`, GNOTES_WEB_DIR: join(root, "web/dist") };
+// A stand-in speech-to-text service: answers every transcription request the same way.
+const whisper = createServer((req, res) => {
+  req.resume();
+  req.on("end", () => {
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify({ text: "remember the milk" }));
+  });
+}).listen(port + 1, "127.0.0.1");
+const env = {
+  ...process.env,
+  GNOTES_DATA_DIR: data,
+  GNOTES_BIND: `127.0.0.1:${port}`,
+  GNOTES_WEB_DIR: join(root, "web/dist"),
+  GNOTES_WHISPER_URL: `http://127.0.0.1:${port + 1}/v1`,
+};
 
 for (const [name, display] of [["alice", "Alice"], ["bob", "Bob"]]) {
   const admin = name === "alice" ? ["--admin"] : [];
@@ -59,7 +74,8 @@ try {
   await waitForServer();
   browser = await puppeteer.launch({
     executablePath: process.env.CHROME ?? "/usr/bin/chromium",
-    args: ["--no-sandbox", "--disable-gpu"],
+    // A fake microphone, allowed without a prompt, for the voice memo test.
+    args: ["--no-sandbox", "--disable-gpu", "--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream"],
   });
   const alice = await login(browser, "alice");
   const bob = await login(browser, "bob");
@@ -225,6 +241,25 @@ try {
   await alice.waitForFunction(() => document.querySelector(".notebook-chip")?.textContent.trim() === "Kitchen");
   check(true, "a note in a notebook shows the notebook chip");
   if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-notebook.png") });
+
+  // A photo picked from the format bar uploads and shows inline.
+  const png = join(data, "dot.png");
+  writeFileSync(png, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEklEQVR4nGP4z8CAFWEXHbQSACj/P8Fu7N9hAAAAAElFTkSuQmCC", "base64"));
+  const [chooser] = await Promise.all([alice.waitForFileChooser(), alice.click("button[aria-label='Add photo']")]);
+  await chooser.accept([png]);
+  await alice.waitForFunction(() => document.querySelector(".cm-attachment img")?.naturalWidth === 8, { timeout: 5000 });
+  check(true, "a picked photo uploads and shows in the note");
+
+  // A voice memo records, embeds a player, and gets its transcript underneath.
+  await alice.click(".cm-content");
+  await alice.click("button[aria-label='Record voice memo']");
+  await alice.waitForSelector("dialog .stop:not([disabled])");
+  await new Promise((r) => setTimeout(r, 1500));
+  await alice.click("dialog .stop");
+  await alice.waitForSelector(".cm-audio", { timeout: 5000 });
+  await alice.waitForFunction(() => document.querySelector(".cm-content").innerText.includes("remember the milk"), { timeout: 5000 });
+  check(true, "a voice memo embeds a player with its transcript");
+  if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-attachments.png") });
   await alice.evaluate(() => [...document.querySelectorAll(".path .crumb")].find((b) => b.textContent === "Home").click());
   await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Home");
   await alice.evaluate(() => (location.hash = "#/all"));
@@ -248,7 +283,7 @@ try {
     await shot("phone-settings");
     await alice.goto(noteUrl);
     await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("bread"));
-    await alice.tap(".toolbar button:nth-child(2)");
+    await alice.evaluate(() => [...document.querySelectorAll(".toolbar button")].find((b) => b.textContent.includes("Share")).click());
     await alice.waitForSelector("dialog button.add");
     await shot("phone-share");
     await alice.tap("dialog .actions button");
@@ -285,5 +320,6 @@ try {
 } finally {
   await browser?.close();
   server.kill();
+  whisper.close();
   rmSync(data, { recursive: true, force: true });
 }

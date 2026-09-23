@@ -1,4 +1,4 @@
-import { api, ApiError, type Tree, type TreeNote, type User } from "./api";
+import { api, ApiError, type Features, type Tree, type TreeNote, type User } from "./api";
 import { sync, type Status } from "./sync";
 import { toast } from "./ui.svelte";
 
@@ -22,6 +22,8 @@ export const app = $state({
   settings: false,
   /** Tablet only: the notebooks sidebar is pulled out over the list. */
   drawer: false,
+  /** Optional server abilities, like speech-to-text. */
+  features: { transcription: false, max_upload: 0 } as Features,
   /** Why the user was sent back to the login screen, if it wasn't their choice. */
   signedOutReason: "" as string,
 });
@@ -82,6 +84,7 @@ export function startSession(user: User) {
   };
   sync.connect();
   void refreshTree();
+  api.features().then((f) => (app.features = f), () => {});
   readHash();
 }
 
