@@ -1,0 +1,33 @@
+import { defineConfig } from "vite";
+import { svelte } from "@sveltejs/vite-plugin-svelte";
+import { VitePWA } from "vite-plugin-pwa";
+
+export default defineConfig({
+  plugins: [
+    svelte(),
+    VitePWA({
+      registerType: "autoUpdate",
+      manifest: {
+        name: "Gnotes",
+        short_name: "Gnotes",
+        description: "Self-hosted Markdown notes",
+        theme_color: "#3584e4",
+        background_color: "#fafafa",
+        display: "standalone",
+        icons: [{ src: "icon.svg", sizes: "any", type: "image/svg+xml", purpose: "any" }],
+      },
+      workbox: {
+        globPatterns: ["**/*.{js,css,html,svg,wasm}"],
+        maximumFileSizeToCacheInBytes: 8 * 1024 * 1024,
+        navigateFallbackDenylist: [/^\/api\//],
+      },
+    }),
+  ],
+  resolve: {
+    // loro-crdt's dev entry needs native .wasm imports; its browser entry works in both dev and build.
+    alias: [{ find: /^loro-crdt$/, replacement: "loro-crdt/browser" }],
+  },
+  server: {
+    proxy: { "/api": { target: "http://localhost:8080", ws: true } },
+  },
+});

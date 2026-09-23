@@ -1,0 +1,42 @@
+/* Adwaita-like tokens; dark mode follows the system. */
+:root {
+  color-scheme: light dark;
+  --window-bg: #fafafb;
+  --view-bg: #ffffff;
+  --headerbar-bg: #ebebed;
+  --fg: rgb(0 0 6 / 80%);
+  --dim-fg: rgb(0 0 6 / 55%);
+  --border: rgb(0 0 6 / 12%);
+  --accent: #3584e4;
+  --radius: 12px;
+  font-family: "Adwaita Sans", Cantarell, "Inter", system-ui, sans-serif;
+  font-size: 15px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --window-bg: #222226;
+    --view-bg: #1d1d20;
+    --headerbar-bg: #2e2e32;
+    --fg: #ffffff;
+    --dim-fg: rgb(255 255 255 / 55%);
+    --border: rgb(255 255 255 / 12%);
+    --accent: #78aeed;
+  }
+}
+
+* { box-sizing: border-box; }
+
+html, body, #app { height: 100%; margin: 0; }
+
+body {
+  background: var(--window-bg);
+  color: var(--fg);
+}
+
+/* Remote cursor colors used by loro-codemirror's colorClassName. */
+.user-blue { --user-color: #3584e4; }
+.user-green { --user-color: #33d17a; }
+.user-orange { --user-color: #ff7800; }
+.user-purple { --user-color: #9141ac; }
+.user-red { --user-color: #e01b24; }
