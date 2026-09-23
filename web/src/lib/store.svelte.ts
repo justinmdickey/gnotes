@@ -1,4 +1,4 @@
-import { api, type Tree, type TreeNote, type User } from "./api";
+import { api, ApiError, type Tree, type TreeNote, type User } from "./api";
 import { sync, type Status } from "./sync";
 
 /** What the note list shows. */
@@ -17,6 +17,10 @@ export const app = $state({
   pane: "list" as "sidebar" | "list" | "editor",
   /** A note just created here, which should open with the cursor ready. */
   freshNote: null as string | null,
+  /** The Settings screen covers the whole app while open. */
+  settings: false,
+  /** Why the user was sent back to the login screen, if it wasn't their choice. */
+  signedOutReason: "" as string,
 });
 
 export function viewTitle(view: View, tree: Tree): string {
@@ -60,7 +64,19 @@ export function refreshTree(): Promise<void> {
 export function startSession(user: User) {
   app.user = user;
   sync.onTreeChanged = () => void refreshTree();
-  sync.onStatus = (s) => (app.status = s);
+  sync.onStatus = (s) => {
+    app.status = s;
+    // A dropped connection can mean the session ended (password reset, account disabled).
+    if (s === "offline" && app.user) {
+      api.me().catch((e) => {
+        if (e instanceof ApiError && e.status === 401) {
+          sync.disconnect();
+          app.user = null;
+          app.signedOutReason = "You were signed out. Log in again to continue.";
+        }
+      });
+    }
+  };
   sync.connect();
   void refreshTree();
   readHash();
@@ -70,6 +86,8 @@ export async function endSession() {
   sync.disconnect();
   await api.logout().catch(() => {});
   app.user = null;
+  app.settings = false;
+  history.replaceState(null, "", "/#/");
 }
 
 // Routes live in the hash so every screen change is a history entry and the phone's
@@ -89,6 +107,7 @@ function hashFor(view: View | null, noteId: string | null): string {
 }
 
 function apply(view: View | null, noteId: string | null) {
+  app.settings = false;
   if (view) app.view = view;
   app.noteId = noteId;
   app.pane = noteId ? "editor" : view ? "list" : "sidebar";
@@ -107,11 +126,20 @@ export function openNote(id: string) {
   navigate(app.view, id);
 }
 
+export function openSettings() {
+  app.settings = true;
+  if (location.hash !== "#/settings") history.pushState({ from: location.hash }, "", "#/settings");
+}
+
 /**
  * In-app back always goes to the parent screen (note -> its list -> notebooks). It pops
  * history when the previous entry is that parent, so the phone's back button stays in step.
  */
 export function goBack() {
+  if (app.settings) {
+    if (history.state?.from !== undefined) return history.back();
+    return navigate(null, null, true);
+  }
   const parent = app.noteId ? app.view : null;
   if (history.state?.from === hashFor(parent, null)) return history.back();
   navigate(parent, null, true);
@@ -119,6 +147,10 @@ export function goBack() {
 
 export function readHash() {
   const h = location.hash.replace(/^#\/?/, "");
+  if (h === "settings") {
+    app.settings = true;
+    return;
+  }
   const id = "([0-9a-f-]{36})";
   const note = h.match(new RegExp(`(?:^|/)note/${id}$`))?.[1] ?? null;
   const base = h.replace(/\/?note\/[0-9a-f-]{36}$/, "");

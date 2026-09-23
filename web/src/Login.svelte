@@ -1,6 +1,6 @@
 <script lang="ts">
   import { api, ApiError } from "./lib/api";
-  import { startSession } from "./lib/store.svelte";
+  import { app, startSession } from "./lib/store.svelte";
 
   let username = $state("");
   let password = $state("");
@@ -13,6 +13,7 @@
     error = "";
     try {
       startSession(await api.login(username, password));
+      app.signedOutReason = "";
     } catch (err) {
       error = err instanceof ApiError && err.status === 401 ? "Wrong username or password" : "Couldn't reach the server";
     } finally {
@@ -25,6 +26,7 @@
   <form onsubmit={submit}>
     <img src="/icon.svg" alt="" width="96" height="96" />
     <h1>Gnotes</h1>
+    {#if app.signedOutReason}<p class="reason">{app.signedOutReason}</p>{/if}
     <input name="username" placeholder="Username" autocomplete="username" autocapitalize="none" bind:value={username} required />
     <input name="password" type="password" placeholder="Password" autocomplete="current-password" bind:value={password} required />
     {#if error}<p class="error">{error}</p>{/if}
@@ -60,6 +62,12 @@
   button {
     margin-top: 8px;
     min-height: 42px;
+  }
+
+  .reason {
+    margin: 0 0 4px;
+    text-align: center;
+    color: var(--dim-fg);
   }
 
   .error {

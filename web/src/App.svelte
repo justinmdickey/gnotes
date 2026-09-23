@@ -5,6 +5,7 @@
   import Editor from "./Editor.svelte";
   import Join from "./Join.svelte";
   import Login from "./Login.svelte";
+  import Settings from "./Settings.svelte";
   import NoteList from "./NoteList.svelte";
   import Sidebar from "./Sidebar.svelte";
 
@@ -29,6 +30,8 @@
   <Join token={joinToken} />
 {:else if !app.user}
   <Login />
+{:else if app.settings}
+  <Settings />
 {:else}
   <div class="shell" data-pane={app.pane}>
     <aside class="pane sidebar"><Sidebar /></aside>

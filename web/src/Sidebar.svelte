@@ -2,10 +2,8 @@
   import { api, type TreeNotebook } from "./lib/api";
   import Dialog from "./lib/Dialog.svelte";
   import Icon from "./lib/Icon.svelte";
-  import { app, composeNote, endSession, navigate, notesFor, type View } from "./lib/store.svelte";
-  import PeopleDialog from "./PeopleDialog.svelte";
+  import { app, composeNote, navigate, notesFor, openSettings, type View } from "./lib/store.svelte";
 
-  let people = $state(false);
   const count = (view: View) => notesFor(view, app.tree).length;
 
   let creating = $state<{ parent: string | null } | null>(null);
@@ -64,7 +62,7 @@
 <nav>
   <header>
     <span class="title">Gnotes</span>
-    <button class="flat icon" title="Log out" aria-label="Log out" onclick={endSession}><Icon name="logout" /></button>
+    <button class="flat icon" title="Settings" aria-label="Settings" onclick={openSettings}><Icon name="settings" /></button>
   </header>
   <div class="scroll">
     <button class="row flat" class:selected={isSelected({ kind: "all" })} onclick={() => select({ kind: "all" })}>
@@ -97,12 +95,6 @@
       {/each}
     {/if}
 
-    {#if app.user?.is_admin}
-      <div class="section"><span>Server</span></div>
-      <button class="row flat" onclick={() => (people = true)}>
-        <Icon name="person_add" /><span class="label">People &amp; Invites</span>
-      </button>
-    {/if}
   </div>
   <footer class="dim">
     <span class="dot {app.status}"></span>
@@ -115,9 +107,6 @@
   </div>
 </nav>
 
-{#if people}
-  <PeopleDialog onclose={() => (people = false)} />
-{/if}
 
 {#if creating}
   <Dialog title="New Notebook" onclose={() => (creating = null)}>

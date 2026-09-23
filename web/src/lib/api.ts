@@ -73,6 +73,15 @@ export interface InvitePreview {
   expires_at: number;
 }
 
+export interface AdminUser {
+  id: string;
+  username: string;
+  display_name: string;
+  is_admin: boolean;
+  disabled: boolean;
+  created_at: number;
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -100,6 +109,13 @@ export const api = {
   login: (username: string, password: string) => request<User>("POST", "/auth/login", { username, password }),
   logout: () => request("POST", "/auth/logout", {}),
   users: () => request<UserSummary[]>("GET", "/users"),
+  updateMe: (display_name: string) => request<User>("PATCH", "/me", { display_name }),
+  changePassword: (current: string, next: string) => request("POST", "/me/password", { current, new: next }),
+  logoutOthers: () => request("POST", "/me/logout-others", {}),
+  adminUsers: () => request<AdminUser[]>("GET", "/admin/users"),
+  adminUpdateUser: (id: string, patch: { is_admin?: boolean; disabled?: boolean }) =>
+    request("PATCH", `/admin/users/${id}`, patch),
+  adminResetPassword: (id: string, password: string) => request("POST", `/admin/users/${id}/password`, { password }),
   tree: () => request<Tree>("GET", "/tree"),
 
   createNotebook: (name: string, parent_id: string | null) =>

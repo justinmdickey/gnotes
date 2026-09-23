@@ -188,6 +188,20 @@ try {
   await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("bread"));
   check(true, "alice's note reloads from the server");
 
+  // Settings: an admin resets Bob's password, and Bob's open app drops to the login screen.
+  await alice.click("nav button[aria-label='Settings']");
+  await alice.waitForSelector("button[aria-label='Manage Bob']");
+  await alice.click("button[aria-label='Manage Bob']");
+  await alice.evaluate(() => [...document.querySelectorAll("[role=menuitem]")].find((b) => b.textContent.includes("Reset Password")).click());
+  await alice.type("#reset-password input", "bobsnewpass");
+  await alice.click("dialog button[form=reset-password]");
+  await alice.waitForFunction(() => document.body.innerText.includes("password was reset"));
+  await bob.waitForFunction(() => document.body.innerText.includes("You were signed out"), { timeout: 10000 });
+  check(true, "admin reset signs the user out of their open app");
+  if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-settings.png") });
+  await alice.click(".page header .back");
+  await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("bread"));
+
   if (process.env.SHOTS) {
     const shot = (name) => alice.screenshot({ path: join(process.env.SHOTS, `${name}.png`) });
     await alice.click(".cm-content");
@@ -198,6 +212,12 @@ try {
     await alice.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true });
     await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("bread"));
     await shot("phone-editor");
+    const noteUrl = alice.url();
+    await alice.goto(`${base}/#/settings`);
+    await alice.waitForSelector("button[aria-label='Manage Bob']");
+    await shot("phone-settings");
+    await alice.goto(noteUrl);
+    await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("bread"));
     await alice.tap("button[aria-label='Share']");
     await alice.waitForSelector("dialog button.add");
     await shot("phone-share");
