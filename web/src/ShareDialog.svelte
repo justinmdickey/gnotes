@@ -3,6 +3,7 @@
   import Dialog from "./lib/Dialog.svelte";
   import Icon from "./lib/Icon.svelte";
   import { app, colorFor } from "./lib/store.svelte";
+  import { bloom, toast } from "./lib/ui.svelte";
 
   let { kind, id, name, onclose }: { kind: "note" | "notebook"; id: string; name: string; onclose: () => void } =
     $props();
@@ -14,7 +15,6 @@
   let role = $state<"editor" | "viewer">("editor");
   let error = $state("");
   let invite = $state<string | null>(null);
-  let copied = $state(false);
   // Both only exist in secure contexts (HTTPS), so plain-HTTP dev falls back to a selectable link.
   const canShare = "share" in navigator;
   const canCopy = "clipboard" in navigator;
@@ -58,14 +58,14 @@
       await navigator.share({ title: "Gnotes invite", text, url: invite }).catch(() => {});
     } else if (canCopy) {
       await navigator.clipboard.writeText(invite);
-      copied = true;
+      toast("Invite link copied");
     }
   }
 
   const initial = (n: string) => n.slice(0, 1).toUpperCase();
 </script>
 
-<Dialog title="Share “{name || 'New Note'}”" {onclose}>
+<Dialog title="Share “{name || 'New Note'}”" {onclose} wide>
   <section>
     <h3>People with access</h3>
     <ul class="boxed">
@@ -75,7 +75,7 @@
         <span class="dim role-label">Owner</span>
       </li>
       {#each shares as share (share.id)}
-        <li>
+        <li in:bloom>
           <span class="avatar {colorFor(byUsername.get(share.username)?.id ?? share.username)}">{initial(share.display_name)}</span>
           <span class="who">{share.display_name}</span>
           <select value={share.role} onchange={(e) => run(() => api.setShareRole(share.id, e.currentTarget.value))} aria-label="Access for {share.display_name}">
@@ -93,7 +93,8 @@
   <section>
     <div class="add-head">
       <h3>Add people</h3>
-      <div class="segmented" role="radiogroup" aria-label="Access for new people">
+      <div class="segmented" class:right={role === "viewer"} role="radiogroup" aria-label="Access for new people">
+        <span class="thumb" aria-hidden="true"></span>
         <button class:on={role === "editor"} role="radio" aria-checked={role === "editor"} onclick={() => (role = "editor")}>Can edit</button>
         <button class:on={role === "viewer"} role="radio" aria-checked={role === "viewer"} onclick={() => (role = "viewer")}>Can view</button>
       </div>
@@ -106,7 +107,7 @@
         <li>
           <span class="avatar {colorFor(u.id)}">{initial(u.display_name)}</span>
           <span class="who">{u.display_name} <span class="dim">@{u.username}</span></span>
-          <button class="suggested add" onclick={() => run(() => api.share(kind, id, u.username, role))}>Add</button>
+          <button class="suggested add pill" onclick={() => run(() => api.share(kind, id, u.username, role))}>Add</button>
         </li>
       {:else}
         <li class="dim empty">{query ? "No one matches" : "Everyone on this server already has access"}</li>
@@ -122,7 +123,7 @@
         <div class="link-row">
           <input class="link" readonly value={invite} onfocus={(e) => e.currentTarget.select()} aria-label="Invite link" />
           {#if canShare || canCopy}
-            <button class="suggested" onclick={sendInvite}>{canShare ? "Send" : copied ? "Copied" : "Copy"}</button>
+            <button class="suggested" onclick={sendInvite}>{canShare ? "Send" : "Copy"}</button>
           {/if}
         </div>
       {:else}
@@ -213,25 +214,47 @@
     margin: 0;
   }
 
+  /* Two equal segments with a thumb that slides between them. */
   .segmented {
-    display: flex;
-    padding: 2px;
+    position: relative;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    padding: 3px;
     border-radius: var(--radius);
     background: var(--hover);
   }
 
+  .thumb {
+    position: absolute;
+    top: 3px;
+    bottom: 3px;
+    left: 3px;
+    width: calc(50% - 3px);
+    border-radius: 7px;
+    background: var(--view-bg);
+    box-shadow: 0 1px 3px rgb(0 0 6 / 18%);
+    transition: transform 240ms var(--ease-out);
+  }
+
+  .segmented.right .thumb {
+    transform: translateX(100%);
+  }
+
   .segmented button {
-    min-height: 28px;
-    padding: 0 10px;
+    position: relative;
+    min-height: 30px;
+    padding: 0 12px;
     background: transparent;
-    font-weight: 400;
+    font-weight: 500;
     font-size: 0.9rem;
   }
 
+  .segmented button:active:not(:disabled) {
+    background: transparent;
+  }
+
   .segmented button.on {
-    background: var(--view-bg);
     font-weight: 700;
-    box-shadow: 0 1px 2px rgb(0 0 0 / 15%);
   }
 
   .search {
@@ -240,12 +263,14 @@
   }
 
   .add {
-    min-height: 30px;
+    min-height: 32px;
+    padding: 0 16px;
   }
 
   .invite {
     width: 100%;
-    min-height: 44px;
+    min-height: 46px;
+    color: var(--accent);
   }
 
   .hint {

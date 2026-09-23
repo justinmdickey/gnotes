@@ -1,8 +1,9 @@
 <script lang="ts">
   import { api, type TreeNotebook } from "./lib/api";
   import Dialog from "./lib/Dialog.svelte";
-  import Icon from "./lib/Icon.svelte";
+  import Icon, { type IconName } from "./lib/Icon.svelte";
   import { app, colorFor, composeNote, navigate, notesFor, openSettings, type View } from "./lib/store.svelte";
+  import { scrollEdge } from "./lib/ui.svelte";
 
   const count = (view: View) => notesFor(view, app.tree).length;
 
@@ -24,12 +25,13 @@
   const sharedRoots = $derived((byParent.get(null) ?? []).filter((n) => n.role !== "owner" && !hiddenShares.has(n.id)));
   const hasSharedNotes = $derived(app.tree.shared.some((s) => s.resource_type === "note" && !s.hidden));
 
-  function select(view: View) {
-    navigate(view);
-  }
-
   function isSelected(view: View) {
     return app.view.kind === view.kind && (view.kind !== "notebook" || (app.view as { id: string }).id === view.id);
+  }
+
+  function startCreate() {
+    name = "";
+    creating = { parent: null };
   }
 
   async function create(e: SubmitEvent) {
@@ -37,85 +39,81 @@
     if (!creating || !name.trim()) return;
     const { id } = await api.createNotebook(name.trim(), creating.parent);
     creating = null;
-    name = "";
-    select({ kind: "notebook", id });
+    navigate({ kind: "notebook", id });
   }
 </script>
 
-{#snippet notebookRow(nb: TreeNotebook, depth: number)}
-  <button
-    class="row flat"
-    class:selected={isSelected({ kind: "notebook", id: nb.id })}
-    style:padding-left="{12 + depth * 16}px"
-    onclick={() => select({ kind: "notebook", id: nb.id })}
-  >
-    <Icon name="folder" />
-    <span class="label">{nb.name}</span>
-    {#if nb.role !== "owner"}<span class="dim owner">{nb.owner}</span>{/if}
-    <span class="dim count">{count({ kind: "notebook", id: nb.id })}</span>
-  </button>
+{#snippet row(view: View, icon: IconName, label: string, owner = "", depth = 0)}
+  <li>
+    <button class="row flat" class:selected={isSelected(view)} style:--depth={depth} onclick={() => navigate(view)}>
+      <Icon name={icon} />
+      <span class="label">{label}</span>
+      {#if owner}<span class="dim owner">{owner}</span>{/if}
+      <span class="count">{count(view)}</span>
+      <span class="chevron phone-only"><Icon name="next" /></span>
+    </button>
+  </li>
+{/snippet}
+
+{#snippet notebookRows(nb: TreeNotebook, depth: number)}
+  {@render row({ kind: "notebook", id: nb.id }, "folder", nb.name, nb.role !== "owner" ? nb.owner : "", depth)}
   {#each byParent.get(nb.id) ?? [] as child (child.id)}
-    {@render notebookRow(child, depth + 1)}
+    {@render notebookRows(child, depth + 1)}
   {/each}
 {/snippet}
 
 <nav>
-  <header>
-    <span class="title">Gnotes</span>
+  <header class="headerbar">
+    <div class="title"><strong class="brand"><img src="/icon.svg" alt="" width="22" height="22" />Gnotes</strong></div>
     <!-- Your avatar opens account settings, as in most phone apps. -->
-    <button class="flat icon account" title="Account and settings" aria-label="Settings" onclick={openSettings}>
+    <button class="flat icon circular account" title="Account and settings" aria-label="Settings" onclick={openSettings}>
       <span class="avatar {colorFor(app.user?.id ?? '')}">{app.user?.display_name.slice(0, 1).toUpperCase()}</span>
     </button>
   </header>
-  <div class="scroll">
-    <button class="row flat" class:selected={isSelected({ kind: "all" })} onclick={() => select({ kind: "all" })}>
-      <Icon name="note" /><span class="label">All Notes</span>
-      <span class="dim count">{count({ kind: "all" })}</span>
-    </button>
 
-    <div class="section">
-      <span>Notebooks</span>
-      <button class="flat icon" title="New notebook" aria-label="New notebook" onclick={() => (creating = { parent: null })}>
-        <Icon name="plus" />
-      </button>
-    </div>
-    {#each ownRoots as nb (nb.id)}
-      {@render notebookRow(nb, 0)}
-    {:else}
-      <p class="dim empty">No notebooks yet</p>
-    {/each}
+  <div class="scroll" use:scrollEdge>
+    <ul class="group">
+      {@render row({ kind: "all" }, "note", "All Notes")}
+    </ul>
+
+    <h3 class="section">Notebooks</h3>
+    <ul class="group">
+      {#each ownRoots as nb (nb.id)}
+        {@render notebookRows(nb, 0)}
+      {/each}
+      <li>
+        <button class="row flat add" onclick={startCreate}>
+          <Icon name="newfolder" /><span class="label">New Notebook</span>
+        </button>
+      </li>
+    </ul>
 
     {#if sharedRoots.length || hasSharedNotes}
-      <div class="section"><span>Shared with Me</span></div>
-      {#if hasSharedNotes}
-        <button class="row flat" class:selected={isSelected({ kind: "shared-notes" })} onclick={() => select({ kind: "shared-notes" })}>
-          <Icon name="people" /><span class="label">Shared Notes</span>
-          <span class="dim count">{count({ kind: "shared-notes" })}</span>
-        </button>
-      {/if}
-      {#each sharedRoots as nb (nb.id)}
-        {@render notebookRow(nb, 0)}
-      {/each}
+      <h3 class="section">Shared with Me</h3>
+      <ul class="group">
+        {#if hasSharedNotes}
+          {@render row({ kind: "shared-notes" }, "people", "Shared Notes")}
+        {/if}
+        {#each sharedRoots as nb (nb.id)}
+          {@render notebookRows(nb, 0)}
+        {/each}
+      </ul>
     {/if}
-
   </div>
-  <footer class="dim">
+
+  <footer class="dim" title={app.status === "online" ? "Changes sync live" : "Changes will sync when the server is back"}>
     <span class="dot {app.status}"></span>
-    {app.user?.display_name} · {app.status === "online" ? "Connected" : app.status === "connecting" ? "Connecting…" : "Offline"}
+    {app.status === "online" ? "Connected" : app.status === "connecting" ? "Connecting…" : "Offline"}
   </footer>
-  <!-- Phone home screen toolbar, like Apple Notes' Folders screen. -->
-  <div class="toolbar phone-only">
-    <button class="flat icon tool" aria-label="New notebook" onclick={() => (creating = { parent: null })}><Icon name="newfolder" /></button>
-    <button class="flat icon tool" aria-label="New note" onclick={() => composeNote({ kind: "all" })}><Icon name="compose" /></button>
-  </div>
-</nav>
 
+  <button class="fab phone-only" onclick={() => composeNote({ kind: "all" })}><Icon name="compose" /> New Note</button>
+</nav>
 
 {#if creating}
   <Dialog title="New Notebook" onclose={() => (creating = null)}>
     <form id="new-notebook" onsubmit={create}>
       <!-- svelte-ignore a11y_autofocus -->
-      <input placeholder="Name" bind:value={name} autofocus />
+      <input placeholder="Notebook name" aria-label="Notebook name" bind:value={name} autofocus />
     </form>
     {#snippet actions()}
       <button onclick={() => (creating = null)}>Cancel</button>
@@ -126,58 +124,66 @@
 
 <style>
   nav {
+    position: relative;
     display: flex;
     flex-direction: column;
     height: 100%;
     background: var(--sidebar-bg);
   }
 
-  header {
+  .brand {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    min-height: 47px;
-    padding: 0 6px 0 16px;
-    padding-top: env(safe-area-inset-top);
-  }
-
-  .title {
-    font-weight: 700;
-  }
-
-  .account {
-    border-radius: 50%;
+    gap: 8px;
+    font-size: 1.05rem;
   }
 
   .avatar {
-    display: grid;
-    place-items: center;
-    width: 28px;
-    height: 28px;
-    border-radius: 50%;
-    background: var(--user-color, var(--accent));
-    color: #fff;
-    font-size: 0.85rem;
-    font-weight: 700;
+    width: 30px;
+    height: 30px;
   }
 
   .scroll {
     flex: 1;
     overflow-y: auto;
-    padding: 0 6px 12px;
+    padding: 2px 8px 16px;
+  }
+
+  .group {
+    margin: 0;
+    padding: 0;
+    list-style: none;
   }
 
   .row {
     width: 100%;
     justify-content: flex-start;
-    gap: 10px;
-    padding: 0 12px;
-    min-height: 38px;
-    font-weight: 400;
+    gap: 12px;
+    padding: 0 10px 0 calc(12px + var(--depth, 0) * 18px);
+    min-height: 40px;
+    font-weight: 500;
+  }
+
+  .row:active:not(:disabled) {
+    transform: none;
   }
 
   .row.selected {
     background: var(--active);
+    font-weight: 700;
+  }
+
+  .row :global(svg) {
+    color: var(--dim-fg);
+  }
+
+  .row.selected :global(svg) {
+    color: var(--accent);
+  }
+
+  .add,
+  .add :global(svg) {
+    color: var(--accent) !important;
   }
 
   .label {
@@ -189,60 +195,31 @@
     text-align: left;
   }
 
-  .owner,
-  .count {
+  .owner {
     font-size: 0.8rem;
+    font-weight: 400;
   }
 
   .count {
-    min-width: 1.5em;
-    text-align: right;
+    min-width: 22px;
+    padding: 1px 7px;
+    border-radius: 999px;
+    font-size: 0.78rem;
+    font-weight: 700;
+    color: var(--dim-fg);
+    text-align: center;
   }
 
-  .toolbar {
-    display: flex;
-    justify-content: space-between;
-    padding: 2px 8px env(safe-area-inset-bottom);
-    border-top: 1px solid var(--border);
-    background: var(--headerbar-bg);
-  }
-
-  .tool {
-    min-width: 44px;
-    min-height: 44px;
+  .row.selected .count {
+    background: var(--accent-soft);
     color: var(--accent);
   }
 
-  .tool :global(svg) {
-    width: 22px;
-    height: 22px;
-  }
-
-  /* Phone: bigger rows, like the Folders list in Apple Notes. */
-  @media (max-width: 700px) {
-    .row {
-      min-height: 48px;
-      font-size: 1.05rem;
-    }
-
-    footer {
-      padding-bottom: 10px;
-    }
-  }
-
   .section {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 16px 0 4px 12px;
-    font-size: 0.85rem;
-    font-weight: 700;
+    margin: 18px 12px 6px;
+    font-size: 0.82rem;
+    font-weight: 800;
     color: var(--dim-fg);
-  }
-
-  .empty {
-    margin: 4px 12px;
-    font-size: 0.9rem;
   }
 
   form input {
@@ -253,19 +230,121 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 10px 16px;
+    padding: 10px 18px;
     padding-bottom: max(10px, env(safe-area-inset-bottom));
-    font-size: 0.85rem;
+    font-size: 0.82rem;
   }
 
   .dot {
+    flex: none;
     width: 8px;
     height: 8px;
     border-radius: 50%;
     background: var(--dim-fg);
+    transition: background var(--fast) ease;
   }
 
   .dot.online {
     background: var(--success);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 20%, transparent);
+  }
+
+  .dot.connecting {
+    animation: pulse 1.2s ease-in-out infinite;
+  }
+
+  .dot.offline {
+    background: #e5a50a;
+  }
+
+  @keyframes pulse {
+    50% {
+      opacity: 0.3;
+    }
+  }
+
+  /* Phone: the home screen. Boxed groups with big rows, like a settings page. */
+  @media (max-width: 700px) {
+    nav {
+      background: var(--window-bg);
+    }
+
+    .brand {
+      font-size: 1.15rem;
+    }
+
+    .scroll {
+      padding: 4px 16px 96px;
+    }
+
+    .group {
+      border-radius: var(--radius-lg);
+      background: var(--card-bg);
+      box-shadow: var(--shadow-sm), 0 0 0 1px var(--border);
+      overflow: hidden;
+    }
+
+    .group > li + li {
+      border-top: 1px solid var(--border);
+    }
+
+    .group + .section {
+      margin-top: 22px;
+    }
+
+    .group:first-child {
+      margin-top: 8px;
+    }
+
+    .row {
+      min-height: 54px;
+      padding-right: 8px;
+      border-radius: 0;
+      font-size: 1.05rem;
+    }
+
+    .row :global(svg) {
+      width: 20px;
+      height: 20px;
+      color: var(--accent);
+    }
+
+    .row.selected {
+      background: transparent;
+      font-weight: 500;
+    }
+
+    .row.selected .count {
+      background: none;
+      color: var(--dim-fg);
+    }
+
+    .count {
+      font-size: 0.9rem;
+      font-weight: 400;
+    }
+
+    .chevron {
+      display: flex;
+      color: var(--dim-fg);
+    }
+
+    .chevron :global(svg) {
+      width: 16px !important;
+      height: 16px !important;
+      color: var(--dim-fg) !important;
+    }
+
+    .section {
+      margin-left: 6px;
+    }
+
+    footer {
+      position: absolute;
+      left: 0;
+      bottom: 0;
+      padding: 0 18px calc(34px + env(safe-area-inset-bottom));
+      pointer-events: none;
+    }
   }
 </style>

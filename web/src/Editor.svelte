@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import { Compartment, EditorSelection, EditorState } from "@codemirror/state";
   import { EditorView, keymap, placeholder } from "@codemirror/view";
   import { defaultKeymap } from "@codemirror/commands";
@@ -14,11 +14,14 @@
   import { livePreview } from "./lib/livePreview";
   import { sync } from "./lib/sync";
   import Menu from "./lib/Menu.svelte";
-  import { app, colorFor, composeNote, goBack, navigate, viewTitle } from "./lib/store.svelte";
+  import { app, colorFor, composeNote, goBack, trashNote, viewTitle } from "./lib/store.svelte";
+  import { bloom, media, scrollEdge } from "./lib/ui.svelte";
+  import { fly } from "svelte/transition";
   import FormatBar from "./FormatBar.svelte";
   import ShareDialog from "./ShareDialog.svelte";
 
-  let { noteId }: { noteId: string } = $props();
+  const props: { noteId: string } = $props();
+  const noteId = $derived(props.noteId);
 
   const note = $derived(app.tree.notes.find((n) => n.id === noteId));
   let role = $state<Role | null>(null);
@@ -31,8 +34,15 @@
   let inline = $state<Set<Inline>>(new Set());
   /** Height covered by the on-screen keyboard, so the phone toolbar can sit on top of it. */
   let keyboard = $state(0);
+  /** The phone format bar's height, so text never ends up underneath it. */
+  let formatHeight = $state(0);
+  /** Phone, typing: the note's scroll area stops above the keyboard and the format bar. */
+  const coveredBottom = $derived(media.phone && focused ? keyboard + formatHeight : 0);
   let view = $state<EditorView>();
   let parent: HTMLDivElement;
+  let scroller: HTMLDivElement;
+  /** Phone: space kept between the cursor and whatever covers the bottom of the note. */
+  const CURSOR_ROOM = 120;
 
   const canEdit = $derived(loaded && !lost && role !== null && role !== "viewer");
 
@@ -82,6 +92,8 @@
   }
 
   onMount(() => {
+    // One editor per note: pin the id so teardown never sees the next note's id.
+    const noteId = untrack(() => props.noteId);
     const v = new EditorView({
       parent,
       state: EditorState.create({
@@ -92,6 +104,9 @@
           EditorView.lineWrapping,
           placeholder("Title"),
           keymap.of([...formatKeymap, ...defaultKeymap]),
+          // While typing, the text moves up a line at a time to keep this much room below the
+          // cursor, so the line being written never touches the format bar or keyboard.
+          EditorView.scrollMargins.of(() => ({ bottom: media.phone ? CURSOR_ROOM : 64, top: 24 })),
           editable.of(EditorView.editable.of(false)),
           EditorView.contentAttributes.of({ "aria-label": "Note text", autocapitalize: "sentences", spellcheck: "true" }),
           EditorView.updateListener.of((u) => {
@@ -155,7 +170,10 @@
     // keyboard, so this is 0 there. iOS overlays the keyboard; this is its height.
     const vv = window.visualViewport;
     const onViewport = () => {
-      if (vv) keyboard = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
+      if (!vv) return;
+      keyboard = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
+      // The keyboard opening shrinks the visible area; bring the cursor back above it.
+      if (v.hasFocus) requestAnimationFrame(() => revealCursor(v));
     };
     vv?.addEventListener("resize", onViewport);
     vv?.addEventListener("scroll", onViewport);
@@ -176,6 +194,27 @@
     };
   });
 
+  /**
+   * Glides the cursor back into comfortable view when the keyboard opens or the visible
+   * area changes. On phones that area ends above the format bar and keyboard.
+   */
+  function revealCursor(v: EditorView) {
+    const caret = v.coordsAtPos(v.state.selection.main.head);
+    if (!caret || !scroller) return;
+    const box = scroller.getBoundingClientRect();
+    const room = media.phone ? Math.min(CURSOR_ROOM, box.height * 0.3) : 64;
+    const below = caret.bottom - (box.bottom - room);
+    const above = box.top + 24 - caret.top;
+    const top = below > 0 ? below : above > 0 ? -above : 0;
+    if (top) scroller.scrollBy({ top, behavior: media.reduced ? "auto" : "smooth" });
+  }
+
+  // After the scroll area shrinks for the keyboard, re-center on the cursor.
+  $effect(() => {
+    coveredBottom;
+    if (view?.hasFocus) requestAnimationFrame(() => view && revealCursor(view));
+  });
+
   /** Adds a checklist item at the end of the note and starts typing in it. */
   function startChecklist() {
     if (!view) return;
@@ -191,58 +230,63 @@
     view.focus();
   }
 
-  async function remove() {
-    if (!confirm("Move this note to the trash?")) return;
-    await api.deleteNote(noteId);
-    navigate(app.view, null, true);
-  }
+  const toolbarIn = (node: Element) => fly(node, { y: 60, duration: media.reduced ? 0 : 220 });
 </script>
 
-<section class:focused>
-  <header>
-    <button class="flat back phone-only" onclick={goBack}>
-      <Icon name="back" /><span>{viewTitle(app.view, app.tree)}</span>
-    </button>
-    <span class="title">{note?.title || "New Note"}</span>
-    <div class="peers">
-      {#each peers as peer (peer.name)}
-        <span class="avatar {peer.color}" title="{peer.name} is here">{peer.name.slice(0, 1).toUpperCase()}</span>
-      {/each}
-    </div>
-    {#if role === "viewer"}<span class="badge dim">View only</span>{/if}
-    {#if role === "owner"}
-      <button class="flat share" aria-label="Share" onclick={() => (sharing = true)}><Icon name="people" /><span>Share</span></button>
-      <Menu label="Note menu" items={[{ label: "Move to Trash", destructive: true, onselect: remove }]} />
-    {/if}
-    {#if focused}
-      <button class="flat done phone-only" onclick={() => view?.contentDOM.blur()}>Done</button>
-    {/if}
-  </header>
+<section class:focused style:padding-bottom="{coveredBottom}px">
+  <div class="top">
+    <header class="headerbar">
+      <button class="flat back phone-only" onclick={goBack}>
+        <Icon name="back" /><span>{viewTitle(app.view, app.tree)}</span>
+      </button>
+      <div class="title"><strong>{note?.title || "New Note"}</strong></div>
+      <div class="peers">
+        {#each peers as peer (peer.name)}
+          <span class="avatar {peer.color}" title="{peer.name} is here" transition:bloom>{peer.name.slice(0, 1).toUpperCase()}</span>
+        {/each}
+      </div>
+      {#if role === "viewer"}<span class="badge">View only</span>{/if}
+      {#if focused && media.phone}
+        <button class="suggested done" onclick={() => view?.contentDOM.blur()} transition:bloom>Done</button>
+      {:else if role === "owner"}
+        <button class="flat accent share wide-only" aria-label="Share" title="Share this note" onclick={() => (sharing = true)}>
+          <Icon name="people" /><span>Share</span>
+        </button>
+        <Menu label="Note menu" items={[{ label: "Move to Trash", icon: "trash", destructive: true, onselect: () => trashNote(noteId) }]} />
+      {/if}
+    </header>
 
-  {#if canEdit && view}
-    <div class="format" style:bottom="{keyboard}px">
-      <FormatBar {view} {block} {inline} />
-    </div>
-  {/if}
+    {#if canEdit && view}
+      <div class="format" style:bottom="{keyboard}px" bind:offsetHeight={formatHeight}>
+        <FormatBar {view} {block} {inline} />
+      </div>
+    {/if}
+  </div>
 
   {#if lost}
-    <div class="banner">
-      {lost === "revoked" ? "You no longer have access to this note." : "This note doesn't exist or was moved to the trash."}
+    <div class="lost">
+      <div class="lost-icon"><Icon name={lost === "revoked" ? "people" : "trash"} size={36} /></div>
+      <strong>{lost === "revoked" ? "No Longer Shared" : "Note Not Found"}</strong>
+      <p class="dim">{lost === "revoked" ? "You no longer have access to this note." : "This note doesn't exist or was moved to the trash."}</p>
+      <button class="pill" onclick={goBack}>Back to Notes</button>
     </div>
   {:else if !loaded}
-    <div class="banner dim">{app.status === "online" ? "Loading…" : "Waiting for the server…"}</div>
+    <div class="loading dim"><span class="spinner"></span>{app.status === "online" ? "Opening…" : "Waiting for the server…"}</div>
   {/if}
 
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-  <div class="scroll" onclick={focusEnd}>
+  <div class="scroll" class:gone={lost} onclick={focusEnd} use:scrollEdge bind:this={scroller}>
     <div class="page" class:hidden={!loaded} bind:this={parent}></div>
   </div>
 
   {#if canEdit && !focused}
-    <!-- Phone, not typing: Apple Notes' bottom toolbar. -->
-    <div class="toolbar phone-only">
-      <button class="flat icon tool" aria-label="Add checklist item" onclick={startChecklist}><Icon name="checklist" /></button>
-      <button class="flat icon tool" aria-label="New note" onclick={() => composeNote()}><Icon name="compose" /></button>
+    <!-- Phone, not typing: a bottom toolbar with labeled actions. -->
+    <div class="toolbar phone-only" transition:toolbarIn>
+      <button class="flat tool" onclick={startChecklist}><Icon name="checklist" /><span>Checklist</span></button>
+      {#if role === "owner"}
+        <button class="flat tool" onclick={() => (sharing = true)}><Icon name="people" /><span>Share</span></button>
+      {/if}
+      <button class="flat tool" onclick={() => composeNote()}><Icon name="compose" /><span>New Note</span></button>
     </div>
   {/if}
 </section>
@@ -253,27 +297,26 @@
 
 <style>
   section {
+    position: relative;
     display: flex;
     flex-direction: column;
     height: 100%;
     background: var(--view-bg);
   }
 
-  header {
-    display: flex;
-    align-items: center;
-    gap: 2px;
-    min-height: 47px;
-    padding: 0 6px;
-    padding-top: env(safe-area-inset-top);
-    border-bottom: 1px solid var(--border);
+  .top {
+    position: relative;
+    z-index: 2;
+    background: var(--view-bg);
+    box-shadow: 0 1px 0 transparent;
+    transition: box-shadow var(--fast) ease;
+  }
+
+  section:global([data-scrolled]) > .top {
+    box-shadow: 0 1px 0 var(--border);
   }
 
   .back {
-    padding: 0 10px 0 6px;
-    gap: 4px;
-    color: var(--accent);
-    font-weight: 400;
     max-width: 40%;
   }
 
@@ -284,27 +327,34 @@
   }
 
   .done {
-    color: var(--accent);
+    min-height: 34px !important;
+    padding: 0 16px;
+    border-radius: 999px;
   }
 
   .share {
     gap: 6px;
     padding: 0 12px;
-    color: var(--accent);
   }
 
   .toolbar {
     display: flex;
-    justify-content: space-between;
-    padding: 2px 8px env(safe-area-inset-bottom);
+    justify-content: space-around;
+    padding: 4px 8px calc(4px + env(safe-area-inset-bottom));
     border-top: 1px solid var(--border);
-    background: var(--headerbar-bg);
+    background: color-mix(in srgb, var(--headerbar-bg) 92%, transparent);
+    backdrop-filter: blur(12px);
   }
 
   .tool {
-    min-width: 44px;
-    min-height: 44px;
+    flex: 1;
+    flex-direction: column;
+    gap: 3px;
+    min-height: 54px;
+    padding: 4px 0;
     color: var(--accent);
+    font-size: 0.75rem;
+    font-weight: 600;
   }
 
   .tool :global(svg) {
@@ -312,47 +362,76 @@
     height: 22px;
   }
 
-  .title {
-    flex: 1;
-    min-width: 0;
-    padding-left: 10px;
-    font-weight: 700;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
   .peers {
     display: flex;
-    gap: 4px;
     padding: 0 6px;
   }
 
-  .avatar {
-    display: grid;
-    place-items: center;
-    width: 26px;
-    height: 26px;
-    border-radius: 50%;
-    background: var(--user-color);
-    color: #fff;
+  .peers .avatar {
+    width: 28px;
+    height: 28px;
     font-size: 0.8rem;
-    font-weight: 700;
+    box-shadow: 0 0 0 2px var(--view-bg);
+  }
+
+  .peers .avatar + .avatar {
+    margin-left: -6px;
   }
 
   .badge {
-    padding: 0 8px;
-    font-size: 0.85rem;
-  }
-
-  .format {
-    border-bottom: 1px solid var(--border);
-  }
-
-  .banner {
-    padding: 10px 16px;
+    margin: 0 6px;
+    padding: 3px 10px;
+    border-radius: 999px;
     background: var(--hover);
+    color: var(--dim-fg);
+    font-size: 0.8rem;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+
+  /* Wide: the formatting toolbar is a soft rounded strip under the headerbar. */
+  .format {
+    display: flex;
+    justify-content: center;
+    padding: 0 12px 8px;
+  }
+
+  .loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 48px 16px 0;
+    animation: rise 300ms var(--ease-out) 150ms both;
+  }
+
+  .lost {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 64px 24px 0;
     text-align: center;
+    animation: rise 260ms var(--ease-out) both;
+  }
+
+  .lost-icon {
+    display: grid;
+    place-items: center;
+    width: 72px;
+    height: 72px;
+    margin-bottom: 10px;
+    border-radius: 50%;
+    background: var(--hover);
+    color: var(--dim-fg);
+  }
+
+  .lost strong {
+    font-size: 1.15rem;
+  }
+
+  .lost p {
+    margin: 0 0 16px;
   }
 
   .scroll {
@@ -360,7 +439,13 @@
     overflow-y: auto;
     display: flex;
     justify-content: center;
+    /* Not stretched: the page grows with its text, so its bottom padding always leaves room. */
+    align-items: flex-start;
     cursor: text;
+  }
+
+  .scroll.gone {
+    display: none;
   }
 
   .page {
@@ -369,8 +454,13 @@
     padding: 28px 24px 40vh;
   }
 
+  .page {
+    transition: opacity 220ms ease;
+  }
+
   .hidden {
-    visibility: hidden;
+    opacity: 0;
+    pointer-events: none;
   }
 
   .page :global(.cm-editor) {
@@ -456,7 +546,7 @@
     text-decoration: line-through;
   }
 
-  /* Phone: the toolbar floats on top of the keyboard while typing, like Apple Notes. */
+  /* Phone: the formatting bar floats on top of the keyboard while typing. */
   @media (max-width: 700px) {
     header .title {
       visibility: hidden;
@@ -467,8 +557,8 @@
       left: 0;
       right: 0;
       z-index: 5;
+      padding: 0;
       border-top: 1px solid var(--border);
-      border-bottom: none;
       /* No safe-area padding: the bar only shows while typing, sitting on the keyboard. */
       background: var(--headerbar-bg);
       display: none;
@@ -476,6 +566,7 @@
 
     section.focused .format {
       display: block;
+      animation: rise 180ms var(--ease-out);
     }
 
     .page {

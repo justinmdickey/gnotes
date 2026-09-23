@@ -4,10 +4,10 @@
   import Icon from "./lib/Icon.svelte";
   import Menu from "./lib/Menu.svelte";
   import { app, colorFor, endSession, goBack } from "./lib/store.svelte";
+  import { ask, scrollEdge, toast } from "./lib/ui.svelte";
 
   let name = $state(app.user?.display_name ?? "");
   let savedName = $state(app.user?.display_name ?? "");
-  let notice = $state("");
   let error = $state("");
 
   let changingPassword = $state(false);
@@ -22,7 +22,6 @@
   let newInvite = $state<string | null>(null);
   const canShare = "share" in navigator;
   const canCopy = "clipboard" in navigator;
-  let copied = $state(false);
 
   async function loadAdmin() {
     if (!app.user?.is_admin) return;
@@ -33,10 +32,9 @@
   /** Runs an action, showing its error or an optional success notice. */
   async function run(action: () => Promise<unknown>, done = "") {
     error = "";
-    notice = "";
     try {
       await action();
-      notice = done;
+      if (done) toast(done);
       return true;
     } catch (err) {
       error = err instanceof ApiError ? err.message : "Couldn't reach the server";
@@ -92,7 +90,7 @@
     if (canShare) await navigator.share({ title: "Gnotes invite", text: `Join me on Gnotes: ${newInvite}`, url: newInvite }).catch(() => {});
     else if (canCopy) {
       await navigator.clipboard.writeText(newInvite);
-      copied = true;
+      toast("Invite link copied");
     }
   }
 
@@ -109,16 +107,20 @@
 </script>
 
 <div class="page">
-  <header>
-    <button class="flat back" onclick={goBack}><Icon name="back" /><span>Back</span></button>
-    <span class="title">Settings</span>
-    <span class="spacer"></span>
+  <header class="headerbar">
+    <div class="side"><button class="flat back" onclick={goBack}><Icon name="back" /><span>Back</span></button></div>
+    <strong class="heading">Settings</strong>
+    <div class="side"></div>
   </header>
 
-  <div class="scroll">
+  <div class="scroll" use:scrollEdge>
     <div class="column">
-      {#if notice}<p class="notice">{notice}</p>{/if}
-      {#if error}<p class="error">{error}</p>{/if}
+      <div class="profile">
+        <span class="avatar big {colorFor(app.user?.id ?? '')}">{app.user?.display_name.slice(0, 1).toUpperCase()}</span>
+        <strong>{savedName}</strong>
+        <span class="dim">@{app.user?.username}{#if app.user?.is_admin}&nbsp;· Admin{/if}</span>
+      </div>
+      {#if error && !changingPassword && !resetting}<p class="error">{error}</p>{/if}
 
       <h2>Account</h2>
       <ul class="boxed">
@@ -147,7 +149,7 @@
         </li>
         <li>
           <span class="label">This device</span>
-          <button class="destructive" onclick={endSession}>Log Out</button>
+          <button class="destructive" onclick={endSession}><Icon name="logout" /> Log Out</button>
         </li>
       </ul>
 
@@ -166,12 +168,25 @@
                   label="Manage {u.display_name}"
                   items={[
                     u.is_admin
-                      ? { label: "Remove Admin", onselect: () => adminUpdate(u, { is_admin: false }, `${u.display_name} is no longer an admin`) }
-                      : { label: "Make Admin", onselect: () => adminUpdate(u, { is_admin: true }, `${u.display_name} is now an admin`) },
-                    { label: "Reset Password…", onselect: () => ((resetting = u), (resetTo = "")) },
+                      ? { label: "Remove Admin", icon: "shield", onselect: () => adminUpdate(u, { is_admin: false }, `${u.display_name} is no longer an admin`) }
+                      : { label: "Make Admin", icon: "shield", onselect: () => adminUpdate(u, { is_admin: true }, `${u.display_name} is now an admin`) },
+                    { label: "Reset Password…", icon: "key", onselect: () => ((resetting = u), (resetTo = "")) },
                     u.disabled
-                      ? { label: "Enable Account", onselect: () => adminUpdate(u, { disabled: false }, `${u.display_name} can log in again`) }
-                      : { label: "Disable Account", destructive: true, onselect: () => adminUpdate(u, { disabled: true }, `${u.display_name} was signed out and can't log in`) },
+                      ? { label: "Enable Account", icon: "check", onselect: () => adminUpdate(u, { disabled: false }, `${u.display_name} can log in again`) }
+                      : {
+                          label: "Disable Account",
+                          icon: "close",
+                          destructive: true,
+                          onselect: async () => {
+                            const ok = await ask({
+                              title: `Disable ${u.display_name}?`,
+                              body: "They'll be signed out everywhere and can't log in until you enable the account again.",
+                              confirm: "Disable",
+                              destructive: true,
+                            });
+                            if (ok) adminUpdate(u, { disabled: true }, `${u.display_name} was signed out and can't log in`);
+                          },
+                        },
                   ]}
                 />
               {/if}
@@ -184,7 +199,7 @@
                 <div class="link-row">
                   <input class="link" readonly value={newInvite} onfocus={(e) => e.currentTarget.select()} aria-label="Invite link" />
                   {#if canShare || canCopy}
-                    <button class="suggested" onclick={sendInvite}>{canShare ? "Send" : copied ? "Copied" : "Copy"}</button>
+                    <button class="suggested" onclick={sendInvite}>{canShare ? "Send" : "Copy"}</button>
                   {/if}
                 </div>
               </div>
@@ -247,35 +262,38 @@
     background: var(--window-bg);
   }
 
-  header {
-    display: flex;
-    align-items: center;
-    min-height: 47px;
-    padding: 0 6px;
-    padding-top: env(safe-area-inset-top);
-    border-bottom: 1px solid var(--border);
-    background: var(--headerbar-bg);
+  .headerbar {
+    background: var(--window-bg);
   }
 
-  .back {
-    gap: 4px;
-    padding: 0 10px 0 6px;
-    color: var(--accent);
-    font-weight: 400;
-  }
-
-  .title {
-    font-weight: 700;
-  }
-
-  .back,
-  .spacer {
+  .side {
     flex: 1;
-    justify-content: flex-start;
+    display: flex;
   }
 
-  .back span {
-    margin-right: auto;
+  .heading {
+    font-size: 1rem;
+  }
+
+  .profile {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    padding: 20px 0 4px;
+    animation: rise 300ms var(--ease-out) both;
+  }
+
+  .profile strong {
+    margin-top: 10px;
+    font-size: 1.3rem;
+  }
+
+  .avatar.big {
+    width: 76px;
+    height: 76px;
+    font-size: 2rem;
+    box-shadow: var(--shadow-md);
   }
 
   .scroll {
@@ -291,9 +309,10 @@
   }
 
   h2 {
-    margin: 24px 4px 8px;
-    font-size: 0.95rem;
+    margin: 26px 6px 8px;
+    font-size: 0.82rem;
     font-weight: 800;
+    color: var(--dim-fg);
   }
 
   .boxed {
@@ -302,7 +321,7 @@
     list-style: none;
     border-radius: var(--radius-lg);
     background: var(--card-bg);
-    box-shadow: 0 0 0 1px var(--border);
+    box-shadow: var(--shadow-sm), 0 0 0 1px var(--border);
     overflow: hidden;
   }
 
@@ -361,17 +380,6 @@
     text-align: left;
   }
 
-  .avatar {
-    flex: none;
-    display: grid;
-    place-items: center;
-    width: 34px;
-    height: 34px;
-    border-radius: 50%;
-    background: var(--user-color, var(--accent));
-    color: #fff;
-    font-weight: 700;
-  }
 
   .add-person {
     width: 100%;
@@ -408,15 +416,11 @@
     margin: 0;
   }
 
-  .notice,
   .error {
     margin: 12px 4px 0;
     padding: 10px 12px;
     border-radius: var(--radius);
-  }
-
-  .notice {
-    background: color-mix(in srgb, var(--success) 18%, transparent);
+    animation: shake 300ms ease;
   }
 
   .error {

@@ -1,5 +1,6 @@
 import { api, ApiError, type Tree, type TreeNote, type User } from "./api";
 import { sync, type Status } from "./sync";
+import { toast } from "./ui.svelte";
 
 /** What the note list shows. */
 export type View =
@@ -19,6 +20,8 @@ export const app = $state({
   freshNote: null as string | null,
   /** The Settings screen covers the whole app while open. */
   settings: false,
+  /** Tablet only: the notebooks sidebar is pulled out over the list. */
+  drawer: false,
   /** Why the user was sent back to the login screen, if it wasn't their choice. */
   signedOutReason: "" as string,
 });
@@ -108,6 +111,7 @@ function hashFor(view: View | null, noteId: string | null): string {
 
 function apply(view: View | null, noteId: string | null) {
   app.settings = false;
+  app.drawer = false;
   if (view) app.view = view;
   app.noteId = noteId;
   app.pane = noteId ? "editor" : view ? "list" : "sidebar";
@@ -143,6 +147,12 @@ export function goBack() {
   const parent = app.noteId ? app.view : null;
   if (history.state?.from === hashFor(parent, null)) return history.back();
   navigate(parent, null, true);
+}
+
+/** Tablet: closes the pulled-out sidebar, leaving home for the list if that's where we were. */
+export function closeDrawer() {
+  app.drawer = false;
+  if (app.pane === "sidebar") navigate(app.view, null, true);
 }
 
 export function readHash() {
@@ -183,4 +193,17 @@ export function colorFor(userId: string): string {
   let h = 0;
   for (const c of userId) h = (h * 31 + c.charCodeAt(0)) >>> 0;
   return colors[h % colors.length];
+}
+
+/** Moves a note to the trash, with Undo instead of an "are you sure?". */
+export async function trashNote(id: string) {
+  await api.deleteNote(id);
+  if (app.noteId === id) goBack();
+  toast("Note moved to trash", { label: "Undo", run: () => void api.restore("note", id).then(refreshTree) });
+}
+
+export async function trashNotebook(id: string, name: string) {
+  await api.deleteNotebook(id);
+  if (app.view.kind === "notebook" && app.view.id === id) navigate({ kind: "all" }, null, true);
+  toast(`“${name}” moved to trash`, { label: "Undo", run: () => void api.restore("notebook", id).then(refreshTree) });
 }

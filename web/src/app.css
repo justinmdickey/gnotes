@@ -6,19 +6,35 @@
   --sidebar-bg: #ebebed;
   --headerbar-bg: #ffffff;
   --dialog-bg: #fafafb;
+  --popover-bg: #ffffff;
   --card-bg: #ffffff;
   --fg: rgb(0 0 6 / 80%);
   --dim-fg: rgb(0 0 6 / 55%);
   --border: rgb(0 0 6 / 12%);
-  --hover: rgb(0 0 6 / 7%);
-  --active: rgb(0 0 6 / 14%);
-  --accent: #3584e4;
+  --hover: rgb(0 0 6 / 6%);
+  --active: rgb(0 0 6 / 12%);
+  --button-bg: rgb(0 0 6 / 8%);
+  --button-hover: rgb(0 0 6 / 12%);
+  --button-active: rgb(0 0 6 / 18%);
+  --entry-bg: rgb(0 0 6 / 6%);
+  --scrim: rgb(0 0 6 / 32%);
+  --accent: #1c71d8;
   --accent-bg: #3584e4;
   --accent-fg: #ffffff;
-  --destructive: #e01b24;
+  --accent-soft: color-mix(in srgb, var(--accent-bg) 14%, transparent);
+  --destructive: #c01c28;
+  --destructive-bg: #e01b24;
   --success: #26a269;
   --radius: 9px;
   --radius-lg: 15px;
+  --shadow-sm: 0 1px 3px rgb(0 0 6 / 10%);
+  --shadow-md: 0 2px 8px rgb(0 0 6 / 12%), 0 0 0 1px rgb(0 0 6 / 5%);
+  --shadow-lg: 0 12px 40px rgb(0 0 6 / 22%), 0 0 0 1px rgb(0 0 6 / 6%);
+  /* Motion: libadwaita's navigation and dialog curves. */
+  --ease-out: cubic-bezier(0.25, 0.9, 0.3, 1);
+  --ease-spring: cubic-bezier(0.34, 1.3, 0.64, 1);
+  --fast: 150ms;
+  --slide: 340ms;
   font-family: "Adwaita Sans", Cantarell, Inter, system-ui, sans-serif;
   font-size: 15px;
 }
@@ -30,15 +46,39 @@
     --sidebar-bg: #2e2e32;
     --headerbar-bg: #1d1d20;
     --dialog-bg: #36363a;
+    --popover-bg: #36363a;
     --card-bg: rgb(255 255 255 / 8%);
     --fg: #ffffff;
     --dim-fg: rgb(255 255 255 / 55%);
     --border: rgb(255 255 255 / 12%);
     --hover: rgb(255 255 255 / 7%);
-    --active: rgb(255 255 255 / 14%);
+    --active: rgb(255 255 255 / 12%);
+    --button-bg: rgb(255 255 255 / 10%);
+    --button-hover: rgb(255 255 255 / 15%);
+    --button-active: rgb(255 255 255 / 22%);
+    --entry-bg: rgb(255 255 255 / 8%);
+    --scrim: rgb(0 0 0 / 50%);
     --accent: #78aeed;
+    --accent-soft: color-mix(in srgb, var(--accent-bg) 26%, transparent);
     --destructive: #ff7b63;
+    --destructive-bg: #c01c28;
     --success: #8ff0a4;
+    --shadow-md: 0 2px 8px rgb(0 0 0 / 35%), 0 0 0 1px rgb(255 255 255 / 6%);
+    --shadow-lg: 0 12px 40px rgb(0 0 0 / 50%), 0 0 0 1px rgb(255 255 255 / 8%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --fast: 0ms;
+    --slide: 0ms;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    transition-duration: 1ms !important;
   }
 }
 
@@ -57,9 +97,12 @@ body {
   background: var(--window-bg);
   color: var(--fg);
   -webkit-tap-highlight-color: transparent;
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior: none;
 }
 
-button {
+button,
+.button {
   font: inherit;
   color: inherit;
   display: inline-flex;
@@ -70,13 +113,45 @@ button {
   padding: 0 14px;
   border: none;
   border-radius: var(--radius);
-  background: var(--hover);
+  background: var(--button-bg);
   font-weight: 700;
+  text-decoration: none;
   cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  transition:
+    background var(--fast) ease,
+    color var(--fast) ease,
+    box-shadow var(--fast) ease,
+    transform 90ms ease;
 }
 
-button:hover {
-  background: var(--active);
+button:active:not(:disabled) {
+  background: var(--button-active);
+  transform: scale(0.97);
+}
+
+/* Hover only where there's a pointer, so a tap doesn't leave a button lit up. */
+@media (hover: hover) {
+  button:hover {
+    background: var(--button-hover);
+  }
+
+  button.flat:hover {
+    background: var(--hover);
+  }
+
+  button.suggested:hover {
+    background: color-mix(in srgb, var(--accent-bg) 88%, white);
+  }
+
+  button.destructive-action:hover {
+    background: color-mix(in srgb, var(--destructive-bg) 88%, white);
+  }
+
+  button.fab:hover {
+    background: color-mix(in srgb, var(--accent-bg) 88%, white);
+  }
 }
 
 button:disabled {
@@ -88,8 +163,8 @@ button.flat {
   background: transparent;
 }
 
-button.flat:hover {
-  background: var(--hover);
+button.flat:active:not(:disabled) {
+  background: var(--active);
 }
 
 button.icon {
@@ -97,40 +172,135 @@ button.icon {
   padding: 0;
 }
 
+button.circular {
+  border-radius: 50%;
+}
+
+/* AdwButton .pill: the main action on a screen. */
+button.pill {
+  min-height: 42px;
+  padding: 0 22px;
+  border-radius: 999px;
+}
+
 button.suggested {
   background: var(--accent-bg);
   color: var(--accent-fg);
+  box-shadow: 0 1px 2px rgb(0 0 6 / 15%);
 }
 
-button.suggested:hover {
-  filter: brightness(1.08);
+button.suggested:active:not(:disabled) {
+  background: color-mix(in srgb, var(--accent-bg) 85%, black);
 }
 
 button.destructive {
   color: var(--destructive);
 }
 
+button.destructive-action {
+  background: var(--destructive-bg);
+  color: #fff;
+}
+
+/* A labeled accent-colored action inside a header or list. */
+button.accent {
+  color: var(--accent);
+}
+
 input,
 select {
   font: inherit;
   color: inherit;
-  min-height: 38px;
+  min-height: 40px;
   padding: 0 12px;
   border: none;
   border-radius: var(--radius);
-  background: var(--hover);
+  background: var(--entry-bg);
   outline: none;
+  box-shadow: 0 0 0 0 transparent;
+  transition:
+    background var(--fast) ease,
+    box-shadow var(--fast) ease;
 }
 
-input:focus-visible,
+input::placeholder {
+  color: var(--dim-fg);
+}
+
+input:focus {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-bg) 60%, transparent);
+}
+
+select {
+  cursor: pointer;
+}
+
 select:focus-visible,
 button:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent);
+  outline: 2px solid color-mix(in srgb, var(--accent-bg) 60%, transparent);
   outline-offset: 1px;
 }
 
 .dim {
   color: var(--dim-fg);
+}
+
+/* AdwPreferencesGroup-style boxed list. */
+.boxed-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-radius: var(--radius-lg);
+  background: var(--card-bg);
+  box-shadow: var(--shadow-sm), 0 0 0 1px var(--border);
+  overflow: hidden;
+}
+
+.boxed-list > li + li {
+  border-top: 1px solid var(--border);
+}
+
+.avatar {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--user-color, var(--accent-bg));
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.9rem;
+  user-select: none;
+}
+
+/* Adwaita spinner. */
+.spinner {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  border: 2px solid color-mix(in srgb, currentColor 20%, transparent);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes shake {
+  20%, 60% { transform: translateX(-6px); }
+  40%, 80% { transform: translateX(6px); }
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
 }
 
 /* Remote cursors and selections from loro-codemirror. */
@@ -163,4 +333,97 @@ button:focus-visible {
 
 .loro-selection {
   background: color-mix(in srgb, var(--user-color, var(--accent)) 25%, transparent);
+}
+
+/* Phones: the screen's main action floats bottom-right, always in thumb reach. */
+button.fab {
+  position: absolute;
+  right: 16px;
+  bottom: calc(16px + env(safe-area-inset-bottom));
+  z-index: 5;
+  min-height: 52px;
+  padding: 0 22px 0 18px;
+  gap: 10px;
+  border-radius: 999px;
+  background: var(--accent-bg);
+  color: var(--accent-fg);
+  font-size: 1.02rem;
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--accent-bg) 45%, transparent), 0 1px 3px rgb(0 0 6 / 20%);
+  animation: rise 260ms var(--ease-spring) both;
+}
+
+button.fab:active:not(:disabled) {
+  background: color-mix(in srgb, var(--accent-bg) 85%, black);
+  transform: scale(0.95);
+}
+
+button.fab svg {
+  width: 20px;
+  height: 20px;
+}
+
+/* A GTK headerbar. Its divider shows once content scrolls under it. */
+.headerbar {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 50px;
+  padding: 0 6px;
+  padding-top: env(safe-area-inset-top);
+  box-shadow: 0 1px 0 transparent;
+  transition: box-shadow var(--fast) ease;
+}
+
+[data-scrolled] > .headerbar {
+  box-shadow: 0 1px 0 var(--border);
+}
+
+.headerbar .title {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0 10px;
+  line-height: 1.2;
+}
+
+.headerbar .title strong,
+.headerbar .title span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.headerbar .title span {
+  font-size: 0.82rem;
+  color: var(--dim-fg);
+}
+
+/* Back buttons read as links in the accent color, with the parent's name. */
+button.back {
+  gap: 2px;
+  padding: 0 10px 0 4px;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+button.back svg {
+  width: 20px;
+  height: 20px;
+}
+
+@media (max-width: 700px) {
+  .headerbar {
+    min-height: 52px;
+  }
+
+  .headerbar button {
+    min-height: 40px;
+  }
+
+  .headerbar button.icon {
+    min-width: 40px;
+  }
 }

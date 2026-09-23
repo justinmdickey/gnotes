@@ -67,10 +67,20 @@
     display: flex;
     align-items: center;
     gap: 2px;
-    padding: 4px 6px;
+    max-width: 100%;
+    padding: 4px;
     overflow-x: auto;
     scrollbar-width: none;
-    background: var(--headerbar-bg);
+    border-radius: 12px;
+    background: var(--hover);
+  }
+
+  .bar button {
+    min-height: 32px;
+  }
+
+  .bar button:active:not(:disabled) {
+    transform: scale(0.92);
   }
 
   .sep {
@@ -99,9 +109,10 @@
     display: none;
   }
 
-  .active {
-    background: color-mix(in srgb, var(--accent) 18%, transparent);
+  .bar .active {
+    background: var(--view-bg);
     color: var(--accent);
+    box-shadow: 0 1px 2px rgb(0 0 6 / 15%);
   }
 
   /*
@@ -114,6 +125,17 @@
       gap: 0;
       padding: 2px 4px;
       overflow-x: hidden;
+      border-radius: 0;
+      background: var(--headerbar-bg);
+    }
+
+    .bar .active {
+      background: var(--accent-soft);
+      box-shadow: none;
+    }
+
+    .bar > * {
+      animation: rise 160ms var(--ease-out) both;
     }
 
     .bar > * {

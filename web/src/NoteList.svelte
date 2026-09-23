@@ -1,9 +1,12 @@
 <script lang="ts">
+  import { slide } from "svelte/transition";
+  import { cubicOut } from "svelte/easing";
   import { api, type TreeNote } from "./lib/api";
   import Dialog from "./lib/Dialog.svelte";
   import Icon from "./lib/Icon.svelte";
   import Menu from "./lib/Menu.svelte";
-  import { app, composeNote, goBack, navigate, notesFor, openNote, viewTitle } from "./lib/store.svelte";
+  import { app, composeNote, goBack, notesFor, openNote, trashNotebook, viewTitle } from "./lib/store.svelte";
+  import { media, scrollEdge } from "./lib/ui.svelte";
   import ShareDialog from "./ShareDialog.svelte";
 
   const notebook = $derived(
@@ -53,52 +56,63 @@
     renaming = false;
   }
 
-  async function remove() {
-    if (!notebook || !confirm(`Move “${notebook.name}” and everything in it to the trash?`)) return;
-    await api.deleteNotebook(notebook.id);
-    navigate({ kind: "all" }, null, true);
-  }
-
   function when(ms: number) {
     const d = new Date(ms);
     const today = new Date().toDateString() === d.toDateString();
     return today ? d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : d.toLocaleDateString();
   }
+
+  const reveal = (node: Element) => slide(node, { duration: media.reduced ? 0 : 200, easing: cubicOut });
 </script>
 
 <section>
-  <header>
-    <button class="flat back narrow-only" onclick={goBack}>
+  <header class="headerbar">
+    <button class="flat icon tablet-only" title="Show notebooks" aria-label="Show notebooks" onclick={() => (app.drawer = true)}>
+      <Icon name="sidebar" />
+    </button>
+    <button class="flat back phone-only" onclick={goBack}>
       <Icon name="back" /><span>Notebooks</span>
     </button>
-    <span class="title">{title}</span>
+    <div class="title">
+      <strong>{title}</strong>
+      <span>{notes.length} {notes.length === 1 ? "note" : "notes"}</span>
+    </div>
     {#if notebook?.role === "owner"}
-      <button class="flat share" onclick={() => (sharing = true)}><Icon name="people" /><span>Share</span></button>
+      <button class="flat accent share" title="Share this notebook" onclick={() => (sharing = true)}>
+        <Icon name="people" /><span>Share</span>
+      </button>
       <Menu
         label="Notebook menu"
         items={[
-          { label: "Rename…", onselect: () => ((newName = notebook.name), (renaming = true)) },
-          { label: "Move to Trash", destructive: true, onselect: remove },
+          { label: "Rename…", icon: "rename", onselect: () => ((newName = notebook.name), (renaming = true)) },
+          { label: "Move to Trash", icon: "trash", destructive: true, onselect: () => trashNotebook(notebook.id, notebook.name) },
         ]}
       />
     {/if}
     {#if canCreate}
-      <button class="flat icon wide-only" title="New note" aria-label="New note" onclick={() => composeNote()}><Icon name="compose" /></button>
+      <button class="suggested icon wide-only new" title="New note" aria-label="New note" onclick={() => composeNote()}>
+        <Icon name="compose" />
+      </button>
     {/if}
   </header>
 
-  <div class="search">
-    <Icon name="search" />
-    <input type="search" placeholder="Search" aria-label="Search notes" bind:value={query} />
-  </div>
+  <div class="scroll" use:scrollEdge>
+    <label class="search">
+      <Icon name="search" />
+      <input type="search" placeholder="Search notes" aria-label="Search notes" bind:value={query} />
+      {#if query}
+        <button class="flat icon circular clear" aria-label="Clear search" onclick={() => (query = "")}><Icon name="close" /></button>
+      {/if}
+    </label>
 
-  <div class="scroll">
+    <!-- A new list for each view; only adds and removes within one view animate. -->
+    {#key app.view.kind === "notebook" ? app.view.id : app.view.kind}
     {#each groups as group (group.label)}
       <h3>{group.label}</h3>
-      <ul>
+      <ul class="boxed-list">
         {#each group.notes as note (note.id)}
-          <li>
-            <button class="flat" class:selected={app.noteId === note.id} onclick={() => openNote(note.id)}>
+          <li transition:reveal>
+            <button class="flat note" class:selected={app.noteId === note.id} onclick={() => openNote(note.id)}>
               <span class="note-title">{note.title || "New Note"}</span>
               <span class="meta">
                 <span class="time">{when(note.updated_at)}</span>
@@ -109,33 +123,36 @@
         {/each}
       </ul>
     {:else}
-      <div class="empty dim">
+      <div class="empty">
         {#if query}
-          No results
+          <div class="empty-icon"><Icon name="search" size={36} /></div>
+          <strong>No Results</strong>
+          <p class="dim">Nothing matches “{query}”.</p>
         {:else}
-          <p>No notes yet</p>
-          {#if canCreate}<button class="suggested" onclick={() => composeNote()}>New Note</button>{/if}
+          <div class="empty-icon"><Icon name="note" size={36} /></div>
+          <strong>No Notes Yet</strong>
+          {#if canCreate}
+            <p class="dim">Notes you write here show up in this list.</p>
+            <button class="suggested pill" onclick={() => composeNote()}><Icon name="compose" /> New Note</button>
+          {:else}
+            <p class="dim">Nothing has been shared here yet.</p>
+          {/if}
         {/if}
       </div>
     {/each}
+    {/key}
   </div>
 
-  <footer class="phone-only">
-    <span class="spacer"></span>
-    <span class="dim count">{notes.length} {notes.length === 1 ? "Note" : "Notes"}</span>
-    <span class="spacer compose-slot">
-      {#if canCreate}
-        <button class="flat icon compose" aria-label="New note" onclick={() => composeNote()}><Icon name="compose" /></button>
-      {/if}
-    </span>
-  </footer>
+  {#if canCreate}
+    <button class="fab phone-only" onclick={() => composeNote()}><Icon name="compose" /> New Note</button>
+  {/if}
 </section>
 
 {#if renaming}
   <Dialog title="Rename Notebook" onclose={() => (renaming = false)}>
     <form id="rename-notebook" onsubmit={rename}>
       <!-- svelte-ignore a11y_autofocus -->
-      <input bind:value={newName} autofocus />
+      <input bind:value={newName} aria-label="Notebook name" autofocus />
     </form>
     {#snippet actions()}
       <button onclick={() => (renaming = false)}>Cancel</button>
@@ -150,53 +167,38 @@
 
 <style>
   section {
+    position: relative;
     display: flex;
     flex-direction: column;
     height: 100%;
     background: var(--view-bg);
   }
 
-  header {
-    display: flex;
-    align-items: center;
-    gap: 2px;
-    min-height: 47px;
-    padding: 0 6px;
-    padding-top: env(safe-area-inset-top);
-  }
-
-  .back {
-    padding: 0 10px 0 6px;
-    gap: 4px;
-    color: var(--accent);
-    font-weight: 400;
-  }
-
   .share {
     gap: 6px;
     padding: 0 12px;
-    color: var(--accent);
   }
 
-  .title {
-    flex: 1;
-    min-width: 0;
-    padding-left: 10px;
-    font-weight: 700;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+  .new {
+    margin-left: 2px;
+    min-width: 36px;
+    border-radius: 50%;
   }
 
   .search {
     display: flex;
     align-items: center;
     gap: 8px;
-    margin: 0 12px 8px;
-    padding-left: 10px;
+    margin: 2px 0 6px;
+    padding: 0 4px 0 12px;
     border-radius: var(--radius);
-    background: var(--hover);
+    background: var(--entry-bg);
     color: var(--dim-fg);
+    transition: box-shadow var(--fast) ease;
+  }
+
+  .search:focus-within {
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-bg) 60%, transparent);
   }
 
   .search input {
@@ -204,48 +206,50 @@
     min-width: 0;
     background: transparent;
     padding-left: 0;
+    box-shadow: none;
+    color: var(--fg);
+  }
+
+  .search input::-webkit-search-cancel-button {
+    display: none;
+  }
+
+  .clear {
+    min-width: 28px;
+    min-height: 28px;
   }
 
   .scroll {
     flex: 1;
     overflow-y: auto;
-    padding: 0 12px 12px;
+    padding: 0 12px 16px;
   }
 
   h3 {
-    margin: 14px 4px 6px;
-    font-size: 0.95rem;
+    margin: 16px 4px 6px;
+    font-size: 0.82rem;
     font-weight: 800;
+    color: var(--dim-fg);
   }
 
-  /* Boxed list, like an AdwPreferencesGroup. */
-  ul {
-    margin: 0;
-    padding: 0;
-    list-style: none;
-    border-radius: var(--radius-lg);
-    background: var(--card-bg);
-    box-shadow: 0 0 0 1px var(--border);
-    overflow: hidden;
-  }
-
-  li + li {
-    border-top: 1px solid var(--border);
-  }
-
-  li button {
+  .note {
     width: 100%;
     flex-direction: column;
     align-items: stretch;
-    gap: 2px;
-    padding: 10px 14px;
+    gap: 3px;
+    padding: 11px 14px;
     border-radius: 0;
     font-weight: 400;
     text-align: left;
   }
 
-  li button.selected {
-    background: color-mix(in srgb, var(--accent) 16%, transparent);
+  .note:active:not(:disabled) {
+    transform: none;
+  }
+
+  .note.selected {
+    background: var(--accent-soft);
+    box-shadow: inset 3px 0 0 var(--accent-bg);
   }
 
   .note-title {
@@ -258,7 +262,7 @@
   .meta {
     display: flex;
     gap: 8px;
-    font-size: 0.9rem;
+    font-size: 0.88rem;
     min-width: 0;
   }
 
@@ -276,44 +280,69 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    padding: 48px 16px;
+    gap: 4px;
+    padding: 56px 16px;
     text-align: center;
+    animation: rise 260ms var(--ease-out) both;
   }
 
-  footer {
-    display: flex;
-    align-items: center;
-    min-height: 48px;
-    padding: 0 8px max(0px, env(safe-area-inset-bottom));
-    border-top: 1px solid var(--border);
-    background: var(--headerbar-bg);
-  }
-
-  .spacer {
-    flex: 1;
-  }
-
-  .compose-slot {
-    display: flex;
-    justify-content: flex-end;
-  }
-
-  .compose {
+  .empty-icon {
+    display: grid;
+    place-items: center;
+    width: 72px;
+    height: 72px;
+    margin-bottom: 10px;
+    border-radius: 50%;
+    background: var(--accent-soft);
     color: var(--accent);
-    min-width: 44px;
-    min-height: 44px;
   }
 
-  .compose :global(svg) {
-    width: 22px;
-    height: 22px;
+  .empty strong {
+    font-size: 1.1rem;
   }
 
-  .count {
-    font-size: 0.85rem;
+  .empty p {
+    margin: 0 0 16px;
   }
 
   form input {
     width: 100%;
+  }
+
+  @media (max-width: 700px) {
+    .headerbar .title {
+      align-items: center;
+      text-align: center;
+    }
+
+    /* Keep the title centered between the back button and the actions. */
+    .back {
+      max-width: 38%;
+    }
+
+    .scroll {
+      padding: 0 16px 96px;
+    }
+
+    .search input {
+      min-height: 42px;
+    }
+
+    .share span {
+      display: none;
+    }
+
+    .note {
+      padding: 13px 16px;
+    }
+
+    .note-title {
+      font-size: 1.05rem;
+    }
+
+    .note.selected {
+      background: transparent;
+      box-shadow: none;
+    }
   }
 </style>

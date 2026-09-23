@@ -45,7 +45,7 @@
     {#if invalid}
       <h1>Invite not valid</h1>
       <p class="dim">This link has expired or was already used. Ask for a new one.</p>
-      <a class="button" href="/">Go to Gnotes</a>
+      <a class="button pill-link" href="/">Go to Gnotes</a>
     {:else if app.user}
       <h1>Already signed in</h1>
       <p class="dim">You're signed in as {app.user.display_name}. Log out to use this invite for a new account.</p>
@@ -67,8 +67,10 @@
           required
         />
         <input name="password" type="password" placeholder="Password (8+ characters)" autocomplete="new-password" minlength="8" bind:value={password} required />
-        {#if error}<p class="error">{error}</p>{/if}
-        <button class="suggested" type="submit" disabled={busy}>Create Account</button>
+        {#if error}{#key error}<p class="error">{error}</p>{/key}{/if}
+        <button class="suggested pill" type="submit" disabled={busy}>
+          {#if busy}<span class="spinner"></span>{:else}Create Account{/if}
+        </button>
       </form>
     {/if}
   </div>
@@ -88,6 +90,16 @@
     align-items: center;
     width: min(360px, 100%);
     text-align: center;
+    animation: rise 400ms var(--ease-out) both;
+  }
+
+  img {
+    filter: drop-shadow(0 6px 16px rgb(0 0 6 / 18%));
+  }
+
+  input {
+    min-height: 46px;
+    padding: 0 16px;
   }
 
   h1 {
@@ -107,16 +119,20 @@
   }
 
   form button {
-    min-height: 42px;
+    min-height: 48px;
     margin-top: 4px;
   }
 
-  .button {
+  .pill-link {
+    min-height: 42px;
+    padding: 0 22px;
+    border-radius: 999px;
     color: var(--accent);
   }
 
   .error {
     margin: 0;
     color: var(--destructive);
+    animation: shake 300ms ease;
   }
 </style>

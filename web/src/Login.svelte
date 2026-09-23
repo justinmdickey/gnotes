@@ -29,8 +29,10 @@
     {#if app.signedOutReason}<p class="reason">{app.signedOutReason}</p>{/if}
     <input name="username" placeholder="Username" autocomplete="username" autocapitalize="none" bind:value={username} required />
     <input name="password" type="password" placeholder="Password" autocomplete="current-password" bind:value={password} required />
-    {#if error}<p class="error">{error}</p>{/if}
-    <button class="suggested" type="submit" disabled={busy}>Log In</button>
+    {#if error}{#key error}<p class="error">{error}</p>{/key}{/if}
+    <button class="suggested pill" type="submit" disabled={busy}>
+      {#if busy}<span class="spinner"></span>{:else}Log In{/if}
+    </button>
   </form>
 </main>
 
@@ -47,10 +49,17 @@
     flex-direction: column;
     gap: 12px;
     width: min(340px, 100%);
+    animation: rise 400ms var(--ease-out) both;
   }
 
   img {
     align-self: center;
+    filter: drop-shadow(0 6px 16px rgb(0 0 6 / 18%));
+  }
+
+  input {
+    min-height: 46px;
+    padding: 0 16px;
   }
 
   h1 {
@@ -61,7 +70,7 @@
 
   button {
     margin-top: 8px;
-    min-height: 42px;
+    min-height: 48px;
   }
 
   .reason {
@@ -74,5 +83,6 @@
     margin: 0;
     color: var(--destructive);
     text-align: center;
+    animation: shake 300ms ease;
   }
 </style>

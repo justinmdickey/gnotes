@@ -125,6 +125,7 @@ export const api = {
 
   createNote: (notebook_id: string | null) => request<{ id: string }>("POST", "/notes", { notebook_id }),
   deleteNote: (id: string) => request("DELETE", `/notes/${id}`),
+  restore: (kind: "note" | "notebook", id: string) => request("POST", `/trash/${kind}/${id}/restore`, {}),
   /** Permanently removes the note only if it's blank; the server refuses otherwise. */
   discardNote: (id: string) => request("DELETE", `/notes/${id}?discard=true`),
 
