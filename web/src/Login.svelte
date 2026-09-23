@@ -1,0 +1,70 @@
+<script lang="ts">
+  import { api, ApiError } from "./lib/api";
+  import { startSession } from "./lib/store.svelte";
+
+  let username = $state("");
+  let password = $state("");
+  let error = $state("");
+  let busy = $state(false);
+
+  async function submit(e: SubmitEvent) {
+    e.preventDefault();
+    busy = true;
+    error = "";
+    try {
+      startSession(await api.login(username, password));
+    } catch (err) {
+      error = err instanceof ApiError && err.status === 401 ? "Wrong username or password" : "Couldn't reach the server";
+    } finally {
+      busy = false;
+    }
+  }
+</script>
+
+<main>
+  <form onsubmit={submit}>
+    <img src="/icon.svg" alt="" width="96" height="96" />
+    <h1>Gnotes</h1>
+    <input name="username" placeholder="Username" autocomplete="username" autocapitalize="none" bind:value={username} required />
+    <input name="password" type="password" placeholder="Password" autocomplete="current-password" bind:value={password} required />
+    {#if error}<p class="error">{error}</p>{/if}
+    <button class="suggested" type="submit" disabled={busy}>Log In</button>
+  </form>
+</main>
+
+<style>
+  main {
+    display: grid;
+    place-items: center;
+    min-height: 100%;
+    padding: 16px;
+  }
+
+  form {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: min(340px, 100%);
+  }
+
+  img {
+    align-self: center;
+  }
+
+  h1 {
+    margin: 0 0 12px;
+    text-align: center;
+    font-size: 1.8rem;
+  }
+
+  button {
+    margin-top: 8px;
+    min-height: 42px;
+  }
+
+  .error {
+    margin: 0;
+    color: var(--destructive);
+    text-align: center;
+  }
+</style>

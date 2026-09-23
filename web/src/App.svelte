@@ -1,43 +1,124 @@
 <script lang="ts">
+  import { onMount } from "svelte";
+  import { api } from "./lib/api";
+  import { app, readHash, startSession } from "./lib/store.svelte";
   import Editor from "./Editor.svelte";
+  import Login from "./Login.svelte";
+  import NoteList from "./NoteList.svelte";
+  import Sidebar from "./Sidebar.svelte";
+
+  let checked = $state(false);
+
+  onMount(() => {
+    api
+      .me()
+      .then(startSession)
+      .catch(() => {})
+      .finally(() => (checked = true));
+    window.addEventListener("popstate", readHash);
+    return () => window.removeEventListener("popstate", readHash);
+  });
 </script>
 
-<div class="window">
-  <header class="headerbar">
-    <span class="title">Gnotes</span>
-  </header>
-  <main class="content">
-    <Editor />
-  </main>
-</div>
+{#if !checked}
+  <div class="splash"></div>
+{:else if !app.user}
+  <Login />
+{:else}
+  <div class="shell" data-pane={app.pane}>
+    <aside class="pane sidebar"><Sidebar /></aside>
+    <div class="pane list"><NoteList /></div>
+    <main class="pane editor">
+      {#if app.noteId}
+        {#key app.noteId}
+          <Editor noteId={app.noteId} />
+        {/key}
+      {:else}
+        <div class="empty dim">Select or create a note</div>
+      {/if}
+    </main>
+  </div>
+{/if}
 
 <style>
-  .window {
-    display: flex;
-    flex-direction: column;
+  .splash {
     height: 100%;
   }
 
-  .headerbar {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    min-height: 47px;
-    padding: 0 16px;
-    padding-top: env(safe-area-inset-top);
-    background: var(--headerbar-bg);
-    border-bottom: 1px solid var(--border);
+  .shell {
+    display: grid;
+    grid-template-columns: 240px 320px 1fr;
+    height: 100%;
+    overflow: hidden;
   }
 
-  .title {
-    font-weight: 700;
+  .pane {
+    min-width: 0;
+    height: 100%;
+    overflow: hidden;
   }
 
-  .content {
-    flex: 1;
-    min-height: 0;
-    display: flex;
-    justify-content: center;
+  .list {
+    border-right: 1px solid var(--border);
+  }
+
+  .empty {
+    display: grid;
+    place-items: center;
+    height: 100%;
     background: var(--view-bg);
+  }
+
+  /* Tablet: the sidebar slides over the list. */
+  @media (max-width: 1000px) {
+    .shell {
+      grid-template-columns: 300px 1fr;
+    }
+
+    .sidebar {
+      display: none;
+    }
+
+    .shell[data-pane="sidebar"] {
+      grid-template-columns: 240px 300px 1fr;
+    }
+
+    .shell[data-pane="sidebar"] .sidebar {
+      display: block;
+    }
+  }
+
+  /* Phone: one pane at a time, like an AdwNavigationView. */
+  @media (max-width: 700px) {
+    .shell,
+    .shell[data-pane="sidebar"] {
+      grid-template-columns: 1fr;
+    }
+
+    .pane {
+      display: none;
+    }
+
+    .list {
+      border-right: none;
+    }
+
+    .shell[data-pane="sidebar"] .sidebar,
+    .shell[data-pane="list"] .list,
+    .shell[data-pane="editor"] .editor {
+      display: block;
+    }
+  }
+
+  @media (min-width: 1001px) {
+    .shell :global(.narrow-only) {
+      display: none;
+    }
+  }
+
+  @media (min-width: 701px) {
+    .shell :global(.editor .narrow-only) {
+      display: none;
+    }
   }
 </style>

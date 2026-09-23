@@ -110,23 +110,25 @@ All endpoints are under `/api` and need a session unless marked otherwise. They 
 POST   /auth/login                 (public)
 POST   /auth/logout
 GET    /me
+GET    /users                      everyone on the server, for the share picker
 
 GET    /tree                       notebooks + note metadata visible to me
 POST   /notebooks                  {name, parent_id?}
 PATCH  /notebooks/:id              {name?, parent_id?}
 DELETE /notebooks/:id              to trash
-POST   /notes                      {notebook_id?}  -> {id}
+POST   /notes                      {id?, notebook_id?}  -> {id}
 PATCH  /notes/:id                  {notebook_id?}
 DELETE /notes/:id                  to trash
+GET    /trash                      my directly deleted items
 POST   /trash/:type/:id/restore
 
-GET    /:type/:id/shares           owner only
+GET    /notes/:id/shares           owner only (same for /notebooks/:id/shares)
 POST   /shares                     {resource_type, resource_id, username, role}
-PATCH  /shares/:id                 {role}
+PATCH  /shares/:id                 {role} (owner) or {hidden} (recipient)
 DELETE /shares/:id
 
-POST   /attachments                multipart {note_id, file}
-GET    /attachments/:id
+POST   /attachments                multipart {note_id, file}   (phase 2)
+GET    /attachments/:id                                        (phase 2)
 
 POST   /admin/users                admin only
 GET    /health                     (public)
