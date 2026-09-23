@@ -202,7 +202,7 @@ docker run -v gnotes-data:/data -p 8080:8080 gnotes
 ```
 
 - Config comes from environment variables: `GNOTES_DATA_DIR` (default `./data`), `GNOTES_BIND` (default `0.0.0.0:8080`), `GNOTES_PUBLIC_URL` (used to validate the websocket Origin header).
-- Speech-to-text is off unless `GNOTES_WHISPER_URL` points at an OpenAI-compatible API, including the version (e.g. `http://whisper:8000/v1`). `GNOTES_WHISPER_MODEL` picks the model (default `whisper-1`) and `GNOTES_WHISPER_KEY` is sent as a bearer token if set.
+- Speech-to-text is set by an admin under Settings → Speech-to-Text: an OpenAI-compatible API URL including the version (e.g. `http://whisper:8000/v1`), a model and an optional key. Once saved there, it overrides the env defaults `GNOTES_WHISPER_URL`, `GNOTES_WHISPER_MODEL` (default `whisper-1`) and `GNOTES_WHISPER_KEY`. The key is never sent back to the app.
 - The data folder holds everything: `gnotes.db`, `blobs/` and `export/`. Backing up means copying that folder.
 
 ## Phases

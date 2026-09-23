@@ -95,6 +95,21 @@ export interface Features {
   max_upload: number;
 }
 
+export interface WhisperSettings {
+  enabled: boolean;
+  url: string;
+  model: string;
+  has_key: boolean;
+  from_env: boolean;
+}
+
+/** `key` absent keeps the saved one; null clears it. */
+export interface WhisperInput {
+  url: string;
+  model: string;
+  key?: string | null;
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -138,6 +153,9 @@ export const api = {
 
   createNote: (notebook_id: string | null) => request<{ id: string }>("POST", "/notes", { notebook_id }),
   deleteNote: (id: string) => request("DELETE", `/notes/${id}`),
+  adminSettings: () => request<{ whisper: WhisperSettings }>("GET", "/admin/settings"),
+  saveWhisper: (body: WhisperInput) => request<{ whisper: WhisperSettings }>("PUT", "/admin/settings/whisper", body),
+  testWhisper: (body: WhisperInput) => request<{ ok: boolean; message: string }>("POST", "/admin/settings/whisper/test", body),
   features: () => request<Features>("GET", "/features"),
   attachmentMeta: (id: string) => request<AttachmentMeta>("GET", `/attachments/${id}/meta`),
   transcribe: (id: string) => request<{ text: string }>("POST", `/attachments/${id}/transcribe`, {}),

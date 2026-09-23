@@ -115,7 +115,7 @@ pub struct AdminUser {
     created_at: i64,
 }
 
-fn require_admin(me: &User) -> ApiResult<()> {
+pub(crate) fn require_admin(me: &User) -> ApiResult<()> {
     if me.is_admin { Ok(()) } else { Err(AppError::Forbidden) }
 }
 

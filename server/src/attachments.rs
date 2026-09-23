@@ -197,7 +197,7 @@ pub async fn transcribe(
     UrlPath(id): UrlPath<String>,
 ) -> ApiResult<Json<Value>> {
     let att = find(&state, &me.id, &id, Role::Editor).await?;
-    let Some(whisper) = &state.config.whisper else {
+    let Some(whisper) = state.whisper.read().await.clone() else {
         return Err(AppError::Conflict("Transcription isn't set up on this server".into()));
     };
     if !att.mime.starts_with("audio/") {
@@ -233,5 +233,5 @@ pub async fn transcribe(
 
 /// `GET /features`: what this server can do beyond the basics.
 pub async fn features(State(state): State<AppState>, CurrentUser(_): CurrentUser) -> Json<Value> {
-    Json(json!({ "transcription": state.config.whisper.is_some(), "max_upload": MAX_UPLOAD }))
+    Json(json!({ "transcription": state.whisper.read().await.is_some(), "max_upload": MAX_UPLOAD }))
 }

@@ -26,7 +26,6 @@ const env = {
   GNOTES_DATA_DIR: data,
   GNOTES_BIND: `127.0.0.1:${port}`,
   GNOTES_WEB_DIR: join(root, "web/dist"),
-  GNOTES_WHISPER_URL: `http://127.0.0.1:${port + 1}/v1`,
 };
 
 for (const [name, display] of [["alice", "Alice"], ["bob", "Bob"]]) {
@@ -220,6 +219,14 @@ try {
   await alice.waitForFunction(() => document.body.innerText.includes("password was reset"));
   await bob.waitForFunction(() => document.body.innerText.includes("You were signed out"), { timeout: 10000 });
   check(true, "admin reset signs the user out of their open app");
+
+  // The admin points speech-to-text at a service from Settings, tests it and saves it.
+  await alice.type(".stt input[type=url]", `http://127.0.0.1:${port + 1}/v1`);
+  await alice.evaluate(() => [...document.querySelectorAll(".stt button")].find((b) => b.textContent === "Test").click());
+  await alice.waitForFunction(() => document.querySelector(".stt .status")?.textContent.includes("Connected"), { timeout: 5000 });
+  await alice.click(".stt button[type=submit]");
+  await alice.waitForFunction(() => document.body.innerText.includes("Speech-to-text saved"));
+  check(true, "admin sets up speech-to-text in settings");
   if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-settings.png") });
   await alice.click(".settings-layer .back");
   await alice.waitForFunction(() => !document.querySelector(".settings-layer"));
@@ -281,6 +288,8 @@ try {
     await alice.goto(`${base}/#/settings`);
     await alice.waitForSelector("button[aria-label='Manage Bob']");
     await shot("phone-settings");
+    await alice.evaluate(() => document.querySelector(".stt").scrollIntoView({ block: "center" }));
+    await shot("phone-settings-stt");
     await alice.goto(noteUrl);
     await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("bread"));
     await alice.evaluate(() => [...document.querySelectorAll(".toolbar button")].find((b) => b.textContent.includes("Share")).click());

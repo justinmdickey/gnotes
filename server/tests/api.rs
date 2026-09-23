@@ -556,29 +556,38 @@ async fn attachments_follow_note_access() {
     assert_eq!(res.status(), 400);
 }
 
+/// A stand-in for an OpenAI-compatible speech-to-text server. Returns its base URL.
+async fn fake_whisper() -> String {
+    let fake = axum::Router::new()
+        .route(
+            "/v1/audio/transcriptions",
+            axum::routing::post(|headers: axum::http::HeaderMap, mut form: axum::extract::Multipart| async move {
+                let mut model = String::new();
+                let mut size = 0;
+                while let Some(field) = form.next_field().await.unwrap() {
+                    match field.name() {
+                        Some("model") => model = field.text().await.unwrap(),
+                        Some("file") => size = field.bytes().await.unwrap().len(),
+                        _ => {}
+                    }
+                }
+                let auth = headers.get("authorization").map(|v| v.to_str().unwrap().to_owned()).unwrap_or_default();
+                axum::Json(json!({ "text": format!(" heard {size} bytes with {model} ({auth}) ") }))
+            }),
+        )
+        .route(
+            "/v1/models",
+            axum::routing::get(|| async { axum::Json(json!({ "data": [{ "id": "small" }, { "id": "large" }] })) }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/v1", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, fake).await });
+    url
+}
+
 #[tokio::test]
 async fn transcription_uses_the_configured_service() {
-    // A stand-in for an OpenAI-compatible speech-to-text server.
-    let fake = axum::Router::new().route(
-        "/v1/audio/transcriptions",
-        axum::routing::post(|headers: axum::http::HeaderMap, mut form: axum::extract::Multipart| async move {
-            let mut model = String::new();
-            let mut size = 0;
-            while let Some(field) = form.next_field().await.unwrap() {
-                match field.name() {
-                    Some("model") => model = field.text().await.unwrap(),
-                    Some("file") => size = field.bytes().await.unwrap().len(),
-                    _ => {}
-                }
-            }
-            let auth = headers.get("authorization").map(|v| v.to_str().unwrap().to_owned()).unwrap_or_default();
-            axum::Json(json!({ "text": format!(" heard {size} bytes with {model} ({auth}) ") }))
-        }),
-    );
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let fake_url = format!("http://{}/v1", listener.local_addr().unwrap());
-    tokio::spawn(async move { axum::serve(listener, fake).await });
-
+    let fake_url = fake_whisper().await;
     let dir = TempDir::new().unwrap();
     let whisper = WhisperConfig { url: fake_url, model: "small".into(), key: Some("sekrit".into()) };
     let server = start_with(&dir, Some(whisper)).await;
@@ -607,4 +616,52 @@ async fn transcription_off_without_config() {
     let att: Value = upload(&alice, &note, "memo.webm", "audio/webm", vec![7; 10]).await.json().await.unwrap();
     let res = alice.send(reqwest::Method::POST, &format!("/attachments/{}/transcribe", att["id"].as_str().unwrap()), json!({})).await;
     assert_eq!(res.status(), 409);
+}
+
+#[tokio::test]
+async fn admin_changes_speech_to_text_in_the_app() {
+    let fake_url = fake_whisper().await;
+    let dir = TempDir::new().unwrap();
+    let server = start(&dir).await;
+    auth::create_user(&server.state.db, "admin", "Admin", "password123", true).await.unwrap();
+    let admin = login(&server.base, "admin").await;
+    let bob = user(&server, "bob").await;
+
+    assert_eq!(admin.get("/admin/settings").await["whisper"]["enabled"], false);
+    assert_eq!(bob.get("/features").await["transcription"], false);
+    let res = bob.send(reqwest::Method::PUT, "/admin/settings/whisper", json!({ "url": fake_url })).await;
+    assert_eq!(res.status(), 403);
+
+    // Test before saving: it connects and warns about a model the service doesn't list.
+    let test = admin.post("/admin/settings/whisper/test", json!({ "url": fake_url, "model": "tiny" })).await;
+    assert_eq!(test["ok"], true);
+    assert!(test["message"].as_str().unwrap().contains("small, large"), "{test}");
+    let test = admin.post("/admin/settings/whisper/test", json!({ "url": "http://127.0.0.1:1/v1" })).await;
+    assert_eq!(test["ok"], false);
+
+    let saved = admin
+        .send(reqwest::Method::PUT, "/admin/settings/whisper", json!({ "url": format!("{fake_url}/"), "model": "large", "key": "k1" }))
+        .await;
+    let saved: Value = saved.json().await.unwrap();
+    assert_eq!(saved["whisper"]["has_key"], true);
+    assert!(saved.to_string().find("k1").is_none(), "key must not be sent back");
+    assert_eq!(bob.get("/features").await["transcription"], true);
+
+    // Bob's memo goes to the service the admin chose, with the saved key.
+    let note = bob.post("/notes", json!({})).await["id"].as_str().unwrap().to_owned();
+    let att: Value = upload(&bob, &note, "m.webm", "audio/webm", vec![1; 5]).await.json().await.unwrap();
+    let out = bob.post(&format!("/attachments/{}/transcribe", att["id"].as_str().unwrap()), json!({})).await;
+    assert_eq!(out["text"], "heard 5 bytes with large (Bearer k1)");
+
+    // Saving without a key keeps it; it survives a restart.
+    admin.send(reqwest::Method::PUT, "/admin/settings/whisper", json!({ "url": fake_url, "model": "small" })).await;
+    server.task.abort();
+    let server = start(&dir).await;
+    let admin = login(&server.base, "admin").await;
+    let w = &admin.get("/admin/settings").await["whisper"];
+    assert_eq!((w["model"].as_str(), w["has_key"].as_bool(), w["from_env"].as_bool()), (Some("small"), Some(true), Some(false)));
+
+    // An empty URL turns it off.
+    admin.send(reqwest::Method::PUT, "/admin/settings/whisper", json!({ "url": "" })).await;
+    assert_eq!(admin.get("/features").await["transcription"], false);
 }

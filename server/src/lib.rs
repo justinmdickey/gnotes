@@ -5,6 +5,7 @@ pub mod error;
 pub mod invites;
 pub mod perms;
 pub mod rooms;
+pub mod settings;
 pub mod shares;
 pub mod tree;
 pub mod util;
@@ -34,11 +35,12 @@ pub struct Config {
     pub web_dir: PathBuf,
     /// e.g. `https://notes.example.com`. Enables Secure cookies and pins the websocket Origin.
     pub public_url: Option<String>,
-    /// Speech-to-text for voice notes. Off when unset.
+    /// Default speech-to-text for voice notes, from env. An admin's saved setting overrides it.
     pub whisper: Option<WhisperConfig>,
 }
 
 /// An OpenAI-compatible transcription API, e.g. faster-whisper-server or OpenAI itself.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct WhisperConfig {
     /// Base URL including the version, e.g. `http://whisper:8000/v1`. `/audio/transcriptions` is appended.
     pub url: String,
@@ -77,6 +79,8 @@ pub struct AppState {
     pub hub: Arc<rooms::Hub>,
     /// Outgoing HTTP, for transcription.
     pub http: reqwest::Client,
+    /// The speech-to-text service in use right now. Admins can change it while running.
+    pub whisper: Arc<tokio::sync::RwLock<Option<WhisperConfig>>>,
 }
 
 impl AppState {
@@ -135,6 +139,9 @@ pub fn router(state: AppState) -> Router {
         .route("/attachments/{id}/meta", get(attachments::meta))
         .route("/attachments/{id}/transcribe", post(attachments::transcribe))
         .route("/features", get(attachments::features))
+        .route("/admin/settings", get(settings::get_settings))
+        .route("/admin/settings/whisper", axum::routing::put(settings::put_whisper))
+        .route("/admin/settings/whisper/test", post(settings::test_whisper))
         .route("/ws", get(ws::handler))
         .fallback(|| async { error::AppError::NotFound });
 
@@ -151,7 +158,12 @@ pub fn router(state: AppState) -> Router {
 
 pub async fn build(config: Config) -> anyhow::Result<AppState> {
     let db = open_db(&config).await?;
+    let whisper = match settings::load_whisper(&db).await? {
+        Some(saved) => saved,
+        None => config.whisper.clone(),
+    };
     Ok(AppState {
+        whisper: Arc::new(tokio::sync::RwLock::new(whisper)),
         db,
         config: Arc::new(config),
         rooms: Default::default(),

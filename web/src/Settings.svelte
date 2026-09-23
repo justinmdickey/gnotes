@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { api, ApiError, inviteUrl, type AdminUser, type PendingInvite } from "./lib/api";
+  import { api, ApiError, inviteUrl, type AdminUser, type PendingInvite, type WhisperInput, type WhisperSettings } from "./lib/api";
   import Dialog from "./lib/Dialog.svelte";
   import Icon from "./lib/Icon.svelte";
   import Menu from "./lib/Menu.svelte";
@@ -25,7 +25,50 @@
 
   async function loadAdmin() {
     if (!app.user?.is_admin) return;
-    [users, invites] = await Promise.all([api.adminUsers(), api.invites()]);
+    let settings;
+    [users, invites, settings] = await Promise.all([api.adminUsers(), api.invites(), api.adminSettings()]);
+    whisper = settings.whisper;
+    whisperUrl = whisper.url;
+    whisperModel = whisper.model;
+  }
+
+  let whisper = $state<WhisperSettings | null>(null);
+  let whisperUrl = $state("");
+  let whisperModel = $state("");
+  /** What's typed in the key field; empty means "keep the saved key". */
+  let whisperKey = $state("");
+  let clearKey = $state(false);
+  let testing = $state(false);
+  let testResult = $state<{ ok: boolean; message: string } | null>(null);
+  const whisperDirty = $derived(
+    whisper !== null && (whisperUrl.trim() !== whisper.url || whisperModel.trim() !== whisper.model || whisperKey !== "" || clearKey),
+  );
+
+  function whisperInput(): WhisperInput {
+    const body: WhisperInput = { url: whisperUrl, model: whisperModel };
+    if (whisperKey) body.key = whisperKey;
+    else if (clearKey) body.key = null;
+    return body;
+  }
+
+  async function testService() {
+    testing = true;
+    testResult = null;
+    await run(async () => (testResult = await api.testWhisper(whisperInput())));
+    testing = false;
+  }
+
+  async function saveWhisper(e: SubmitEvent) {
+    e.preventDefault();
+    const turningOff = !whisperUrl.trim();
+    await run(async () => {
+      whisper = (await api.saveWhisper(whisperInput())).whisper;
+      whisperUrl = whisper.url;
+      whisperModel = whisper.model;
+      whisperKey = "";
+      clearKey = false;
+      app.features = { ...app.features, transcription: whisper.enabled };
+    }, turningOff ? "Transcription turned off" : "Speech-to-text saved");
   }
   loadAdmin();
 
@@ -209,6 +252,52 @@
           </li>
         </ul>
 
+        {#if whisper}
+          <h2>Speech-to-Text</h2>
+          <form class="boxed stt" onsubmit={saveWhisper}>
+            <p class="dim explain">
+              Voice memos are sent here to be transcribed. Any OpenAI-compatible service works, such as faster-whisper-server
+              or OpenAI. Leave the URL empty to turn it off.
+            </p>
+            <label class="field">
+              <span>Service URL</span>
+              <input type="url" placeholder="http://whisper:8000/v1" autocapitalize="none" spellcheck="false" bind:value={whisperUrl} />
+            </label>
+            <label class="field">
+              <span>Model</span>
+              <input placeholder="whisper-1" autocapitalize="none" spellcheck="false" bind:value={whisperModel} />
+            </label>
+            <label class="field">
+              <span>API key</span>
+              <input
+                type="password"
+                autocomplete="off"
+                placeholder={whisper.has_key && !clearKey ? "Saved – type to replace" : "Optional"}
+                bind:value={whisperKey}
+                oninput={() => (clearKey = false)}
+              />
+              {#if whisper.has_key && !clearKey && !whisperKey}
+                <button type="button" class="flat destructive clear" onclick={() => (clearKey = true)}>Remove</button>
+              {/if}
+            </label>
+            <div class="stt-foot">
+              <span class="status" class:ok={testResult?.ok} class:bad={testResult && !testResult.ok}>
+                {#if testing}
+                  <span class="spinner"></span> Testing…
+                {:else if testResult}
+                  <Icon name={testResult.ok ? "check" : "close"} /> {testResult.message}
+                {:else if whisper.enabled}
+                  <span class="dot on"></span> On{whisper.from_env ? " (from the server's environment)" : ""}
+                {:else}
+                  <span class="dot"></span> Off
+                {/if}
+              </span>
+              <button type="button" disabled={!whisperUrl.trim() || testing} onclick={testService}>Test</button>
+              <button type="submit" class="suggested" disabled={!whisperDirty}>Save</button>
+            </div>
+          </form>
+        {/if}
+
         {#if invites.length}
           <h2>Unused Invites</h2>
           <ul class="boxed">
@@ -355,6 +444,103 @@
   .value {
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  .stt {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 12px;
+  }
+
+  .explain {
+    margin: 0 4px 8px;
+    font-size: 0.88rem;
+    line-height: 1.45;
+  }
+
+  .field {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 46px;
+    padding: 0 4px;
+  }
+
+  .field + .field {
+    border-top: 1px solid var(--border);
+  }
+
+  .field span {
+    flex: none;
+    width: 92px;
+  }
+
+  .field input {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .clear {
+    min-height: 32px;
+    padding: 0 10px;
+  }
+
+  .stt-foot {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+    padding: 0 4px;
+  }
+
+  .status {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.88rem;
+    color: var(--dim-fg);
+  }
+
+  .status.ok {
+    color: var(--success);
+  }
+
+  .status.bad {
+    color: var(--destructive);
+  }
+
+  .status .spinner {
+    width: 14px;
+    height: 14px;
+  }
+
+  .status .dot {
+    flex: none;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--dim-fg);
+  }
+
+  .status .dot.on {
+    background: var(--success);
+  }
+
+  @media (max-width: 700px) {
+    .field {
+      flex-wrap: wrap;
+      gap: 4px 12px;
+      padding: 8px 4px;
+    }
+
+    .field span {
+      width: 100%;
+      font-size: 0.85rem;
+      color: var(--dim-fg);
+    }
   }
 
   .row-form {
