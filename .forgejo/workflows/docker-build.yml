@@ -13,7 +13,7 @@ env:
   REGISTRY: git.erisdor.com
   # Hardcoded on purpose — deriving from github.repository lets a repo rename
   # silently move the published image out from under the Deployment.
-  IMAGE_NAME: justin/gnotes
+  IMAGE_NAME: homelab/gnotes
 
 jobs:
   test:
