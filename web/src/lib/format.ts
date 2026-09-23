@@ -55,7 +55,10 @@ export function setBlock(view: EditorView, block: Block): boolean {
     const prefix = target === "number" ? `${number++}. ` : PREFIX[target];
     return { from: from + cur.indent.length, to: from + cur.prefixLength, insert: prefix };
   });
-  view.dispatch(state.update({ changes, scrollIntoView: true, userEvent: "input.format" }));
+  // Map the cursor forward past an inserted marker, so typing starts inside the new block.
+  const changeSet = state.changes(changes);
+  const selection = state.selection.map(changeSet, 1);
+  view.dispatch(state.update({ changes: changeSet, selection, scrollIntoView: true, userEvent: "input.format" }));
   view.focus();
   return true;
 }

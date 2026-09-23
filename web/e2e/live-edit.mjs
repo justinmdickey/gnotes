@@ -118,7 +118,21 @@ try {
   await alice.keyboard.press("Enter");
   await alice.keyboard.type("butter");
   await alice.click("button[aria-label='Checklist']");
+  // Pressing a format button on an empty line leaves the cursor ready to type after the marker.
+  await alice.keyboard.press("Enter");
+  await alice.keyboard.type("jam");
+  await alice.keyboard.press("Enter");
+  await alice.keyboard.press("Enter");
+  await alice.evaluate(() => [...document.querySelectorAll(".bar button")].find((b) => b.textContent.trim() === "Heading").click());
+  await alice.keyboard.type("Later");
   await alice.evaluate(() => document.activeElement?.blur());
+  // Marks hide once the editor has processed the blur.
+  await alice.waitForFunction(() => [...document.querySelectorAll(".cm-line")].some((l) => l.innerText.trim() === "Later"), { timeout: 2000 }).catch(() => {});
+  const lines = await alice.$$eval(".cm-line", (els) => els.map((el) => ({ text: el.innerText, h2: el.classList.contains("cm-h2"), box: !!el.querySelector(".cm-checkbox") })));
+  const jam = lines.find((l) => l.text.includes("jam"));
+  const later = lines.find((l) => l.text.includes("Later"));
+  check(jam?.box && jam.text.trim() === "jam", `typing after Checklist lands in the item (${JSON.stringify(jam)})`);
+  check(later?.h2 && later.text.trim() === "Later", `typing after Heading lands in the heading (${JSON.stringify(later)})`);
   await alice.waitForSelector(".cm-checkbox:not(.checked)");
   await alice.$eval(".cm-checkbox", (el) => el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })));
   await bob.waitForSelector(".cm-checkbox.checked", { timeout: 5000 });
