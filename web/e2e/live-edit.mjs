@@ -247,7 +247,7 @@ try {
   await alice.keyboard.type("Pantry");
   await alice.waitForFunction(() => document.querySelector(".notebook-chip")?.textContent.trim() === "Kitchen");
   check(true, "a note in a notebook shows the notebook chip");
-  if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-notebook.png") });
+  if (process.env.SHOTS) await (await new Promise((r) => setTimeout(r, 400)), alice.screenshot({ path: join(process.env.SHOTS, "desktop-notebook.png") }));
 
   // A photo picked from the format bar uploads and shows inline.
   const png = join(data, "dot.png");
@@ -299,7 +299,7 @@ try {
   await alice.keyboard.type("Holiday");
   await alice.waitForFunction(() => document.querySelector(".editor .headerbar .title strong")?.textContent === "Holiday", { timeout: 5000 });
   check(await alice.$(".cm-attachment img") !== null, "“Add a title” puts a title above a leading photo");
-  await alice.evaluate(() => [...document.querySelectorAll(".path .crumb")].find((b) => b.textContent === "Home").click());
+  await alice.evaluate(() => [...document.querySelectorAll(".path button")].find((b) => b.textContent.trim() === "Home").click());
   await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Home");
   await alice.evaluate(() => (location.hash = "#/all"));
   await alice.waitForFunction(() => [...document.querySelectorAll("li button")].some((b) => b.textContent.includes("Groceries")));

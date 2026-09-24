@@ -127,8 +127,9 @@
         {#if path.length}
           <nav class="path" aria-label="Notebook path">
             {#each path as nb (nb.id)}
-              <button class="flat crumb" onclick={() => navigate({ kind: "notebook", id: nb.id })}>{nb.name}</button>
-              <Icon name="next" size={12} />
+              <button class="chip-link" title="Go to {nb.name}" onclick={() => navigate({ kind: "notebook", id: nb.id })}>
+                <Icon name="folder" size={14} /><span>{nb.name}</span><Icon name="next" size={12} />
+              </button>
             {/each}
           </nav>
         {/if}
@@ -240,18 +241,8 @@
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 2px;
-    margin: 0 0 6px -8px;
-    color: var(--dim-fg);
-  }
-
-  .crumb {
-    min-height: 26px;
-    padding: 0 8px;
-    border-radius: var(--radius-pill);
-    font-size: var(--text-sm);
-    font-weight: 600;
-    color: var(--accent);
+    gap: 6px;
+    margin: 0 0 10px;
   }
 
   .hero-row {

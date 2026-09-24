@@ -362,8 +362,8 @@
   <div class="scroll" class:gone={lost} onclick={focusEnd} use:scrollEdge bind:this={scroller}>
     <div class="column" class:hidden={!loaded}>
       {#if notebook}
-        <button class="flat notebook-chip" title="Open the {notebook.name} notebook" onclick={(e) => (e.stopPropagation(), openNotebook())}>
-          <Icon name="folder" size={14} /><span>{notebook.name}</span>
+        <button class="chip-link notebook-chip" title="Open the {notebook.name} notebook" onclick={(e) => (e.stopPropagation(), openNotebook())}>
+          <Icon name="folder" size={14} /><span>{notebook.name}</span><Icon name="next" size={12} />
         </button>
       {/if}
       <div class="page" class:with-chip={notebook} bind:this={parent}></div>
@@ -455,14 +455,16 @@
     gap: 3px;
     min-height: 54px;
     padding: 4px 0;
-    color: var(--accent);
+    color: var(--fg);
     font-size: var(--text-xs);
     font-weight: 600;
   }
 
+  /* Blue icon, plain label: the icon marks it as tappable, the text stays easy to read. */
   .tool :global(svg) {
     width: var(--icon-touch);
     height: var(--icon-touch);
+    color: var(--accent);
   }
 
   .peers {
@@ -721,22 +723,8 @@
 
   /* Which notebook this note lives in; tap to open it. */
   .notebook-chip {
-    gap: 6px;
-    min-height: 28px;
     margin: 20px 0 0 18px;
-    padding: 0 12px 0 10px;
-    border-radius: var(--radius-pill);
-    background: var(--accent-soft);
-    color: var(--accent);
-    font-size: var(--text-sm);
-    font-weight: 700;
     max-width: calc(100% - 36px);
-  }
-
-  .notebook-chip span {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   .hidden {

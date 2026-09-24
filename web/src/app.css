@@ -500,3 +500,33 @@ svg.icon.filled {
   font-weight: 800;
   color: var(--dim-fg);
 }
+
+/*
+  A link to another place in the app, like a notebook breadcrumb: a pill button with
+  a blue icon, plain text and a chevron saying "this takes you somewhere".
+*/
+button.chip-link {
+  gap: 6px;
+  min-height: 30px;
+  max-width: 100%;
+  padding: 0 8px 0 10px;
+  border-radius: var(--radius-pill);
+  background: var(--button-bg);
+  color: var(--fg);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+button.chip-link > svg:first-child {
+  color: var(--accent);
+}
+
+button.chip-link > svg:last-child {
+  color: var(--dim-fg);
+}
+
+button.chip-link > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
