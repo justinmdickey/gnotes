@@ -2,6 +2,19 @@
 
 Self-hosted Markdown notes with live shared editing. `server/` is Rust (axum, SQLite via sqlx, Loro CRDT per note); `web/` is a Svelte 5 (runes) PWA with a CodeMirror 6 editor. Why things are built this way: `docs/DESIGN.md`.
 
+## Working loop
+
+For every task, in order:
+
+1. Read the files you'll touch and the code around them; match their naming, comment style and idioms.
+2. For a UI task, take **before** screenshots of the affected screens (see Look at the UI).
+3. Make the smallest change that does the task. Leave unrelated code as it is.
+4. Run the check for what you changed (see Check a change) and read its output.
+5. For a UI task, take **after** screenshots of the same screens, put them next to the before shots, and look at them. The task is done when the tests pass *and* the after shots look right on phone and desktop, in dark and light.
+6. Commit with a Conventional Commit message. Report what changed, what you verified, and anything you couldn't verify.
+
+When a result surprises you (a test fails, a screenshot looks wrong), find the cause before changing more code. When context runs low, re-read Design rules and Look at the UI first; they hold the rules that are easiest to drift from.
+
 ## Run it
 
 - Server: `cargo run -p gnotes-server` from the repo root serves on `:8080`, data in `./data`. Make an account with `GNOTES_PASSWORD=… cargo run -p gnotes-server -- create-user <name> --admin`.
