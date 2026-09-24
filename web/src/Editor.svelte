@@ -573,6 +573,25 @@
     color: var(--accent);
   }
 
+  .page :global(.cm-title-hint) {
+    color: var(--dim-fg);
+    pointer-events: none;
+  }
+
+  /* Above a photo or memo on the first line: a tappable row that makes a title line. */
+  .page :global(.cm-title-hint.add) {
+    display: block;
+    width: fit-content;
+    margin-bottom: 8px;
+    padding: 2px 12px;
+    border-radius: 999px;
+    background: var(--hover);
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    pointer-events: auto;
+  }
+
   /* Photos and voice memos embedded in the text. */
   .page :global(.cm-embed-line) {
     padding: 6px 0 !important;

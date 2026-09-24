@@ -266,6 +266,32 @@ try {
   await alice.waitForSelector(".cm-audio", { timeout: 5000 });
   await alice.waitForFunction(() => document.querySelector(".cm-content").innerText.includes("remember the milk"), { timeout: 5000 });
   check(true, "a voice memo embeds a player with its transcript");
+
+  // A note that starts with a photo offers a title line above it, and styles leave embeds alone.
+  await closed(alice);
+  await alice.click(".list header button[aria-label='New note']");
+  await alice.waitForFunction(() => document.querySelector(".editor .headerbar .title strong")?.textContent === "New Note");
+  await alice.waitForSelector(".cm-content[contenteditable=true]");
+  const photoId = await alice.evaluate(async () => {
+    const form = new FormData();
+    form.append("note_id", location.hash.split("/note/")[1]);
+    const png = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEklEQVR4nGP4z8CAFWEXHbQSACj/P8Fu7N9hAAAAAElFTkSuQmCC"), (c) => c.charCodeAt(0));
+    form.append("file", new File([png], "p.png", { type: "image/png" }));
+    return (await fetch("/api/attachments", { method: "POST", body: form }).then((r) => r.json())).id;
+  });
+  await alice.keyboard.type(`![Photo](att:${photoId})`);
+  await alice.evaluate(() => document.activeElement?.blur());
+  await alice.waitForSelector(".cm-title-hint.add");
+  await alice.click(".cm-content");
+  await alice.evaluate(() => [...document.querySelectorAll(".bar button")].find((b) => b.textContent.trim() === "Title").click());
+  await alice.evaluate(() => document.activeElement?.blur());
+  await alice.waitForSelector(".cm-attachment img");
+  const raw = await alice.$eval(".cm-content", (el) => el.innerText);
+  check(!raw.includes("att:"), "the Title style leaves a photo line alone");
+  await alice.$eval(".cm-title-hint.add", (el) => el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })));
+  await alice.keyboard.type("Holiday");
+  await alice.waitForFunction(() => document.querySelector(".editor .headerbar .title strong")?.textContent === "Holiday", { timeout: 5000 });
+  check(await alice.$(".cm-attachment img") !== null, "“Add a title” puts a title above a leading photo");
   if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-attachments.png") });
   await alice.evaluate(() => [...document.querySelectorAll(".path .crumb")].find((b) => b.textContent === "Home").click());
   await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Home");

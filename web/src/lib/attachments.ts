@@ -2,7 +2,11 @@
 import type { EditorView } from "@codemirror/view";
 import { api, type AttachmentMeta } from "./api";
 
-export const EMBED = /^\s*!\[([^\]\n]*)\]\(att:([0-9a-f-]{36})\)\s*$/;
+/**
+ * An embed line. It may carry a block mark (heading, quote, list) that a text style put
+ * there; the embed still shows as the photo or player.
+ */
+export const EMBED = /^\s*(?:#{1,6}\s+|>\s?|[-*+]\s+(?:\[[ xX]\]\s+)?|\d+[.)]\s+)?!\[([^\]\n]*)\]\(att:([0-9a-f-]{36})\)\s*$/;
 export const attachmentUrl = (id: string) => `/api/attachments/${id}`;
 
 const metas = new Map<string, Promise<AttachmentMeta>>();
@@ -74,7 +78,8 @@ export function insertEmbed(view: EditorView, id: string, label: string, atEnd =
   const { state } = view;
   const line = atEnd ? state.doc.line(state.doc.lines) : state.doc.lineAt(state.selection.main.head);
   const embed = `![${label.replace(/[[\]\n]/g, "")}](att:${id})`;
-  const empty = line.text.trim() === "";
+  // The first line is the note's title, so an embed never takes it over.
+  const empty = line.text.trim() === "" && line.number > 1;
   const from = empty ? line.from : line.to;
   const to = line.to;
   const before = empty ? "" : "\n";

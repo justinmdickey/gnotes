@@ -122,13 +122,6 @@ impl RoomError {
 /// A line without its Markdown block marks (headings, bullets, checkboxes, quotes).
 fn plain_line(line: &str) -> String {
     let mut l = line.trim();
-    // An embedded photo or recording reads as its label, e.g. "Voice memo".
-    if let Some(rest) = l.strip_prefix("![")
-        && let Some((alt, link)) = rest.split_once("](att:")
-        && link.ends_with(')')
-    {
-        return alt.trim().chars().take(120).collect();
-    }
     l = l.trim_start_matches('#').trim_start();
     l = l.trim_start_matches('>').trim_start();
     for marker in ["- [ ] ", "- [x] ", "- [X] ", "* ", "- ", "+ "] {
@@ -142,6 +135,13 @@ fn plain_line(line: &str) -> String {
         && num.chars().all(|c| c.is_ascii_digit())
     {
         l = rest;
+    }
+    // An embedded photo or recording reads as its label, e.g. "Voice memo".
+    if let Some(rest) = l.strip_prefix("![")
+        && let Some((alt, link)) = rest.split_once("](att:")
+        && link.ends_with(')')
+    {
+        return alt.trim().chars().take(120).collect();
     }
     l.replace("**", "").replace("~~", "").replace('`', "").trim().chars().take(120).collect()
 }
@@ -165,6 +165,8 @@ mod tests {
         assert_eq!(summarize(""), (String::new(), String::new()));
         let memo = "![Voice memo](att:01a0d056-667e-733b-a280-1d118b647773)\nbuy milk";
         assert_eq!(summarize(memo), ("Voice memo".into(), "buy milk".into()));
+        let marked = "Trip\n# ![Photo](att:01a0d056-667e-733b-a280-1d118b647773)";
+        assert_eq!(summarize(marked), ("Trip".into(), "Photo".into()));
     }
 }
 

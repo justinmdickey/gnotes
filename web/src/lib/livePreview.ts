@@ -81,6 +81,37 @@ function audioPlayer(src: string, label: string): HTMLElement {
   return wrap;
 }
 
+/** Shown on a blank first line so it's clear the note's title goes there. */
+class TitleHint extends WidgetType {
+  constructor(readonly addLine: boolean) {
+    super();
+  }
+
+  eq(other: TitleHint) {
+    return other.addLine === this.addLine;
+  }
+
+  toDOM(view: EditorView) {
+    const el = document.createElement("span");
+    el.className = this.addLine ? "cm-title-hint add" : "cm-title-hint";
+    el.textContent = this.addLine ? "Add a title" : "Title";
+    if (this.addLine) {
+      // The note starts with a photo or memo: make a title line above it.
+      el.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        if (!view.state.facet(EditorView.editable)) return;
+        view.dispatch({ changes: { from: 0, insert: "\n" }, selection: { anchor: 0 }, userEvent: "input" });
+        view.focus();
+      });
+    }
+    return el;
+  }
+
+  ignoreEvent() {
+    return !this.addLine;
+  }
+}
+
 /** A photo or voice memo, drawn in place of its `![label](att:id)` line. */
 class AttachmentWidget extends WidgetType {
   private off?: () => void;
@@ -233,12 +264,21 @@ function build(view: EditorView): { decorations: DecorationSet; atomic: Decorati
     }
   }
   if (embedLines.has(1)) firstLineIsHeading = true;
+  const first = state.doc.line(1);
+  if (embedLines.has(1) && view.state.facet(EditorView.editable)) {
+    decos.push(Decoration.widget({ widget: new TitleHint(true), side: -1 }).range(0));
+  } else if (first.length === 0 && state.doc.lines > 1 && !active.has(1)) {
+    decos.push(Decoration.widget({ widget: new TitleHint(false), side: 1 }).range(0));
+  }
 
   for (const { from, to } of view.visibleRanges) {
     syntaxTree(state).iterate({
       from,
       to,
       enter(node) {
+        // Embed lines are drawn whole by their widget.
+        const home = lineAt(node.from);
+        if (embedLines.has(home.number) && node.to <= home.to) return false;
         const editing = active.has(lineAt(node.from).number);
         switch (node.name) {
           case "ATXHeading1":

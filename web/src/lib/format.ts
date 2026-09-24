@@ -2,6 +2,7 @@
 import { syntaxTree } from "@codemirror/language";
 import { EditorSelection, type EditorState } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
+import { EMBED } from "./attachments";
 
 export type Block = "title" | "heading" | "subheading" | "body" | "check" | "bullet" | "number" | "quote";
 export type Inline = "bold" | "italic" | "strike" | "code";
@@ -47,7 +48,9 @@ export function setBlock(view: EditorView, block: Block): boolean {
       lines.set(l, { from: line.from, text: line.text });
     }
   }
-  const all = [...lines.values()];
+  // Photos and voice memos keep their own line; styles don't apply to them.
+  const all = [...lines.values()].filter((l) => !EMBED.test(l.text));
+  if (!all.length) return true;
   const target = all.every((l) => blockOf(l.text).block === block) ? "body" : block;
   let number = 1;
   const changes = all.map(({ from, text }) => {
