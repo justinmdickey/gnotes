@@ -6,6 +6,9 @@
   import { app, colorFor, endSession, goBack } from "./lib/store.svelte";
   import { ask, scrollEdge, toast } from "./lib/ui.svelte";
 
+  /** Shown as the phone's Account tab rather than a full screen with Back. */
+  let { tab = false }: { tab?: boolean } = $props();
+
   let name = $state(app.user?.display_name ?? "");
   let savedName = $state(app.user?.display_name ?? "");
   let error = $state("");
@@ -149,15 +152,21 @@
   const day = (ms: number) => new Date(ms).toLocaleDateString([], { month: "short", day: "numeric" });
 </script>
 
-<div class="page">
+<div class="page" class:tab>
   <header class="headerbar">
-    <div class="side"><button class="flat back" onclick={goBack}><Icon name="back" /><span>Back</span></button></div>
-    <strong class="heading">Settings</strong>
-    <div class="side"></div>
+    {#if !tab}
+      <div class="side"><button class="flat back" onclick={goBack}><Icon name="back" /><span>Back</span></button></div>
+      <strong class="heading">Settings</strong>
+      <div class="side"></div>
+    {/if}
   </header>
 
   <div class="scroll" use:scrollEdge>
     <div class="column">
+      {#if tab}
+        <!-- Titled like the other tabs: a big heading at the top of the page. -->
+        <div class="hero"><h1>Account</h1></div>
+      {/if}
       <div class="profile">
         <span class="avatar large {colorFor(app.user?.id ?? '')}">{app.user?.display_name.slice(0, 1).toUpperCase()}</span>
         <strong>{savedName}</strong>
@@ -353,6 +362,28 @@
 
   .headerbar {
     background: var(--window-bg);
+  }
+
+  /* As a tab it matches the note lists: same background, empty headerbar, big title. */
+  .page.tab,
+  .page.tab .headerbar {
+    background: var(--view-bg);
+  }
+
+  .page.tab .column {
+    padding-top: 0;
+  }
+
+  .hero {
+    padding: 4px 4px 6px;
+    animation: rise 260ms var(--ease-out) both;
+  }
+
+  .hero h1 {
+    margin: 0;
+    font-size: var(--text-xl);
+    font-weight: 800;
+    line-height: 1.2;
   }
 
   .side {

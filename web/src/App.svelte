@@ -139,6 +139,7 @@
   <Login />
 {:else}
   <div class="app-frame">
+  <div class="main">
   <div class="shell" class:dragging={drag !== null} class:drawer-open={drawerOpen} bind:this={shell}>
     {#each order as p (p)}
       <div
@@ -168,12 +169,19 @@
     <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
     <div class="drawer-scrim" onclick={closeDrawer}></div>
   </div>
+  {#if app.settings && media.phone}
+    <!-- On phones Account is a tab like the others: it fills the page area and the tab bar stays. -->
+    <div class="tab-page" in:fadeIn={{ duration: 140 }}>
+      <Settings tab />
+    </div>
+  {/if}
+  </div>
   {#if media.phone && !app.typing}
     <TabBar />
   {/if}
   </div>
 
-  {#if app.settings}
+  {#if app.settings && !media.phone}
     <div class="settings-layer" transition:page>
       <Settings />
     </div>
@@ -195,9 +203,23 @@
     height: 100%;
   }
 
+  .main {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+  }
+
+  .tab-page {
+    position: absolute;
+    inset: 0;
+    z-index: 10;
+  }
+
   .shell {
     position: relative;
     flex: 1;
+    min-width: 0;
     min-height: 0;
     display: grid;
     grid-template-columns: 260px 340px 1fr;

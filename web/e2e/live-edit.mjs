@@ -426,6 +426,14 @@ try {
     await alice.evaluate((id) => (location.hash = `#/nb/${id}`), deepest);
     await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Pocket");
     await shot("phone-deep-dark");
+    // Account is a tab like the others: the tab bar stays and there's no Back.
+    await alice.evaluate(() => [...document.querySelectorAll(".tabbar button")].find((b) => b.textContent.includes("Account")).click());
+    await alice.waitForFunction(() => document.querySelector(".tab-page h1")?.textContent === "Account");
+    check(await alice.evaluate(() => !!document.querySelector(".tabbar .tab.on") && !document.querySelector(".tab-page .back")), "Account opens as a tab with the tab bar still there");
+    await shot("phone-account-dark");
+    await alice.evaluate(() => [...document.querySelectorAll(".tabbar button")].find((b) => b.textContent.includes("Recent")).click());
+    await alice.waitForFunction(() => !document.querySelector(".tab-page") && document.querySelector(".hero h1")?.textContent === "Recent");
+    check(true, "another tab leaves Account");
   }
   console.log("all checks passed");
 } finally {
