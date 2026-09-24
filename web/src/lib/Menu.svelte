@@ -83,7 +83,7 @@
     flex-direction: column;
     min-width: 200px;
     padding: 6px;
-    border-radius: 12px;
+    border-radius: var(--radius-md);
     background: var(--popover-bg);
     box-shadow: var(--shadow-lg);
     transform-origin: top right;
@@ -95,7 +95,7 @@
     min-height: 38px;
     padding: 0 12px;
     font-weight: 400;
-    border-radius: 7px;
+    border-radius: var(--radius-sm);
   }
 
   .item:active:not(:disabled) {
@@ -110,12 +110,12 @@
 
   .sheet .item {
     min-height: 52px;
-    font-size: 1.05rem;
+    font-size: var(--text-lg);
     border-radius: var(--radius);
   }
 
   .sheet .item :global(svg) {
-    width: 20px;
-    height: 20px;
+    width: var(--icon-touch);
+    height: var(--icon-touch);
   }
 </style>

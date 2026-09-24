@@ -3,6 +3,7 @@
 import { syntaxTree } from "@codemirror/language";
 import type { EditorState, Range } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate, WidgetType } from "@codemirror/view";
+import { iconSvg } from "./icons";
 import { EMBED, attachmentMeta, attachmentUrl, isTranscribing, onTranscribingChange } from "./attachments";
 
 /** Full-screen photo viewer that zooms out of the tapped image. */
@@ -65,8 +66,18 @@ function audioPlayer(src: string, label: string): HTMLElement {
   body.append(title, bar);
   wrap.append(play, body, time, status);
 
+  const playIcon = iconSvg("play");
+  const pauseIcon = iconSvg("pause");
+  play.append(playIcon);
+  let shown = playIcon;
   const sync = () => {
     wrap.classList.toggle("playing", !audio.paused);
+    const want = audio.paused ? playIcon : pauseIcon;
+    if (want !== shown) {
+      shown.replaceWith(want);
+      shown = want;
+      play.setAttribute("aria-label", `${audio.paused ? "Play" : "Pause"} ${label}`);
+    }
     const d = audio.duration;
     fill.style.width = Number.isFinite(d) && d > 0 ? `${(audio.currentTime / d) * 100}%` : "0";
     time.textContent = audio.paused && audio.currentTime === 0 ? formatTime(d) : formatTime(audio.currentTime);

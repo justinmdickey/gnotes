@@ -5,6 +5,7 @@
   import Dialog from "./lib/Dialog.svelte";
   import Icon from "./lib/Icon.svelte";
   import Menu from "./lib/Menu.svelte";
+  import StatusPage from "./lib/StatusPage.svelte";
   import { app, composeNote, goBack, navigate, notesFor, openNote, trashNotebook, viewTitle } from "./lib/store.svelte";
   import { media, scrollEdge } from "./lib/ui.svelte";
   import ShareDialog from "./ShareDialog.svelte";
@@ -152,7 +153,7 @@
     <!-- A new list for each view; only adds and removes within one view animate. -->
     {#key app.view.kind === "notebook" ? app.view.id : app.view.kind}
     {#each groups as group (group.label)}
-      <h3>{group.label}</h3>
+      <h3 class="group-title">{group.label}</h3>
       <ul class="boxed-list">
         {#each group.notes as note (note.id)}
           <li transition:reveal>
@@ -167,22 +168,15 @@
         {/each}
       </ul>
     {:else}
-      <div class="empty">
-        {#if query}
-          <div class="empty-icon"><Icon name="search" size={36} /></div>
-          <strong>No Results</strong>
-          <p class="dim">Nothing matches “{query}”.</p>
-        {:else}
-          <div class="empty-icon"><Icon name="note" size={36} /></div>
-          <strong>No Notes Yet</strong>
-          {#if canCreate}
-            <p class="dim">Notes you write here show up in this list.</p>
-            <button class="suggested pill" onclick={() => composeNote()}><Icon name="compose" /> New Note</button>
-          {:else}
-            <p class="dim">Nothing has been shared here yet.</p>
-          {/if}
-        {/if}
-      </div>
+      {#if query}
+        <StatusPage icon="search" title="No Results" description="Nothing matches “{query}”." tone="neutral" />
+      {:else if canCreate}
+        <StatusPage icon="note" title="No Notes Yet" description="Notes you write here show up in this list.">
+          <button class="suggested pill" onclick={() => composeNote()}><Icon name="compose" /> New Note</button>
+        </StatusPage>
+      {:else}
+        <StatusPage icon="note" title="No Notes Yet" description="Nothing has been shared here yet." tone="neutral" />
+      {/if}
     {/each}
     {/key}
   </div>
@@ -254,8 +248,8 @@
   .crumb {
     min-height: 26px;
     padding: 0 8px;
-    border-radius: 999px;
-    font-size: 0.85rem;
+    border-radius: var(--radius-pill);
+    font-size: var(--text-sm);
     font-weight: 600;
     color: var(--accent);
   }
@@ -272,7 +266,7 @@
     place-items: center;
     width: 44px;
     height: 44px;
-    border-radius: 12px;
+    border-radius: var(--radius-md);
     background: var(--hover);
     color: var(--dim-fg);
   }
@@ -290,7 +284,7 @@
 
   .hero h1 {
     margin: 0;
-    font-size: 1.5rem;
+    font-size: var(--text-xl);
     font-weight: 800;
     line-height: 1.2;
     overflow: hidden;
@@ -299,7 +293,7 @@
   }
 
   .hero-text span {
-    font-size: 0.88rem;
+    font-size: var(--text-sm);
   }
 
   .new {
@@ -348,12 +342,6 @@
     padding: 0 12px 16px;
   }
 
-  h3 {
-    margin: 16px 4px 6px;
-    font-size: 0.82rem;
-    font-weight: 800;
-    color: var(--dim-fg);
-  }
 
   .note {
     width: 100%;
@@ -385,7 +373,7 @@
   .meta {
     display: flex;
     gap: 8px;
-    font-size: 0.88rem;
+    font-size: var(--text-sm);
     min-width: 0;
   }
 
@@ -399,34 +387,9 @@
     white-space: nowrap;
   }
 
-  .empty {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 4px;
-    padding: 56px 16px;
-    text-align: center;
-    animation: rise 260ms var(--ease-out) both;
-  }
 
-  .empty-icon {
-    display: grid;
-    place-items: center;
-    width: 72px;
-    height: 72px;
-    margin-bottom: 10px;
-    border-radius: 50%;
-    background: var(--accent-soft);
-    color: var(--accent);
-  }
 
-  .empty strong {
-    font-size: 1.1rem;
-  }
 
-  .empty p {
-    margin: 0 0 16px;
-  }
 
   form input {
     width: 100%;
@@ -460,7 +423,7 @@
     }
 
     .note-title {
-      font-size: 1.05rem;
+      font-size: var(--text-lg);
     }
 
     .note.selected {

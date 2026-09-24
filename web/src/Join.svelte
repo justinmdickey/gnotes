@@ -104,7 +104,7 @@
 
   h1 {
     margin: 12px 0 4px;
-    font-size: 1.6rem;
+    font-size: var(--text-display);
   }
 
   p {
@@ -126,7 +126,7 @@
   .pill-link {
     min-height: 42px;
     padding: 0 22px;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     color: var(--accent);
   }
 

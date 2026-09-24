@@ -266,6 +266,13 @@ try {
   await alice.waitForSelector(".cm-audio", { timeout: 5000 });
   await alice.waitForFunction(() => document.querySelector(".cm-content").innerText.includes("remember the milk"), { timeout: 5000 });
   check(true, "a voice memo embeds a player with its transcript");
+  if (process.env.SHOTS) {
+    await closed(alice);
+    await alice.click(".cm-audio-play");
+    await alice.waitForSelector(".cm-audio.playing");
+    await (await alice.$(".cm-audio")).screenshot({ path: join(process.env.SHOTS, "audio-playing.png") });
+    await alice.screenshot({ path: join(process.env.SHOTS, "desktop-attachments.png") });
+  }
 
   // A note that starts with a photo offers a title line above it, and styles leave embeds alone.
   await closed(alice);
@@ -292,7 +299,6 @@ try {
   await alice.keyboard.type("Holiday");
   await alice.waitForFunction(() => document.querySelector(".editor .headerbar .title strong")?.textContent === "Holiday", { timeout: 5000 });
   check(await alice.$(".cm-attachment img") !== null, "“Add a title” puts a title above a leading photo");
-  if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-attachments.png") });
   await alice.evaluate(() => [...document.querySelectorAll(".path .crumb")].find((b) => b.textContent === "Home").click());
   await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Home");
   await alice.evaluate(() => (location.hash = "#/all"));
@@ -342,7 +348,10 @@ try {
     await alice.tap("button[aria-label='Text styles']");
     await shot("phone-editing-styles");
     await alice.tap("button[aria-label='Text styles']");
-    await alice.evaluate(() => document.activeElement?.blur());
+    // The keyboard bar has its own way out, so Done at the top isn't the only one.
+    await alice.tap("button[aria-label='Hide keyboard']");
+    await alice.waitForSelector(".toolbar button");
+    check(await alice.evaluate(() => !document.querySelector(".cm-editor.cm-focused")), "the phone keyboard bar can hide the keyboard");
     await alice.click(".editor .back");
     await new Promise((r) => setTimeout(r, 500));
     await shot("phone-list");

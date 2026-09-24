@@ -3,6 +3,7 @@
   import { api } from "./lib/api";
   import Icon from "./lib/Icon.svelte";
   import Overlays from "./lib/Overlays.svelte";
+  import StatusPage from "./lib/StatusPage.svelte";
   import { app, closeDrawer, composeNote, goBack, readHash, startSession } from "./lib/store.svelte";
   import { fadeIn, media, page, standalone } from "./lib/ui.svelte";
   import Editor from "./Editor.svelte";
@@ -155,12 +156,9 @@
             </div>
           {/key}
         {:else}
-          <div class="status-page">
-            <div class="status-icon"><Icon name="note" size={48} /></div>
-            <h2>No Note Selected</h2>
-            <p class="dim">Pick a note from the list, or start a new one.</p>
+          <StatusPage icon="note" title="No Note Selected" description="Pick a note from the list, or start a new one." fill>
             <button class="suggested pill" onclick={() => composeNote()}><Icon name="compose" /> New Note</button>
-          </div>
+          </StatusPage>
         {/if}
       </div>
     {/each}
@@ -211,39 +209,9 @@
     display: none;
   }
 
-  /* AdwStatusPage */
-  .status-page {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 6px;
-    height: 100%;
-    padding: 24px;
-    text-align: center;
-    background: var(--view-bg);
-  }
 
-  .status-icon {
-    display: grid;
-    place-items: center;
-    width: 96px;
-    height: 96px;
-    margin-bottom: 12px;
-    border-radius: 50%;
-    background: var(--accent-soft);
-    color: var(--accent);
-  }
 
-  .status-page h2 {
-    margin: 0;
-    font-size: 1.4rem;
-    font-weight: 800;
-  }
 
-  .status-page p {
-    margin: 0 0 18px;
-  }
 
   .settings-layer {
     position: fixed;

@@ -9,7 +9,15 @@
     inline,
     onphoto,
     onrecord,
-  }: { view: EditorView; block: Block; inline: Set<Inline>; onphoto: () => void; onrecord: () => void } = $props();
+    ondone,
+  }: {
+    view: EditorView;
+    block: Block;
+    inline: Set<Inline>;
+    onphoto: () => void;
+    onrecord: () => void;
+    ondone: () => void;
+  } = $props();
 
   const styles: [Block, string][] = [
     ["title", "Title"],
@@ -17,10 +25,10 @@
     ["subheading", "Subheading"],
     ["body", "Body"],
   ];
-  const marks: [Inline, string, string][] = [
-    ["bold", "B", "Bold"],
-    ["italic", "I", "Italic"],
-    ["strike", "S", "Strikethrough"],
+  const marks: [Inline, "bold" | "italic" | "strikethrough", string][] = [
+    ["bold", "bold", "Bold"],
+    ["italic", "italic", "Italic"],
+    ["strike", "strikethrough", "Strikethrough"],
   ];
   const lists: [Block, "checklist" | "bullets" | "numbers", string][] = [
     ["check", "checklist", "Checklist"],
@@ -35,8 +43,8 @@
 </script>
 
 <!--
-  Class hints for the phone layout: .main shows in the everyday row, .extra only
-  while "Aa" is open. Desktop shows everything except the Aa toggle.
+  Class hints for the compact layout: .main shows in the everyday row, .extra only
+  while "Aa" is open. With room for everything, all show except the Aa toggle.
 -->
 <div class="bar" class:styles-open={stylesOpen} role="toolbar" aria-label="Formatting" tabindex="-1" onmousedown={keep} onpointerdown={keep}>
   <button class="flat icon aa main extra" class:active={stylesOpen} aria-label="Text styles" aria-expanded={stylesOpen} onclick={() => (stylesOpen = !stylesOpen)}>
@@ -48,9 +56,9 @@
   {/each}
   <span class="sep"></span>
 
-  {#each marks as [m, glyph, label] (m)}
+  {#each marks as [m, icon, label] (m)}
     <button class="flat icon mark-{m}" class:main={m !== "strike"} class:extra={m === "strike"} class:active={inline.has(m)} title={label} aria-label={label} aria-pressed={inline.has(m)} onclick={() => toggleInline(view, m)}>
-      {glyph}
+      <Icon name={icon} />
     </button>
   {/each}
   <button class="flat icon extra" class:active={inline.has("code")} title="Code" aria-label="Code" aria-pressed={inline.has("code")} onclick={() => toggleInline(view, "code")}>
@@ -70,6 +78,8 @@
 
   <button class="flat icon main attach" title="Add photo" aria-label="Add photo" onclick={onphoto}><Icon name="camera" /></button>
   <button class="flat icon main attach" title="Record voice memo" aria-label="Record voice memo" onclick={onrecord}><Icon name="mic" /></button>
+  <!-- Phone: finish typing from down here instead of reaching for Done at the top. -->
+  <button class="flat icon main extra done" title="Hide keyboard" aria-label="Hide keyboard" onclick={ondone}><Icon name="keyboardhide" /></button>
 </div>
 
 <style>
@@ -81,12 +91,16 @@
     padding: 4px;
     overflow-x: auto;
     scrollbar-width: none;
-    border-radius: 12px;
+    border-radius: var(--radius-md);
     background: var(--hover);
   }
 
   .bar button {
     min-height: 32px;
+  }
+
+  .bar button.icon {
+    min-width: 32px;
   }
 
   .bar button:active:not(:disabled) {
@@ -111,11 +125,9 @@
   .style-heading { font-weight: 700; }
   .style-subheading { font-weight: 600; }
 
-  .mark-bold { font-weight: 800; }
-  .mark-italic { font-style: italic; font-family: serif; font-size: 1.05rem; }
-  .mark-strike { text-decoration: line-through; font-weight: 400; }
 
-  .aa {
+  .aa,
+  .done {
     display: none;
   }
 
@@ -126,30 +138,20 @@
   }
 
   /*
-    Phone: one row of big, evenly spaced targets. Everyday row is
-    Aa · checklist · bullets · numbers · B · I · S; "Aa" swaps in styles, quote and code.
+    Not enough room for everything (phones, or a narrow editor): one row of everyday
+    buttons, Aa · checklist · bullets · B · I · photo · memo, and "Aa" swaps in the
+    text styles, numbers, strikethrough, code and quote.
   */
-  @media (max-width: 700px) {
+  @container format (max-width: 720px) {
     .bar {
       justify-content: space-between;
       gap: 0;
-      padding: 2px 4px;
       overflow-x: hidden;
-      border-radius: 0;
-      background: var(--headerbar-bg);
-    }
-
-    .bar .active {
-      background: var(--accent-soft);
-      box-shadow: none;
-    }
-
-    .bar > * {
-      animation: rise 160ms var(--ease-out) both;
     }
 
     .bar > * {
       display: none;
+      animation: rise 160ms var(--ease-out) both;
     }
 
     /* The styles row can be wider than a small phone; let it scroll instead of clipping. */
@@ -164,26 +166,53 @@
       display: inline-flex;
     }
 
-    .bar button {
-      min-width: 44px;
-      min-height: 44px;
-      font-size: 1.1rem;
-    }
-
-    .bar button :global(svg) {
-      width: 21px;
-      height: 21px;
-    }
-
-    .chip {
-      padding: 0 8px;
-      font-size: 0.95rem !important;
-    }
-
     /* Lists come right after Aa, marks after them, as in Apple Notes. */
     .aa { order: 0; }
     .list { order: 1; }
     .main[class*="mark-"] { order: 2; }
     .attach { order: 3; color: var(--accent); }
+    .done { order: 4; }
+  }
+
+  /* Only phones have an on-screen keyboard to hide. */
+  @media (min-width: 701px) {
+    .bar > .done {
+      display: none !important;
+    }
+  }
+
+  /* Phone: a full-width bar on the keyboard with big, evenly spaced targets. */
+  @media (max-width: 700px) {
+    .done {
+      color: var(--dim-fg);
+    }
+
+    .bar {
+      padding: 2px 4px;
+      border-radius: 0;
+      background: var(--headerbar-bg);
+    }
+
+    .bar .active {
+      background: var(--accent-soft);
+      box-shadow: none;
+    }
+
+    .bar button,
+    .bar button.icon {
+      min-width: 44px;
+      min-height: 44px;
+      font-size: var(--text-lg);
+    }
+
+    .bar button :global(svg) {
+      width: var(--icon-touch);
+      height: var(--icon-touch);
+    }
+
+    .chip {
+      padding: 0 8px;
+      font-size: var(--text-sm) !important;
+    }
   }
 </style>

@@ -65,7 +65,7 @@
   h1 {
     margin: 0 0 12px;
     text-align: center;
-    font-size: 1.8rem;
+    font-size: var(--text-display);
   }
 
   button {

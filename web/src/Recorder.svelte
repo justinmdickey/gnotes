@@ -173,7 +173,7 @@
   .levels span {
     flex: 1;
     height: 100%;
-    border-radius: 3px;
+    border-radius: var(--radius-sm);
     background: var(--accent-bg);
     transform-origin: center;
     transition: transform 80ms linear;
@@ -196,13 +196,13 @@
   .square {
     width: 26px;
     height: 26px;
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     background: #fff;
   }
 
   .hint {
     margin: 0;
-    font-size: 0.9rem;
+    font-size: var(--text-sm);
   }
 
   p {

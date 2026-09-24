@@ -51,7 +51,7 @@
     max-width: calc(100vw - 32px);
     min-height: 44px;
     padding: 6px 6px 6px 18px;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     background: rgb(40 40 44 / 96%);
     color: #fff;
     box-shadow: 0 6px 24px rgb(0 0 0 / 30%);
@@ -65,7 +65,7 @@
 
   .action {
     min-height: 32px;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     color: #99c1f1;
   }
 

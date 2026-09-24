@@ -95,7 +95,7 @@
 
   h2 {
     margin: 0 0 18px;
-    font-size: 1.2rem;
+    font-size: var(--text-lg);
     font-weight: 800;
     text-align: center;
   }
@@ -131,7 +131,7 @@
       width: 36px;
       height: 5px;
       margin: 8px auto 0;
-      border-radius: 3px;
+      border-radius: var(--radius-sm);
       background: var(--border);
     }
 

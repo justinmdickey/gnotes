@@ -159,13 +159,13 @@
   <div class="scroll" use:scrollEdge>
     <div class="column">
       <div class="profile">
-        <span class="avatar big {colorFor(app.user?.id ?? '')}">{app.user?.display_name.slice(0, 1).toUpperCase()}</span>
+        <span class="avatar large {colorFor(app.user?.id ?? '')}">{app.user?.display_name.slice(0, 1).toUpperCase()}</span>
         <strong>{savedName}</strong>
         <span class="dim">@{app.user?.username}{#if app.user?.is_admin}&nbsp;· Admin{/if}</span>
       </div>
       {#if error && !changingPassword && !resetting}<p class="error">{error}</p>{/if}
 
-      <h2>Account</h2>
+      <h2 class="group-title">Account</h2>
       <ul class="boxed">
         <li>
           <form class="row-form" onsubmit={saveName}>
@@ -184,7 +184,7 @@
         </li>
       </ul>
 
-      <h2>Devices</h2>
+      <h2 class="group-title">Devices</h2>
       <ul class="boxed">
         <li>
           <span class="label">Other devices<span class="dim sub">Sign out everywhere except here, e.g. a lost phone</span></span>
@@ -197,7 +197,7 @@
       </ul>
 
       {#if app.user?.is_admin}
-        <h2>People</h2>
+        <h2 class="group-title">People</h2>
         <ul class="boxed">
           {#each users as u (u.id)}
             <li class:disabled={u.disabled}>
@@ -253,7 +253,7 @@
         </ul>
 
         {#if whisper}
-          <h2>Speech-to-Text</h2>
+          <h2 class="group-title">Speech-to-Text</h2>
           <form class="boxed stt" onsubmit={saveWhisper}>
             <p class="dim explain">
               Voice memos are sent here to be transcribed. Any OpenAI-compatible service works, such as faster-whisper-server
@@ -299,7 +299,7 @@
         {/if}
 
         {#if invites.length}
-          <h2>Unused Invites</h2>
+          <h2 class="group-title">Unused Invites</h2>
           <ul class="boxed">
             {#each invites as inv (inv.id)}
               <li>
@@ -361,7 +361,7 @@
   }
 
   .heading {
-    font-size: 1rem;
+    font-size: var(--text-md);
   }
 
   .profile {
@@ -375,13 +375,10 @@
 
   .profile strong {
     margin-top: 10px;
-    font-size: 1.3rem;
+    font-size: var(--text-xl);
   }
 
-  .avatar.big {
-    width: 76px;
-    height: 76px;
-    font-size: 2rem;
+  .avatar.large {
     box-shadow: var(--shadow-md);
   }
 
@@ -397,11 +394,8 @@
     padding: 12px 16px calc(32px + env(safe-area-inset-bottom));
   }
 
-  h2 {
-    margin: 26px 6px 8px;
-    font-size: 0.82rem;
-    font-weight: 800;
-    color: var(--dim-fg);
+  .group-title {
+    margin-top: 26px;
   }
 
   .boxed {
@@ -438,7 +432,7 @@
   }
 
   .sub {
-    font-size: 0.85rem;
+    font-size: var(--text-sm);
   }
 
   .value {
@@ -455,7 +449,7 @@
 
   .explain {
     margin: 0 4px 8px;
-    font-size: 0.88rem;
+    font-size: var(--text-sm);
     line-height: 1.45;
   }
 
@@ -500,7 +494,7 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    font-size: 0.88rem;
+    font-size: var(--text-sm);
     color: var(--dim-fg);
   }
 
@@ -538,7 +532,7 @@
 
     .field span {
       width: 100%;
-      font-size: 0.85rem;
+      font-size: var(--text-sm);
       color: var(--dim-fg);
     }
   }
@@ -589,7 +583,7 @@
   .link {
     flex: 1;
     min-width: 0;
-    font-size: 0.85rem;
+    font-size: var(--text-sm);
   }
 
   .stack {

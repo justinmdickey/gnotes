@@ -14,6 +14,7 @@
   import { livePreview } from "./lib/livePreview";
   import { sync } from "./lib/sync";
   import Menu from "./lib/Menu.svelte";
+  import StatusPage from "./lib/StatusPage.svelte";
   import { app, colorFor, composeNote, goBack, navigate, trashNote, viewTitle } from "./lib/store.svelte";
   import { bloom, media, scrollEdge } from "./lib/ui.svelte";
   import { fly } from "svelte/transition";
@@ -321,7 +322,7 @@
       <div class="title"><strong>{note?.title || "New Note"}</strong></div>
       <div class="peers">
         {#each peers as peer (peer.name)}
-          <span class="avatar {peer.color}" title="{peer.name} is here" transition:bloom>{peer.name.slice(0, 1).toUpperCase()}</span>
+          <span class="avatar small {peer.color}" title="{peer.name} is here" transition:bloom>{peer.name.slice(0, 1).toUpperCase()}</span>
         {/each}
       </div>
       {#if role === "viewer"}<span class="badge">View only</span>{/if}
@@ -337,17 +338,21 @@
 
     {#if canEdit && view}
       <div class="format" style:bottom="{keyboard}px" bind:offsetHeight={formatHeight}>
-        <FormatBar {view} {block} {inline} onphoto={pickPhoto} onrecord={startRecording} />
+        <FormatBar {view} {block} {inline} onphoto={pickPhoto} onrecord={startRecording} ondone={() => view?.contentDOM.blur()} />
       </div>
     {/if}
   </div>
 
   {#if lost}
     <div class="lost">
-      <div class="lost-icon"><Icon name={lost === "revoked" ? "people" : "trash"} size={36} /></div>
-      <strong>{lost === "revoked" ? "No Longer Shared" : "Note Not Found"}</strong>
-      <p class="dim">{lost === "revoked" ? "You no longer have access to this note." : "This note doesn't exist or was moved to the trash."}</p>
-      <button class="pill" onclick={goBack}>Back to Notes</button>
+      <StatusPage
+        icon={lost === "revoked" ? "people" : "trash"}
+        title={lost === "revoked" ? "No Longer Shared" : "Note Not Found"}
+        description={lost === "revoked" ? "You no longer have access to this note." : "This note doesn't exist or was moved to the trash."}
+        tone="neutral"
+      >
+        <button class="pill" onclick={goBack}>Back to Notes</button>
+      </StatusPage>
     </div>
   {:else if !loaded}
     <div class="loading dim"><span class="spinner"></span>{app.status === "online" ? "Opening…" : "Waiting for the server…"}</div>
@@ -427,7 +432,7 @@
   .done {
     min-height: 34px !important;
     padding: 0 16px;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
   }
 
   .share {
@@ -451,13 +456,13 @@
     min-height: 54px;
     padding: 4px 0;
     color: var(--accent);
-    font-size: 0.75rem;
+    font-size: var(--text-xs);
     font-weight: 600;
   }
 
   .tool :global(svg) {
-    width: 22px;
-    height: 22px;
+    width: var(--icon-touch);
+    height: var(--icon-touch);
   }
 
   .peers {
@@ -466,9 +471,6 @@
   }
 
   .peers .avatar {
-    width: 28px;
-    height: 28px;
-    font-size: 0.8rem;
     box-shadow: 0 0 0 2px var(--view-bg);
   }
 
@@ -479,16 +481,17 @@
   .badge {
     margin: 0 6px;
     padding: 3px 10px;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     background: var(--hover);
     color: var(--dim-fg);
-    font-size: 0.8rem;
+    font-size: var(--text-xs);
     font-weight: 700;
     white-space: nowrap;
   }
 
   /* Wide: the formatting toolbar is a soft rounded strip under the headerbar. */
   .format {
+    container: format / inline-size;
     display: flex;
     justify-content: center;
     padding: 0 12px 8px;
@@ -503,34 +506,9 @@
     animation: rise 300ms var(--ease-out) 150ms both;
   }
 
-  .lost {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 4px;
-    padding: 64px 24px 0;
-    text-align: center;
-    animation: rise 260ms var(--ease-out) both;
-  }
 
-  .lost-icon {
-    display: grid;
-    place-items: center;
-    width: 72px;
-    height: 72px;
-    margin-bottom: 10px;
-    border-radius: 50%;
-    background: var(--hover);
-    color: var(--dim-fg);
-  }
 
-  .lost strong {
-    font-size: 1.15rem;
-  }
 
-  .lost p {
-    margin: 0 0 16px;
-  }
 
   .scroll {
     flex: 1;
@@ -560,11 +538,11 @@
     gap: 10px;
     padding: 8px 16px;
     translate: -50% 0;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     background: var(--popover-bg);
     box-shadow: var(--shadow-md);
     font-weight: 600;
-    font-size: 0.9rem;
+    font-size: var(--text-sm);
   }
 
   .adding .spinner {
@@ -584,9 +562,9 @@
     width: fit-content;
     margin-bottom: 8px;
     padding: 2px 12px;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     background: var(--hover);
-    font-size: 0.9rem;
+    font-size: var(--text-sm);
     font-weight: 600;
     cursor: pointer;
     pointer-events: auto;
@@ -595,7 +573,7 @@
   /* Photos and voice memos embedded in the text. */
   .page :global(.cm-embed-line) {
     padding: 6px 0 !important;
-    font-size: 1rem !important;
+    font-size: var(--text-md) !important;
     font-weight: 400 !important;
   }
 
@@ -603,7 +581,7 @@
     display: block;
     width: fit-content;
     max-width: 100%;
-    border-radius: 12px;
+    border-radius: var(--radius-md);
     cursor: default;
     animation: rise 220ms var(--ease-out) both;
   }
@@ -625,14 +603,14 @@
     padding: 12px 16px;
     background: var(--hover);
     color: var(--dim-fg);
-    font-size: 0.9rem;
+    font-size: var(--text-sm);
   }
 
   .page :global(.cm-attachment img) {
     display: block;
     max-width: 100%;
     max-height: 70vh;
-    border-radius: 12px;
+    border-radius: var(--radius-md);
     box-shadow: 0 0 0 1px var(--border);
     cursor: zoom-in;
   }
@@ -643,7 +621,7 @@
     gap: 12px;
     width: min(100vw - 48px, 380px);
     padding: 10px 14px 10px 10px;
-    border-radius: 14px;
+    border-radius: var(--radius-md);
     background: var(--card-bg);
     box-shadow: var(--shadow-sm), 0 0 0 1px var(--border);
     user-select: none;
@@ -660,26 +638,6 @@
     color: #fff;
   }
 
-  /* Play triangle, or pause bars while playing. */
-  .page :global(.cm-audio-play::before) {
-    content: "";
-    width: 0;
-    height: 0;
-    margin-left: 3px;
-    border-style: solid;
-    border-width: 7px 0 7px 12px;
-    border-color: transparent transparent transparent currentColor;
-  }
-
-  .page :global(.cm-audio.playing .cm-audio-play::before) {
-    width: 12px;
-    height: 14px;
-    margin-left: 0;
-    border: none;
-    border-left: 4px solid currentColor;
-    border-right: 4px solid currentColor;
-  }
-
   .page :global(.cm-audio-body) {
     flex: 1;
     min-width: 0;
@@ -690,13 +648,13 @@
 
   .page :global(.cm-audio-title) {
     font-weight: 700;
-    font-size: 0.92rem;
+    font-size: var(--text-sm);
     line-height: 1.1;
   }
 
   .page :global(.cm-audio-bar) {
     height: 5px;
-    border-radius: 3px;
+    border-radius: var(--radius-sm);
     background: var(--active);
     cursor: pointer;
     overflow: hidden;
@@ -710,7 +668,7 @@
   }
 
   .page :global(.cm-audio-time) {
-    font-size: 0.85rem;
+    font-size: var(--text-sm);
     font-variant-numeric: tabular-nums;
     color: var(--dim-fg);
   }
@@ -729,7 +687,7 @@
     gap: 8px;
     width: 100%;
     padding-left: 52px;
-    font-size: 0.85rem;
+    font-size: var(--text-sm);
     color: var(--dim-fg);
   }
 
@@ -767,10 +725,10 @@
     min-height: 28px;
     margin: 20px 0 0 18px;
     padding: 0 12px 0 10px;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     background: var(--accent-soft);
     color: var(--accent);
-    font-size: 0.85rem;
+    font-size: var(--text-sm);
     font-weight: 700;
     max-width: calc(100% - 36px);
   }
@@ -789,7 +747,7 @@
   .page :global(.cm-editor) {
     background: transparent;
     color: var(--fg);
-    font-size: 1.05rem;
+    font-size: var(--text-lg);
   }
 
   .page :global(.cm-editor.cm-focused) {

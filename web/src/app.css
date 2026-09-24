@@ -25,8 +25,21 @@
   --destructive: #c01c28;
   --destructive-bg: #e01b24;
   --success: #26a269;
+  /* Type scale. */
+  --text-xs: 0.8rem;
+  --text-sm: 0.875rem;
+  --text-md: 1rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.45rem;
+  --text-display: 1.75rem;
+  /* Corners: small bits, buttons and entries, popovers and media, cards and dialogs, pills. */
+  --radius-sm: 7px;
   --radius: 9px;
+  --radius-md: 12px;
   --radius-lg: 15px;
+  --radius-pill: 999px;
+  /* Icons are 16px, or this size on touch toolbars and phone rows. */
+  --icon-touch: 20px;
   --shadow-sm: 0 1px 3px rgb(0 0 6 / 10%);
   --shadow-md: 0 2px 8px rgb(0 0 6 / 12%), 0 0 0 1px rgb(0 0 6 / 5%);
   --shadow-lg: 0 12px 40px rgb(0 0 6 / 22%), 0 0 0 1px rgb(0 0 6 / 6%);
@@ -180,7 +193,7 @@ button.circular {
 button.pill {
   min-height: 42px;
   padding: 0 22px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
 }
 
 button.suggested {
@@ -270,7 +283,7 @@ button:focus-visible {
   background: var(--user-color, var(--accent-bg));
   color: #fff;
   font-weight: 700;
-  font-size: 0.9rem;
+  font-size: var(--text-sm);
   user-select: none;
 }
 
@@ -344,10 +357,10 @@ button.fab {
   min-height: 52px;
   padding: 0 22px 0 18px;
   gap: 10px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--accent-bg);
   color: var(--accent-fg);
-  font-size: 1.02rem;
+  font-size: var(--text-lg);
   box-shadow: 0 1px 3px rgb(0 0 6 / 25%);
   animation: rise 260ms var(--ease-spring) both;
 }
@@ -358,8 +371,8 @@ button.fab:active:not(:disabled) {
 }
 
 button.fab svg {
-  width: 20px;
-  height: 20px;
+  width: var(--icon-touch);
+  height: var(--icon-touch);
 }
 
 /* A GTK headerbar. Its divider shows once content scrolls under it. */
@@ -397,7 +410,7 @@ button.fab svg {
 }
 
 .headerbar .title span {
-  font-size: 0.82rem;
+  font-size: var(--text-xs);
   color: var(--dim-fg);
 }
 
@@ -410,8 +423,8 @@ button.back {
 }
 
 button.back svg {
-  width: 20px;
-  height: 20px;
+  width: var(--icon-touch);
+  height: var(--icon-touch);
 }
 
 @media (max-width: 700px) {
@@ -450,4 +463,40 @@ button.back svg {
   max-height: 100dvh;
   object-fit: contain;
   transition: transform 300ms var(--ease-out);
+}
+
+/* Icons from lib/icons.ts. Styled here so hand-built DOM matches <Icon>. */
+svg.icon {
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+svg.icon.filled {
+  fill: currentColor;
+  stroke: none;
+}
+
+/* Avatars: 32px in lists, small in headerbars and presence, large on the profile. */
+.avatar.small {
+  width: 28px;
+  height: 28px;
+  font-size: var(--text-xs);
+}
+
+.avatar.large {
+  width: 76px;
+  height: 76px;
+  font-size: 2rem;
+}
+
+/* The small dim heading over a group of rows, like an AdwPreferencesGroup title. */
+.group-title {
+  margin: 20px 6px 8px;
+  font-size: var(--text-xs);
+  font-weight: 800;
+  color: var(--dim-fg);
 }

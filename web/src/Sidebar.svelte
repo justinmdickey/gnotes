@@ -67,7 +67,7 @@
     <div class="title"><strong class="brand"><img src="/icon.svg" alt="" width="22" height="22" />Gnotes</strong></div>
     <!-- Your avatar opens account settings, as in most phone apps. -->
     <button class="flat icon circular account" title="Account and settings" aria-label="Settings" onclick={openSettings}>
-      <span class="avatar {colorFor(app.user?.id ?? '')}">{app.user?.display_name.slice(0, 1).toUpperCase()}</span>
+      <span class="avatar small {colorFor(app.user?.id ?? '')}">{app.user?.display_name.slice(0, 1).toUpperCase()}</span>
     </button>
   </header>
 
@@ -76,7 +76,7 @@
       {@render row({ kind: "all" }, "note", "All Notes")}
     </ul>
 
-    <h3 class="section">Notebooks</h3>
+    <h3 class="group-title">Notebooks</h3>
     <ul class="group">
       {#each ownRoots as nb (nb.id)}
         {@render notebookRows(nb, 0)}
@@ -89,7 +89,7 @@
     </ul>
 
     {#if sharedRoots.length || hasSharedNotes}
-      <h3 class="section">Shared with Me</h3>
+      <h3 class="group-title">Shared with Me</h3>
       <ul class="group">
         {#if hasSharedNotes}
           {@render row({ kind: "shared-notes" }, "people", "Shared Notes")}
@@ -135,12 +135,7 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    font-size: 1.05rem;
-  }
-
-  .avatar {
-    width: 30px;
-    height: 30px;
+    font-size: var(--text-lg);
   }
 
   .scroll {
@@ -196,15 +191,15 @@
   }
 
   .owner {
-    font-size: 0.8rem;
+    font-size: var(--text-xs);
     font-weight: 400;
   }
 
   .count {
     min-width: 22px;
     padding: 1px 7px;
-    border-radius: 999px;
-    font-size: 0.78rem;
+    border-radius: var(--radius-pill);
+    font-size: var(--text-xs);
     font-weight: 700;
     color: var(--dim-fg);
     text-align: center;
@@ -215,11 +210,9 @@
     color: var(--accent);
   }
 
-  .section {
-    margin: 18px 12px 6px;
-    font-size: 0.82rem;
-    font-weight: 800;
-    color: var(--dim-fg);
+  /* Desktop sidebar rows are inset 12px; line the headings up with their text. */
+  .group-title {
+    margin-left: 12px;
   }
 
   form input {
@@ -232,7 +225,7 @@
     gap: 8px;
     padding: 10px 18px;
     padding-bottom: max(10px, env(safe-area-inset-bottom));
-    font-size: 0.82rem;
+    font-size: var(--text-xs);
   }
 
   .dot {
@@ -270,7 +263,7 @@
     }
 
     .brand {
-      font-size: 1.15rem;
+      font-size: var(--text-lg);
     }
 
     .scroll {
@@ -288,9 +281,6 @@
       border-top: 1px solid var(--border);
     }
 
-    .group + .section {
-      margin-top: 22px;
-    }
 
     .group:first-child {
       margin-top: 8px;
@@ -300,12 +290,12 @@
       min-height: 54px;
       padding-right: 8px;
       border-radius: 0;
-      font-size: 1.05rem;
+      font-size: var(--text-lg);
     }
 
     .row :global(svg) {
-      width: 20px;
-      height: 20px;
+      width: var(--icon-touch);
+      height: var(--icon-touch);
       color: var(--accent);
     }
 
@@ -320,7 +310,7 @@
     }
 
     .count {
-      font-size: 0.9rem;
+      font-size: var(--text-sm);
       font-weight: 400;
     }
 
@@ -335,7 +325,7 @@
       color: var(--dim-fg) !important;
     }
 
-    .section {
+    .group-title {
       margin-left: 6px;
     }
 

@@ -67,7 +67,7 @@
 
 <Dialog title="Share “{name || 'New Note'}”" {onclose} wide>
   <section>
-    <h3>People with access</h3>
+    <h3 class="group-title">People with access</h3>
     <ul class="boxed">
       <li>
         <span class="avatar {colorFor(app.user?.id ?? '')}">{initial(app.user?.display_name ?? "")}</span>
@@ -92,7 +92,7 @@
 
   <section>
     <div class="add-head">
-      <h3>Add people</h3>
+      <h3 class="group-title">Add people</h3>
       <div class="segmented" class:right={role === "viewer"} role="radiogroup" aria-label="Access for new people">
         <span class="thumb" aria-hidden="true"></span>
         <button class:on={role === "editor"} role="radio" aria-checked={role === "editor"} onclick={() => (role = "editor")}>Can edit</button>
@@ -117,7 +117,7 @@
 
   {#if app.user?.is_admin}
     <section>
-      <h3>Someone new</h3>
+      <h3 class="group-title">Someone new</h3>
       {#if invite}
         <p class="dim hint">Send this link. It works once and expires in 7 days.</p>
         <div class="link-row">
@@ -146,10 +146,9 @@
     margin-top: 20px;
   }
 
-  h3 {
-    margin: 0 0 8px;
-    font-size: 0.95rem;
-    font-weight: 800;
+  /* Inside a dialog the groups sit closer together. */
+  .group-title {
+    margin: 0 4px 8px;
   }
 
   .boxed {
@@ -172,18 +171,6 @@
 
   .boxed li + li {
     border-top: 1px solid var(--border);
-  }
-
-  .avatar {
-    flex: none;
-    display: grid;
-    place-items: center;
-    width: 32px;
-    height: 32px;
-    border-radius: 50%;
-    background: var(--user-color, var(--accent));
-    color: #fff;
-    font-weight: 700;
   }
 
   .who {
@@ -230,7 +217,7 @@
     bottom: 3px;
     left: 3px;
     width: calc(50% - 3px);
-    border-radius: 7px;
+    border-radius: var(--radius-sm);
     background: var(--view-bg);
     box-shadow: 0 1px 3px rgb(0 0 6 / 18%);
     transition: transform 240ms var(--ease-out);
@@ -246,7 +233,7 @@
     padding: 0 12px;
     background: transparent;
     font-weight: 500;
-    font-size: 0.9rem;
+    font-size: var(--text-sm);
   }
 
   .segmented button:active:not(:disabled) {
@@ -275,7 +262,7 @@
 
   .hint {
     margin: 0 0 8px;
-    font-size: 0.9rem;
+    font-size: var(--text-sm);
   }
 
   .link-row {
@@ -286,7 +273,7 @@
   .link {
     flex: 1;
     min-width: 0;
-    font-size: 0.85rem;
+    font-size: var(--text-sm);
   }
 
   .error {
