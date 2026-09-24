@@ -426,6 +426,15 @@ try {
     await alice.evaluate((id) => (location.hash = `#/nb/${id}`), deepest);
     await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Pocket");
     await shot("phone-deep-dark");
+    // The + in the tab bar makes a note in one tap, inside the folder you're in.
+    const inPocket = await alice.evaluate(() => document.querySelectorAll(".note").length);
+    await alice.tap(".tabbar .compose");
+    await alice.waitForSelector(".pane.editor .cm-content[contenteditable=true]");
+    await alice.keyboard.type("Lint");
+    await alice.waitForFunction(() => document.querySelector(".notebook-chip")?.textContent.includes("Pocket"));
+    check(inPocket === 0, "the tab bar + makes a note in the current folder");
+    await alice.evaluate(() => document.activeElement?.blur());
+    await shot("phone-compose-dark");
     // Account is a tab like the others: the tab bar stays and there's no Back.
     await alice.evaluate(() => [...document.querySelectorAll(".tabbar button")].find((b) => b.textContent.includes("Account")).click());
     await alice.waitForFunction(() => document.querySelector(".tab-page h1")?.textContent === "Account");

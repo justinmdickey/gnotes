@@ -187,7 +187,7 @@
       <strong>{title}</strong>
     </div>
     {#if canMakeFolder}
-      <button class="flat icon" title="New notebook" aria-label="New notebook" onclick={() => (creatingFolder = true)}>
+      <button class="flat icon new-folder" title="New notebook" aria-label="New notebook" onclick={() => (creatingFolder = true)}>
         <Icon name="newfolder" />
       </button>
     {/if}
@@ -200,7 +200,8 @@
       <Menu label="Notebook menu" items={menuItems} />
     {/if}
     {#if canCreate}
-      <button class="suggested icon new" title="New note" aria-label="New note" onclick={() => composeNote()}>
+      <!-- Phones make notes from the + in the tab bar. -->
+      <button class="suggested icon new wide-only" title="New note" aria-label="New note" onclick={() => composeNote()}>
         <Icon name="compose" />
       </button>
     {/if}
@@ -557,6 +558,17 @@
 
     .search input {
       min-height: 42px;
+    }
+
+    /* Touch-sized, since this is the one place to make a notebook on a phone. */
+    .headerbar .new-folder {
+      min-width: 48px;
+      min-height: 44px;
+    }
+
+    .new-folder :global(svg) {
+      width: 24px;
+      height: 24px;
     }
 
 

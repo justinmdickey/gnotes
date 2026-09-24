@@ -329,10 +329,6 @@
             <Icon name="people" /><span>Share</span>
           </button>
         {/if}
-        <!-- Wide screens already have New Note over the list. -->
-        <button class="flat icon phone-only" title="New note" aria-label="New note" onclick={() => composeNote()}>
-          <Icon name="compose" />
-        </button>
         <Menu
           label="Note menu"
           items={[

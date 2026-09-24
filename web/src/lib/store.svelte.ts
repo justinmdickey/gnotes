@@ -40,10 +40,16 @@ export function viewTitle(view: View, tree: Tree): string {
 
 /** Apple Notes-style compose: make the note and drop straight into it. */
 export async function composeNote(view: View = app.view) {
+  // Where you can't add notes (Shared, a view-only notebook), a new note goes in the top folder.
+  if (view.kind === "shared-notes") view = { kind: "root" };
+  if (view.kind === "notebook") {
+    const id = view.id;
+    if (app.tree.notebooks.find((n) => n.id === id)?.role === "viewer") view = { kind: "root" };
+  }
   const notebook = view.kind === "notebook" ? view.id : null;
   const { id } = await api.createNote(notebook);
   app.freshNote = id;
-  navigate(view.kind === "shared-notes" ? { kind: "root" } : view, id);
+  navigate(view, id);
   void refreshTree();
 }
 

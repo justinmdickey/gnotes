@@ -1,6 +1,6 @@
 <script lang="ts">
   import Icon, { type IconName } from "./lib/Icon.svelte";
-  import { app, colorFor, navigate, openSettings, type View } from "./lib/store.svelte";
+  import { app, colorFor, composeNote, navigate, openSettings, type View } from "./lib/store.svelte";
 
   /** Which tab the current screen belongs to. Shared notebooks count as Shared, wherever you are in them. */
   const active = $derived.by(() => {
@@ -12,16 +12,17 @@
     return "notes";
   });
 
-  const tabs: { key: string; label: string; icon: IconName; view: View }[] = [
+  type Tab = { key: string; label: string; icon: IconName; view: View };
+  const left: Tab[] = [
     { key: "notes", label: "Notes", icon: "folder", view: { kind: "root" } },
     { key: "recent", label: "Recent", icon: "clock", view: { kind: "all" } },
-    { key: "shared", label: "Shared", icon: "people", view: { kind: "shared-notes" } },
   ];
+  const right: Tab[] = [{ key: "shared", label: "Shared", icon: "people", view: { kind: "shared-notes" } }];
 </script>
 
 <!-- The phone's one bottom bar, the same on every screen. Tapping a tab goes to its top. -->
 <nav class="tabbar" aria-label="Sections">
-  {#each tabs as tab (tab.key)}
+  {#snippet tabButton(tab: Tab)}
     <button
       class="flat tab"
       class:on={active === tab.key}
@@ -30,7 +31,15 @@
     >
       <span class="ind"><Icon name={tab.icon} /></span><span>{tab.label}</span>
     </button>
-  {/each}
+  {/snippet}
+  {#each left as tab (tab.key)}{@render tabButton(tab)}{/each}
+  <!-- One tap, a new note, in the folder you're in. -->
+  <div class="compose-slot">
+    <button class="suggested compose" title="New note" aria-label="New note" onclick={() => composeNote()}>
+      <Icon name="plus" size={26} />
+    </button>
+  </div>
+  {#each right as tab (tab.key)}{@render tabButton(tab)}{/each}
   <button class="flat tab" class:on={active === "account"} onclick={openSettings}>
     <span class="ind"><span class="avatar tiny {colorFor(app.user?.id ?? '')}">{app.user?.display_name.slice(0, 1).toUpperCase()}</span></span>
     <span>Account</span>
@@ -63,6 +72,24 @@
   .tab :global(svg) {
     width: var(--icon-touch);
     height: var(--icon-touch);
+  }
+
+  .compose-slot {
+    flex: 1;
+    display: grid;
+    place-items: center;
+  }
+
+  .compose {
+    width: 56px;
+    height: 44px;
+    min-height: 0;
+    padding: 0;
+    border-radius: var(--radius-lg);
+  }
+
+  .compose :global(svg) {
+    stroke-width: 2px;
   }
 
   .ind {
