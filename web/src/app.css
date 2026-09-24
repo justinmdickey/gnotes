@@ -1,5 +1,7 @@
 /* Adwaita-like tokens; dark mode follows the system. */
 :root {
+  /* Set from main.ts; the env() value is the fallback before it runs. */
+  --safe-top: env(safe-area-inset-top);
   color-scheme: light dark;
   --window-bg: #fafafb;
   --view-bg: #ffffff;
@@ -384,7 +386,7 @@ button.fab svg {
   gap: 4px;
   min-height: 50px;
   padding: 0 6px;
-  padding-top: env(safe-area-inset-top);
+  padding-top: var(--safe-top);
   box-shadow: 0 1px 0 transparent;
   transition: box-shadow var(--fast) ease;
 }
@@ -448,7 +450,7 @@ button.back svg {
   z-index: 200;
   display: grid;
   place-items: center;
-  padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+  padding: var(--safe-top) 0 env(safe-area-inset-bottom);
   background: rgb(0 0 0 / 0%);
   cursor: zoom-out;
   transition: background 260ms ease;

@@ -532,7 +532,7 @@
 
   .adding {
     position: fixed;
-    top: calc(64px + env(safe-area-inset-top));
+    top: calc(64px + var(--safe-top));
     left: 50%;
     z-index: 20;
     display: flex;

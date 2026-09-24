@@ -120,7 +120,7 @@
     .panel,
     .panel.wide {
       width: 100%;
-      max-height: calc(100dvh - 48px - env(safe-area-inset-top));
+      max-height: calc(100dvh - 48px - var(--safe-top));
       border-radius: 18px 18px 0 0;
       padding-bottom: env(safe-area-inset-bottom);
     }
