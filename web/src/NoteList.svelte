@@ -10,6 +10,7 @@
   import { media, scrollEdge } from "./lib/ui.svelte";
   import FolderList from "./FolderList.svelte";
   import MoveDialog from "./MoveDialog.svelte";
+  import NewNotebookDialog from "./NewNotebookDialog.svelte";
   import ShareDialog from "./ShareDialog.svelte";
 
   const notebook = $derived(
@@ -34,7 +35,6 @@
     }
     return out;
   });
-  const heroIcon = $derived(app.view.kind === "notebook" ? "folder" : app.view.kind === "shared-notes" ? "people" : "note");
   const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
   const subCount = $derived(notebook ? app.tree.notebooks.filter((n) => n.parent_id === notebook.id).length : 0);
   const countLabel = $derived(
@@ -46,7 +46,7 @@
     notebook && notebook.role !== "owner"
       ? `${notebook.owner}'s notebook · ${notebook.role === "viewer" ? "view only" : "can edit"} · ${countLabel}`
       : notebook
-        ? `Notebook · ${countLabel}`
+        ? countLabel
         : countLabel,
   );
   /** Sub-notebooks, shown as folders above the notes. */
@@ -80,6 +80,7 @@
     return { head: path.slice(0, 1), hidden: path.slice(1, -2), tail: path.slice(-2) };
   });
   let moving = $state(false);
+  let creatingFolder = $state(false);
   let renaming = $state(false);
   let newName = $state("");
   let sharing = $state(false);
@@ -134,12 +135,18 @@
     <button class="flat icon tablet-only" title="Show notebooks" aria-label="Show notebooks" onclick={() => (app.drawer = true)}>
       <Icon name="sidebar" />
     </button>
-    <button class="flat back phone-only" onclick={goBack}>
-      <Icon name="back" /><span>{backLabel}</span>
+    <!-- Just a chevron: the path under the headerbar already names where it goes. -->
+    <button class="flat icon circular back-icon phone-only" title="Back to {backLabel}" aria-label="Back to {backLabel}" onclick={goBack}>
+      <Icon name="back" />
     </button>
     <div class="title" class:shown={compact} aria-hidden={!compact}>
       <strong>{title}</strong>
     </div>
+    {#if canEdit}
+      <button class="flat icon" title="New notebook inside" aria-label="New notebook" onclick={() => (creatingFolder = true)}>
+        <Icon name="newfolder" />
+      </button>
+    {/if}
     {#if notebook?.role === "owner"}
       <button class="flat accent share" title="Share this notebook" onclick={() => (sharing = true)}>
         <Icon name="people" /><span>Share</span>
@@ -184,12 +191,9 @@
             {#each crumbs.tail as nb (nb.id)}{@render crumb(nb)}{/each}
           </nav>
         {/if}
-        <div class="hero-row">
-          <span class="tile" class:folder={app.view.kind === "notebook"}><Icon name={heroIcon} size={22} /></span>
-          <div class="hero-text">
-            <h1>{title}</h1>
-            <span class="dim">{subtitle}</span>
-          </div>
+        <div class="hero-text">
+          <h1>{title}</h1>
+          <span class="dim">{subtitle}</span>
         </div>
       </div>
     {/key}
@@ -205,7 +209,7 @@
     <!-- A new list for each view; only adds and removes within one view animate. -->
     {#key app.view.kind === "notebook" ? app.view.id : app.view.kind}
     {#if notebook}
-      <FolderList {folders} parent={notebook.id} canCreate={canEdit && !query} />
+      <FolderList {folders} />
     {/if}
     {#each groups as group (group.label)}
       <h3 class="group-title">{group.label}</h3>
@@ -228,9 +232,7 @@
       {:else if query}
         <StatusPage icon="search" title="No Results" description="Nothing matches “{query}”." tone="neutral" />
       {:else if canCreate}
-        <StatusPage icon="note" title="No Notes Yet" description="Notes you write here show up in this list.">
-          <button class="suggested pill" onclick={() => composeNote()}><Icon name="compose" /> New Note</button>
-        </StatusPage>
+        <StatusPage icon="note" title="No Notes Yet" description="Notes and notebooks you make here show up in this list." />
       {:else}
         <StatusPage icon="note" title="No Notes Yet" description="Nothing has been shared here yet." tone="neutral" />
       {/if}
@@ -254,6 +256,10 @@
       <button class="suggested" type="submit" form="rename-notebook" disabled={!newName.trim()}>Rename</button>
     {/snippet}
   </Dialog>
+{/if}
+
+{#if creatingFolder && notebook}
+  <NewNotebookDialog parent={notebook.id} onclose={() => (creatingFolder = false)} />
 {/if}
 
 {#if moving && notebook}
@@ -360,28 +366,6 @@
     flex: none;
     display: flex;
     color: var(--dim-fg);
-  }
-
-  .hero-row {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-  }
-
-  .tile {
-    flex: none;
-    display: grid;
-    place-items: center;
-    width: 44px;
-    height: 44px;
-    border-radius: var(--radius-md);
-    background: var(--hover);
-    color: var(--dim-fg);
-  }
-
-  .tile.folder {
-    background: var(--accent-soft);
-    color: var(--accent);
   }
 
   .hero-text {
@@ -509,9 +493,10 @@
       text-align: center;
     }
 
-    /* Keep the title centered between the back button and the actions. */
-    .back {
-      max-width: 38%;
+    .back-icon :global(svg) {
+      width: var(--icon-touch);
+      height: var(--icon-touch);
+      color: var(--accent);
     }
 
     .scroll {

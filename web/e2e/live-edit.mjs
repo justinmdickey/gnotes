@@ -258,7 +258,7 @@ try {
   await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Kitchen");
   await alice.click(".hero .crumbs button.crumb:not(.root)");
   await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Home");
-  await alice.click(".pane.list .folder-row.add");
+  await alice.click(".pane.list header button[aria-label='New notebook']");
   await alice.type("#new-notebook input", "Garage");
   await alice.click("dialog button[form=new-notebook]");
   await closed(alice);
@@ -406,7 +406,7 @@ try {
     await new Promise((r) => setTimeout(r, 500));
     await shot("phone-list");
     await alice.emulateMediaFeatures([{ name: "prefers-color-scheme", value: "dark" }]);
-    await alice.click(".list .back");
+    await alice.click(".list .back-icon");
     await new Promise((r) => setTimeout(r, 500));
     await shot("phone-sidebar-dark");
     await alice.evaluate(() => [...document.querySelectorAll(".pane.sidebar .folder-row")].find((b) => b.textContent.includes("Home")).click());
@@ -414,7 +414,7 @@ try {
     await alice.evaluate(() => [...document.querySelectorAll(".pane.list .folder-row")].find((b) => b.textContent.includes("Kitchen")).click());
     await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Kitchen");
     await shot("phone-subfolder-dark");
-    await alice.click(".list .back");
+    await alice.click(".list .back-icon");
     await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Home");
     await shot("phone-folders-dark");
     await alice.evaluate((id) => (location.hash = `#/nb/${id}`), deepest);

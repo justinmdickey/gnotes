@@ -5,25 +5,15 @@
   import Icon from "./lib/Icon.svelte";
   import { app, navigate, notesFor } from "./lib/store.svelte";
   import { media } from "./lib/ui.svelte";
-  import NewNotebookDialog from "./NewNotebookDialog.svelte";
 
-  /**
-   * The notebooks in one place, top level or inside a notebook, with the same
-   * "New Notebook" row at the end. Every level looks and works the same.
-   */
-  let {
-    folders,
-    parent,
-    canCreate,
-    title = "Notebooks",
-  }: { folders: TreeNotebook[]; parent: string | null; canCreate: boolean; title?: string } = $props();
+  /** The notebooks in one place, top level or inside a notebook. Every level looks the same. */
+  let { folders, title = "Notebooks" }: { folders: TreeNotebook[]; title?: string } = $props();
 
-  let creating = $state(false);
   const inside = (id: string) => app.tree.notebooks.filter((n) => n.parent_id === id).length;
   const reveal = (node: Element) => slide(node, { duration: media.reduced ? 0 : 200, easing: cubicOut });
 </script>
 
-{#if folders.length || canCreate}
+{#if folders.length}
   <h3 class="group-title">{title}</h3>
   <ul class="boxed-list folders">
     {#each folders as nb (nb.id)}
@@ -38,18 +28,7 @@
         </button>
       </li>
     {/each}
-    {#if canCreate}
-      <li>
-        <button class="flat folder-row add" onclick={() => (creating = true)}>
-          <Icon name="newfolder" /><span class="name">New Notebook</span>
-        </button>
-      </li>
-    {/if}
   </ul>
-{/if}
-
-{#if creating}
-  <NewNotebookDialog {parent} onclose={() => (creating = false)} />
 {/if}
 
 <style>
@@ -74,10 +53,6 @@
 
   .folder-row > :global(svg:first-child) {
     flex: none;
-    color: var(--accent);
-  }
-
-  .add {
     color: var(--accent);
   }
 

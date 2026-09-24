@@ -86,6 +86,10 @@
 <nav>
   <header class="headerbar">
     <div class="title"><strong class="brand"><img src="/icon.svg" alt="" width="22" height="22" />Gnotes</strong></div>
+    <!-- New Notebook sits in the headerbar at every level, here and inside each notebook. -->
+    <button class="flat icon phone-only" title="New notebook" aria-label="New notebook" onclick={() => (creating = true)}>
+      <Icon name="newfolder" />
+    </button>
     <!-- Your avatar opens account settings, as in most phone apps. -->
     <button class="flat icon circular account" title="Account and settings" aria-label="Settings" onclick={openSettings}>
       <span class="avatar small {colorFor(app.user?.id ?? '')}">{app.user?.display_name.slice(0, 1).toUpperCase()}</span>
@@ -99,13 +103,13 @@
 
     {#if media.phone}
       <!-- The phone home is the top level of the same folder list every notebook shows. -->
-      <FolderList folders={ownRoots} parent={null} canCreate />
+      <FolderList folders={ownRoots} />
       {#if hasSharedNotes}
         <h3 class="group-title">Shared with Me</h3>
         <ul class="group">{@render row({ kind: "shared-notes" }, "people", "Shared Notes")}</ul>
       {/if}
       {#if sharedRoots.length}
-        <FolderList folders={sharedRoots} parent={null} canCreate={false} title={hasSharedNotes ? "Shared Notebooks" : "Shared with Me"} />
+        <FolderList folders={sharedRoots} title={hasSharedNotes ? "Shared Notebooks" : "Shared with Me"} />
       {/if}
     {:else}
       <h3 class="group-title">Notebooks</h3>
