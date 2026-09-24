@@ -27,8 +27,9 @@
   --destructive: #c01c28;
   --destructive-bg: #e01b24;
   --success: #26a269;
+  --warning: #e5a50a;
   /* The shared badge: Adwaita yellow, so shared things stand out from blue actions. */
-  --shared: #e5a50a;
+  --shared: var(--warning);
   /* Type scale. */
   --text-xs: 0.8rem;
   --text-sm: 0.875rem;
@@ -80,7 +81,7 @@
     --destructive: #ff7b63;
     --destructive-bg: #c01c28;
     --success: #8ff0a4;
-    --shared: #f6d32d;
+    --warning: #f6d32d;
     --shadow-md: 0 2px 8px rgb(0 0 0 / 35%), 0 0 0 1px rgb(255 255 255 / 6%);
     --shadow-lg: 0 12px 40px rgb(0 0 0 / 50%), 0 0 0 1px rgb(255 255 255 / 8%);
   }
@@ -442,7 +443,6 @@ button.back svg {
 button.back-icon svg {
   width: var(--icon-touch);
   height: var(--icon-touch);
-  color: var(--accent);
 }
 
 /* A small yellow person after a name: this item is shared. */
@@ -463,12 +463,21 @@ button.back span {
     min-height: 52px;
   }
 
+  /*
+    Headerbars on phones: every button is touch-sized and every icon the same size and
+    color. Blue is kept for the primary action and for where you are, never for plain tools.
+  */
   .headerbar button {
-    min-height: 40px;
+    min-height: 44px;
   }
 
   .headerbar button.icon {
-    min-width: 40px;
+    min-width: 44px;
+  }
+
+  .headerbar button svg.icon {
+    width: var(--icon-touch);
+    height: var(--icon-touch);
   }
 }
 

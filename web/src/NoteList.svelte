@@ -192,8 +192,8 @@
       </button>
     {/if}
     {#if notebook?.role === "owner"}
-      <button class="flat accent share" title="Share this notebook" onclick={() => (sharing = true)}>
-        <Icon name="share" /><span>Share</span>
+      <button class="flat share" class:icon={media.phone} title="Share this notebook" aria-label="Share" onclick={() => (sharing = true)}>
+        <Icon name="share" />{#if !media.phone}<span>Share</span>{/if}
       </button>
     {/if}
     {#if menuItems.length}
@@ -570,21 +570,6 @@
       min-height: 42px;
     }
 
-    /* Touch-sized, since this is the one place to make a notebook on a phone. */
-    .headerbar .new-folder {
-      min-width: 48px;
-      min-height: 44px;
-    }
-
-    .new-folder :global(svg) {
-      width: 24px;
-      height: 24px;
-    }
-
-
-    .share span {
-      display: none;
-    }
 
     .note {
       padding: 13px 16px;

@@ -325,8 +325,8 @@
         <button class="suggested done" onclick={() => view?.contentDOM.blur()} transition:bloom>Done</button>
       {:else if role && role !== "viewer"}
         {#if role === "owner"}
-          <button class="flat accent share" aria-label="Share" title="Share this note" onclick={() => (sharing = true)}>
-            <Icon name="share" /><span>Share</span>
+          <button class="flat share" class:icon={media.phone} aria-label="Share" title="Share this note" onclick={() => (sharing = true)}>
+            <Icon name="share" />{#if !media.phone}<span>Share</span>{/if}
           </button>
         {/if}
         <Menu

@@ -278,7 +278,7 @@
   }
 
   .dot.offline {
-    background: #e5a50a;
+    background: var(--warning);
   }
 
   @keyframes pulse {
