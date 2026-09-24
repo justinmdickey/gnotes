@@ -147,9 +147,16 @@ export function goBack() {
     if (history.state?.from !== undefined) return history.back();
     return navigate(null, null, true);
   }
-  const parent = app.noteId ? app.view : null;
+  const parent = app.noteId ? app.view : parentView(app.view);
   if (history.state?.from === hashFor(parent, null)) return history.back();
   navigate(parent, null, true);
+}
+
+/** The screen above a note list: a sub-notebook's parent, or home. */
+export function parentView(view: View): View | null {
+  if (view.kind !== "notebook") return null;
+  const parentId = app.tree.notebooks.find((n) => n.id === view.id)?.parent_id;
+  return parentId && app.tree.notebooks.some((n) => n.id === parentId) ? { kind: "notebook", id: parentId } : null;
 }
 
 /** Tablet: closes the pulled-out sidebar, leaving home for the list if that's where we were. */

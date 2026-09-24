@@ -3,7 +3,7 @@
   import Dialog from "./lib/Dialog.svelte";
   import Icon, { type IconName } from "./lib/Icon.svelte";
   import { app, colorFor, composeNote, navigate, notesFor, openSettings, type View } from "./lib/store.svelte";
-  import { scrollEdge } from "./lib/ui.svelte";
+  import { media, scrollEdge } from "./lib/ui.svelte";
 
   const count = (view: View) => notesFor(view, app.tree).length;
 
@@ -25,6 +25,24 @@
   const sharedRoots = $derived((byParent.get(null) ?? []).filter((n) => n.role !== "owner" && !hiddenShares.has(n.id)));
   const hasSharedNotes = $derived(app.tree.shared.some((s) => s.resource_type === "note" && !s.hidden));
 
+  /** Desktop: notebooks whose sub-notebooks are folded away. Remembered per browser. */
+  let collapsed = $state<Set<string>>(loadCollapsed());
+  function loadCollapsed() {
+    try {
+      return new Set<string>(JSON.parse(localStorage.getItem("gnotes.collapsed") ?? "[]"));
+    } catch {
+      return new Set<string>();
+    }
+  }
+  function toggle(id: string) {
+    const next = new Set(collapsed);
+    if (!next.delete(id)) next.add(id);
+    collapsed = next;
+    try {
+      localStorage.setItem("gnotes.collapsed", JSON.stringify([...next]));
+    } catch {}
+  }
+
   function isSelected(view: View) {
     return app.view.kind === view.kind && (view.kind !== "notebook" || (app.view as { id: string }).id === view.id);
   }
@@ -43,8 +61,8 @@
   }
 </script>
 
-{#snippet row(view: View, icon: IconName, label: string, owner = "", depth = 0)}
-  <li>
+{#snippet row(view: View, icon: IconName, label: string, owner = "", depth = 0, fold: string | null = null)}
+  <li class:foldable={fold}>
     <button class="row flat" class:selected={isSelected(view)} style:--depth={depth} onclick={() => navigate(view)}>
       <Icon name={icon} />
       <span class="label">{label}</span>
@@ -52,14 +70,29 @@
       <span class="count">{count(view)}</span>
       <span class="chevron phone-only"><Icon name="next" /></span>
     </button>
+    {#if fold}
+      <button
+        class="flat icon circular fold"
+        class:closed={collapsed.has(fold)}
+        aria-label="{collapsed.has(fold) ? 'Show' : 'Hide'} notebooks in {label}"
+        aria-expanded={!collapsed.has(fold)}
+        onclick={() => toggle(fold)}
+      >
+        <Icon name="expand" size={14} />
+      </button>
+    {/if}
   </li>
 {/snippet}
 
+<!-- Desktop shows the whole tree; the phone lists top-level notebooks and you open folders from there. -->
 {#snippet notebookRows(nb: TreeNotebook, depth: number)}
-  {@render row({ kind: "notebook", id: nb.id }, "folder", nb.name, nb.role !== "owner" ? nb.owner : "", depth)}
-  {#each byParent.get(nb.id) ?? [] as child (child.id)}
-    {@render notebookRows(child, depth + 1)}
-  {/each}
+  {@const kids = media.phone ? [] : (byParent.get(nb.id) ?? [])}
+  {@render row({ kind: "notebook", id: nb.id }, "folder", nb.name, nb.role !== "owner" ? nb.owner : "", depth, kids.length ? nb.id : null)}
+  {#if !collapsed.has(nb.id)}
+    {#each kids as child (child.id)}
+      {@render notebookRows(child, depth + 1)}
+    {/each}
+  {/if}
 {/snippet}
 
 <nav>
@@ -157,6 +190,32 @@
     padding: 0 10px 0 calc(12px + var(--depth, 0) * 18px);
     min-height: 40px;
     font-weight: 500;
+  }
+
+  .foldable {
+    position: relative;
+  }
+
+  .foldable .row {
+    padding-right: 38px;
+  }
+
+  .fold {
+    position: absolute;
+    top: 50%;
+    right: 6px;
+    min-width: 26px;
+    min-height: 26px;
+    translate: 0 -50%;
+    color: var(--dim-fg);
+  }
+
+  .fold :global(svg) {
+    transition: rotate var(--fast) var(--ease-out);
+  }
+
+  .fold.closed :global(svg) {
+    rotate: -90deg;
   }
 
   .row:active:not(:disabled) {

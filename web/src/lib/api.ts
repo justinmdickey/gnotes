@@ -149,6 +149,8 @@ export const api = {
   createNotebook: (name: string, parent_id: string | null) =>
     request<{ id: string }>("POST", "/notebooks", { name, parent_id }),
   renameNotebook: (id: string, name: string) => request("PATCH", `/notebooks/${id}`, { name }),
+  moveNotebook: (id: string, parent_id: string | null) => request("PATCH", `/notebooks/${id}`, { parent_id }),
+  moveNote: (id: string, notebook_id: string | null) => request("PATCH", `/notes/${id}`, { notebook_id }),
   deleteNotebook: (id: string) => request("DELETE", `/notebooks/${id}`),
 
   createNote: (notebook_id: string | null) => request<{ id: string }>("POST", "/notes", { notebook_id }),

@@ -6,8 +6,9 @@
   import Icon from "./lib/Icon.svelte";
   import Menu from "./lib/Menu.svelte";
   import StatusPage from "./lib/StatusPage.svelte";
-  import { app, composeNote, goBack, navigate, notesFor, openNote, trashNotebook, viewTitle } from "./lib/store.svelte";
+  import { app, composeNote, goBack, navigate, notesFor, openNote, parentView, trashNotebook, viewTitle } from "./lib/store.svelte";
   import { media, scrollEdge } from "./lib/ui.svelte";
+  import MoveDialog from "./MoveDialog.svelte";
   import ShareDialog from "./ShareDialog.svelte";
 
   const notebook = $derived(
@@ -41,6 +42,35 @@
         ? `Notebook · ${countLabel}`
         : countLabel,
   );
+  /** Sub-notebooks, shown as folders above the notes. */
+  const folders = $derived(
+    notebook
+      ? app.tree.notebooks
+          .filter((n) => n.parent_id === notebook.id)
+          .filter((n) => !query.trim() || n.name.toLowerCase().includes(query.trim().toLowerCase()))
+          .sort((a, b) => a.name.localeCompare(b.name))
+      : [],
+  );
+  const up = $derived(parentView(app.view));
+  const backLabel = $derived(up ? viewTitle(up, app.tree) : "Notebooks");
+  const canEdit = $derived(notebook !== undefined && notebook.role !== "viewer");
+  const menuItems = $derived.by(() => {
+    if (!notebook) return [];
+    const nb = notebook;
+    const items = [];
+    if (canEdit) {
+      items.push({ label: "New Notebook Here…", icon: "newfolder" as const, onselect: () => ((folderName = ""), (creating = true)) });
+      items.push({ label: "Move to…", icon: "move" as const, onselect: () => (moving = true) });
+    }
+    if (nb.role === "owner") {
+      items.push({ label: "Rename…", icon: "rename" as const, onselect: () => ((newName = nb.name), (renaming = true)) });
+      items.push({ label: "Move to Trash", icon: "trash" as const, destructive: true, onselect: () => trashNotebook(nb.id, nb.name) });
+    }
+    return items;
+  });
+  let creating = $state(false);
+  let folderName = $state("");
+  let moving = $state(false);
   let renaming = $state(false);
   let newName = $state("");
   let sharing = $state(false);
@@ -75,6 +105,14 @@
     return out;
   });
 
+  async function createFolder(e: SubmitEvent) {
+    e.preventDefault();
+    if (!notebook || !folderName.trim()) return;
+    const { id } = await api.createNotebook(folderName.trim(), notebook.id);
+    creating = false;
+    navigate({ kind: "notebook", id });
+  }
+
   async function rename(e: SubmitEvent) {
     e.preventDefault();
     if (notebook && newName.trim()) await api.renameNotebook(notebook.id, newName.trim());
@@ -96,7 +134,7 @@
       <Icon name="sidebar" />
     </button>
     <button class="flat back phone-only" onclick={goBack}>
-      <Icon name="back" /><span>Notebooks</span>
+      <Icon name="back" /><span>{backLabel}</span>
     </button>
     <div class="title" class:shown={compact} aria-hidden={!compact}>
       <strong>{title}</strong>
@@ -105,13 +143,9 @@
       <button class="flat accent share" title="Share this notebook" onclick={() => (sharing = true)}>
         <Icon name="people" /><span>Share</span>
       </button>
-      <Menu
-        label="Notebook menu"
-        items={[
-          { label: "Rename…", icon: "rename", onselect: () => ((newName = notebook.name), (renaming = true)) },
-          { label: "Move to Trash", icon: "trash", destructive: true, onselect: () => trashNotebook(notebook.id, notebook.name) },
-        ]}
-      />
+    {/if}
+    {#if menuItems.length}
+      <Menu label="Notebook menu" items={menuItems} />
     {/if}
     {#if canCreate}
       <button class="suggested icon wide-only new" title="New note" aria-label="New note" onclick={() => composeNote()}>
@@ -125,7 +159,7 @@
     {#key app.view.kind === "notebook" ? app.view.id : app.view.kind}
       <div class="hero">
         {#if path.length}
-          <nav class="path" aria-label="Notebook path">
+          <nav class="path" class:single={path.length === 1} aria-label="Notebook path">
             {#each path as nb (nb.id)}
               <button class="chip-link" title="Go to {nb.name}" onclick={() => navigate({ kind: "notebook", id: nb.id })}>
                 <Icon name="folder" size={14} /><span>{nb.name}</span><Icon name="next" size={12} />
@@ -153,6 +187,21 @@
 
     <!-- A new list for each view; only adds and removes within one view animate. -->
     {#key app.view.kind === "notebook" ? app.view.id : app.view.kind}
+    {#if folders.length}
+      <h3 class="group-title">Notebooks</h3>
+      <ul class="boxed-list folders">
+        {#each folders as nb (nb.id)}
+          <li transition:reveal>
+            <button class="flat folder-row" onclick={() => navigate({ kind: "notebook", id: nb.id })}>
+              <Icon name="folder" />
+              <span class="folder-name">{nb.name}</span>
+              <span class="dim">{notesFor({ kind: "notebook", id: nb.id }, app.tree).length}</span>
+              <span class="dim chev"><Icon name="next" /></span>
+            </button>
+          </li>
+        {/each}
+      </ul>
+    {/if}
     {#each groups as group (group.label)}
       <h3 class="group-title">{group.label}</h3>
       <ul class="boxed-list">
@@ -169,7 +218,9 @@
         {/each}
       </ul>
     {:else}
-      {#if query}
+      {#if folders.length}
+        <!-- The folders above are enough; no empty state under them. -->
+      {:else if query}
         <StatusPage icon="search" title="No Results" description="Nothing matches “{query}”." tone="neutral" />
       {:else if canCreate}
         <StatusPage icon="note" title="No Notes Yet" description="Notes you write here show up in this list.">
@@ -198,6 +249,23 @@
       <button class="suggested" type="submit" form="rename-notebook" disabled={!newName.trim()}>Rename</button>
     {/snippet}
   </Dialog>
+{/if}
+
+{#if creating && notebook}
+  <Dialog title="New Notebook in “{notebook.name}”" onclose={() => (creating = false)}>
+    <form id="new-sub-notebook" onsubmit={createFolder}>
+      <!-- svelte-ignore a11y_autofocus -->
+      <input placeholder="Notebook name" aria-label="Notebook name" bind:value={folderName} autofocus />
+    </form>
+    {#snippet actions()}
+      <button onclick={() => (creating = false)}>Cancel</button>
+      <button class="suggested" type="submit" form="new-sub-notebook" disabled={!folderName.trim()}>Create</button>
+    {/snippet}
+  </Dialog>
+{/if}
+
+{#if moving && notebook}
+  <MoveDialog kind="notebook" id={notebook.id} name={notebook.name} onclose={() => (moving = false)} />
 {/if}
 
 {#if sharing && notebook}
@@ -382,6 +450,37 @@
 
 
 
+  .folders {
+    margin-bottom: 4px;
+  }
+
+  .folder-row {
+    width: 100%;
+    justify-content: flex-start;
+    gap: 12px;
+    min-height: 48px;
+    padding: 0 12px 0 14px;
+    border-radius: 0;
+    font-weight: 600;
+    text-align: left;
+  }
+
+  .folder-row > :global(svg:first-child) {
+    color: var(--accent);
+  }
+
+  .folder-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .chev {
+    display: flex;
+  }
+
   form input {
     width: 100%;
   }
@@ -405,12 +504,23 @@
       min-height: 42px;
     }
 
+    /* Back already names the one parent; the path only helps deeper down. */
+    .path.single {
+      display: none;
+    }
+
     .share span {
       display: none;
     }
 
     .note {
       padding: 13px 16px;
+    }
+
+    .folder-row {
+      min-height: 56px;
+      padding: 0 14px 0 16px;
+      font-size: var(--text-lg);
     }
 
     .note-title {

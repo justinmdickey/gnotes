@@ -417,16 +417,28 @@ button.fab svg {
 }
 
 /* Back buttons read as links in the accent color, with the parent's name. */
+/* Back reads like the path crumbs: a pill with a blue chevron and plain text naming where it goes. */
 button.back {
   gap: 2px;
-  padding: 0 10px 0 4px;
-  color: var(--accent);
+  min-width: 0;
+  padding: 0 14px 0 6px;
+  border-radius: var(--radius-pill);
+  background: var(--button-bg);
+  color: var(--fg);
   font-weight: 600;
 }
 
 button.back svg {
+  flex: none;
   width: var(--icon-touch);
   height: var(--icon-touch);
+  color: var(--accent);
+}
+
+button.back span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 @media (max-width: 700px) {

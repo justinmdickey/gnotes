@@ -23,6 +23,7 @@
   import { addImages, addRecording } from "./lib/attachments";
   import { toast } from "./lib/ui.svelte";
   import { ApiError } from "./lib/api";
+  import MoveDialog from "./MoveDialog.svelte";
   import ShareDialog from "./ShareDialog.svelte";
 
   const props: { noteId: string } = $props();
@@ -41,6 +42,7 @@
   let lost = $state<"revoked" | "not_found" | null>(null);
   let peers = $state<{ name: string; color: string }[]>([]);
   let sharing = $state(false);
+  let moving = $state(false);
   let recording = $state(false);
   let photoInput: HTMLInputElement;
   /** Captured when an add button is pressed: not typing means "add to the end of the note". */
@@ -328,11 +330,21 @@
       {#if role === "viewer"}<span class="badge">View only</span>{/if}
       {#if focused && media.phone}
         <button class="suggested done" onclick={() => view?.contentDOM.blur()} transition:bloom>Done</button>
-      {:else if role === "owner"}
-        <button class="flat accent share wide-only" aria-label="Share" title="Share this note" onclick={() => (sharing = true)}>
-          <Icon name="people" /><span>Share</span>
-        </button>
-        <Menu label="Note menu" items={[{ label: "Move to Trash", icon: "trash", destructive: true, onselect: () => trashNote(noteId) }]} />
+      {:else if role && role !== "viewer"}
+        {#if role === "owner"}
+          <button class="flat accent share wide-only" aria-label="Share" title="Share this note" onclick={() => (sharing = true)}>
+            <Icon name="people" /><span>Share</span>
+          </button>
+        {/if}
+        <Menu
+          label="Note menu"
+          items={[
+            { label: "Move to…", icon: "move", onselect: () => (moving = true) },
+            ...(role === "owner"
+              ? [{ label: "Move to Trash", icon: "trash" as const, destructive: true, onselect: () => trashNote(noteId) }]
+              : []),
+          ]}
+        />
       {/if}
     </header>
 
@@ -392,6 +404,10 @@
 
 {#if recording}
   <Recorder onsave={saveRecording} onclose={() => (recording = false)} />
+{/if}
+
+{#if moving}
+  <MoveDialog kind="note" id={noteId} name={note?.title ?? ""} onclose={() => (moving = false)} />
 {/if}
 
 {#if sharing}

@@ -249,6 +249,40 @@ try {
   check(true, "a note in a notebook shows the notebook chip");
   if (process.env.SHOTS) await (await new Promise((r) => setTimeout(r, 400)), alice.screenshot({ path: join(process.env.SHOTS, "desktop-notebook.png") }));
 
+  // Folders: make a sub-notebook from the notebook menu, see it listed in its parent, and move a note into it.
+  const pantry = await alice.evaluate(() => location.hash.match(/note\/([0-9a-f-]{36})/)[1]);
+  await alice.evaluate(() => {
+    const kitchen = location.hash.match(/nb\/([0-9a-f-]{36})/)[1];
+    location.hash = `#/nb/${kitchen}`;
+  });
+  await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Kitchen");
+  await alice.click(".hero .path button");
+  await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Home");
+  await alice.click(".list header button[aria-label='Notebook menu']");
+  await alice.waitForFunction(() => [...document.querySelectorAll("[role=menuitem]")].some((b) => b.textContent.includes("New Notebook Here")));
+  await alice.evaluate(() => [...document.querySelectorAll("[role=menuitem]")].find((b) => b.textContent.includes("New Notebook Here")).click());
+  await alice.type("#new-sub-notebook input", "Garage");
+  await alice.click("dialog button[form=new-sub-notebook]");
+  await closed(alice);
+  await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Garage" && document.querySelector(".hero .path")?.textContent.includes("Home"));
+  check(true, "a sub-notebook is made from the notebook menu");
+  await alice.click(".hero .path button");
+  await alice.waitForFunction(() => {
+    const names = [...document.querySelectorAll(".folder-row .folder-name")].map((e) => e.textContent);
+    return names.join(",") === "Garage,Kitchen";
+  });
+  check(true, "a notebook lists its sub-notebooks as folders");
+  await alice.evaluate((id) => (location.hash = `${location.hash}/note/${id}`), pantry);
+  await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("Pantry"));
+  await alice.click(".editor header button[aria-label='Note menu']");
+  await alice.waitForFunction(() => [...document.querySelectorAll("[role=menuitem]")].some((b) => b.textContent.includes("Move to")));
+  await alice.evaluate(() => [...document.querySelectorAll("[role=menuitem]")].find((b) => b.textContent.includes("Move to")).click());
+  await alice.waitForSelector("dialog [aria-label=Destinations]");
+  await alice.evaluate(() => [...document.querySelectorAll("dialog [aria-label=Destinations] button")].find((b) => b.textContent.trim() === "Garage").click());
+  await closed(alice);
+  await alice.waitForFunction(() => document.querySelector(".notebook-chip")?.textContent.trim() === "Garage");
+  check(true, "a note moves to another notebook");
+
   // A photo picked from the format bar uploads and shows inline.
   const png = join(data, "dot.png");
   writeFileSync(png, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEklEQVR4nGP4z8CAFWEXHbQSACj/P8Fu7N9hAAAAAElFTkSuQmCC", "base64"));
@@ -299,8 +333,6 @@ try {
   await alice.keyboard.type("Holiday");
   await alice.waitForFunction(() => document.querySelector(".editor .headerbar .title strong")?.textContent === "Holiday", { timeout: 5000 });
   check(await alice.$(".cm-attachment img") !== null, "“Add a title” puts a title above a leading photo");
-  await alice.evaluate(() => [...document.querySelectorAll(".path button")].find((b) => b.textContent.trim() === "Home").click());
-  await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Home");
   await alice.evaluate(() => (location.hash = "#/all"));
   await alice.waitForFunction(() => [...document.querySelectorAll("li button")].some((b) => b.textContent.includes("Groceries")));
   await alice.evaluate(() => [...document.querySelectorAll("li button")].find((b) => b.textContent.includes("Groceries")).click());
@@ -359,6 +391,14 @@ try {
     await alice.click(".list .back");
     await new Promise((r) => setTimeout(r, 500));
     await shot("phone-sidebar-dark");
+    await alice.evaluate(() => [...document.querySelectorAll(".pane.sidebar .row")].find((b) => b.textContent.includes("Home")).click());
+    await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Home");
+    await alice.evaluate(() => [...document.querySelectorAll(".folder-row")].find((b) => b.textContent.includes("Kitchen")).click());
+    await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Kitchen");
+    await shot("phone-subfolder-dark");
+    await alice.click(".list .back");
+    await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Home");
+    await shot("phone-folders-dark");
   }
   console.log("all checks passed");
 } finally {
