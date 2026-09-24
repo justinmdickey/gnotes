@@ -8,6 +8,7 @@
   import StatusPage from "./lib/StatusPage.svelte";
   import { app, composeNote, goBack, navigate, notesFor, openNote, parentView, trashNotebook, viewTitle } from "./lib/store.svelte";
   import { media, scrollEdge } from "./lib/ui.svelte";
+  import FolderList from "./FolderList.svelte";
   import MoveDialog from "./MoveDialog.svelte";
   import ShareDialog from "./ShareDialog.svelte";
 
@@ -34,7 +35,13 @@
     return out;
   });
   const heroIcon = $derived(app.view.kind === "notebook" ? "folder" : app.view.kind === "shared-notes" ? "people" : "note");
-  const countLabel = $derived(`${notesFor(app.view, app.tree).length} ${notesFor(app.view, app.tree).length === 1 ? "note" : "notes"}`);
+  const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+  const subCount = $derived(notebook ? app.tree.notebooks.filter((n) => n.parent_id === notebook.id).length : 0);
+  const countLabel = $derived(
+    [subCount ? plural(subCount, "notebook", "notebooks") : "", plural(notesFor(app.view, app.tree).length, "note", "notes")]
+      .filter(Boolean)
+      .join(" · "),
+  );
   const subtitle = $derived(
     notebook && notebook.role !== "owner"
       ? `${notebook.owner}'s notebook · ${notebook.role === "viewer" ? "view only" : "can edit"} · ${countLabel}`
@@ -59,7 +66,6 @@
     const nb = notebook;
     const items = [];
     if (canEdit) {
-      items.push({ label: "New Notebook Here…", icon: "newfolder" as const, onselect: () => ((folderName = ""), (creating = true)) });
       items.push({ label: "Move to…", icon: "move" as const, onselect: () => (moving = true) });
     }
     if (nb.role === "owner") {
@@ -68,8 +74,11 @@
     }
     return items;
   });
-  let creating = $state(false);
-  let folderName = $state("");
+  /** Crumbs for the levels above: all of them, or first … last two when it's deep. */
+  const crumbs = $derived.by(() => {
+    if (path.length <= 3) return { head: path, hidden: [], tail: [] };
+    return { head: path.slice(0, 1), hidden: path.slice(1, -2), tail: path.slice(-2) };
+  });
   let moving = $state(false);
   let renaming = $state(false);
   let newName = $state("");
@@ -104,14 +113,6 @@
     }
     return out;
   });
-
-  async function createFolder(e: SubmitEvent) {
-    e.preventDefault();
-    if (!notebook || !folderName.trim()) return;
-    const { id } = await api.createNotebook(folderName.trim(), notebook.id);
-    creating = false;
-    navigate({ kind: "notebook", id });
-  }
 
   async function rename(e: SubmitEvent) {
     e.preventDefault();
@@ -158,13 +159,29 @@
     <!-- Where you are: the notebook's path, icon and name, big enough to notice. -->
     {#key app.view.kind === "notebook" ? app.view.id : app.view.kind}
       <div class="hero">
-        {#if path.length}
-          <nav class="path" class:single={path.length === 1} aria-label="Notebook path">
-            {#each path as nb (nb.id)}
-              <button class="chip-link" title="Go to {nb.name}" onclick={() => navigate({ kind: "notebook", id: nb.id })}>
-                <Icon name="folder" size={14} /><span>{nb.name}</span><Icon name="next" size={12} />
-              </button>
-            {/each}
+        {#if notebook}
+          <!-- Where this notebook sits: every level above it, squeezed or folded when deep. -->
+          <nav class="crumbs" class:bare={!path.length} aria-label="Notebook path">
+            <button class="crumb root phone-only" class:icon-only={path.length > 1} title="All notebooks" aria-label="All notebooks" onclick={() => navigate(null)}>
+              <Icon name="home" size={14} />{#if path.length <= 1}<span>Notebooks</span>{/if}
+            </button>
+            <span class="sep phone-only"><Icon name="next" size={12} /></span>
+            {#snippet crumb(nb: { id: string; name: string })}
+              <button class="crumb" title={nb.name} onclick={() => navigate({ kind: "notebook", id: nb.id })}><span>{nb.name}</span></button>
+              <span class="sep"><Icon name="next" size={12} /></span>
+            {/snippet}
+            {#each crumbs.head as nb (nb.id)}{@render crumb(nb)}{/each}
+            {#if crumbs.hidden.length}
+              <Menu
+                label="{crumbs.hidden.length} more levels"
+                class="crumb more"
+                items={crumbs.hidden.map((nb) => ({ label: nb.name, icon: "folder" as const, onselect: () => navigate({ kind: "notebook", id: nb.id }) }))}
+              >
+                {#snippet trigger()}<span>…</span>{/snippet}
+              </Menu>
+              <span class="sep"><Icon name="next" size={12} /></span>
+            {/if}
+            {#each crumbs.tail as nb (nb.id)}{@render crumb(nb)}{/each}
           </nav>
         {/if}
         <div class="hero-row">
@@ -187,20 +204,8 @@
 
     <!-- A new list for each view; only adds and removes within one view animate. -->
     {#key app.view.kind === "notebook" ? app.view.id : app.view.kind}
-    {#if folders.length}
-      <h3 class="group-title">Notebooks</h3>
-      <ul class="boxed-list folders">
-        {#each folders as nb (nb.id)}
-          <li transition:reveal>
-            <button class="flat folder-row" onclick={() => navigate({ kind: "notebook", id: nb.id })}>
-              <Icon name="folder" />
-              <span class="folder-name">{nb.name}</span>
-              <span class="dim">{notesFor({ kind: "notebook", id: nb.id }, app.tree).length}</span>
-              <span class="dim chev"><Icon name="next" /></span>
-            </button>
-          </li>
-        {/each}
-      </ul>
+    {#if notebook}
+      <FolderList {folders} parent={notebook.id} canCreate={canEdit && !query} />
     {/if}
     {#each groups as group (group.label)}
       <h3 class="group-title">{group.label}</h3>
@@ -251,19 +256,6 @@
   </Dialog>
 {/if}
 
-{#if creating && notebook}
-  <Dialog title="New Notebook in “{notebook.name}”" onclose={() => (creating = false)}>
-    <form id="new-sub-notebook" onsubmit={createFolder}>
-      <!-- svelte-ignore a11y_autofocus -->
-      <input placeholder="Notebook name" aria-label="Notebook name" bind:value={folderName} autofocus />
-    </form>
-    {#snippet actions()}
-      <button onclick={() => (creating = false)}>Cancel</button>
-      <button class="suggested" type="submit" form="new-sub-notebook" disabled={!folderName.trim()}>Create</button>
-    {/snippet}
-  </Dialog>
-{/if}
-
 {#if moving && notebook}
   <MoveDialog kind="notebook" id={notebook.id} name={notebook.name} onclose={() => (moving = false)} />
 {/if}
@@ -305,12 +297,69 @@
     animation: rise 260ms var(--ease-out) both;
   }
 
-  .path {
+  .crumbs {
     display: flex;
-    flex-wrap: wrap;
     align-items: center;
-    gap: 6px;
+    gap: 2px;
+    min-width: 0;
     margin: 0 0 10px;
+  }
+
+  /* A top-level notebook on a wide screen has nothing above it. */
+  .crumbs.bare {
+    display: none;
+  }
+
+  .crumbs :global(.crumb) {
+    flex: 0 1 auto;
+    gap: 5px;
+    min-width: 3.2em;
+    min-height: 30px;
+    padding: 0 9px;
+    border-radius: var(--radius-pill);
+    background: var(--button-bg);
+    color: var(--fg);
+    font-size: var(--text-sm);
+    font-weight: 600;
+  }
+
+  .crumbs :global(.crumb span) {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .crumbs :global(.crumb svg) {
+    flex: none;
+    color: var(--accent);
+  }
+
+  .crumbs :global(.crumb:not(.root)) {
+    max-width: 10em;
+  }
+
+  /* Once there's a path, home is just its icon. */
+  .crumbs :global(.crumb.root.icon-only) {
+    flex: none;
+    min-width: 30px;
+    padding: 0 8px;
+  }
+
+  /* The nearest level, last before the title, keeps its name longest. */
+  .crumbs :global(.crumb:nth-last-child(2)) {
+    flex-shrink: 0.3;
+  }
+
+  .crumbs :global(.crumb.more) {
+    flex: none;
+    min-width: 34px;
+    padding: 0 8px;
+  }
+
+  .sep {
+    flex: none;
+    display: flex;
+    color: var(--dim-fg);
   }
 
   .hero-row {
@@ -450,37 +499,6 @@
 
 
 
-  .folders {
-    margin-bottom: 4px;
-  }
-
-  .folder-row {
-    width: 100%;
-    justify-content: flex-start;
-    gap: 12px;
-    min-height: 48px;
-    padding: 0 12px 0 14px;
-    border-radius: 0;
-    font-weight: 600;
-    text-align: left;
-  }
-
-  .folder-row > :global(svg:first-child) {
-    color: var(--accent);
-  }
-
-  .folder-name {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .chev {
-    display: flex;
-  }
-
   form input {
     width: 100%;
   }
@@ -504,9 +522,8 @@
       min-height: 42px;
     }
 
-    /* Back already names the one parent; the path only helps deeper down. */
-    .path.single {
-      display: none;
+    .crumbs.bare {
+      display: flex;
     }
 
     .share span {
@@ -516,13 +533,6 @@
     .note {
       padding: 13px 16px;
     }
-
-    .folder-row {
-      min-height: 56px;
-      padding: 0 14px 0 16px;
-      font-size: var(--text-lg);
-    }
-
     .note-title {
       font-size: var(--text-lg);
     }

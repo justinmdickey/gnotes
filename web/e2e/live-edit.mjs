@@ -240,7 +240,7 @@ try {
     return kitchen.id;
   });
   await alice.evaluate((id) => (location.hash = `#/nb/${id}`), kitchen);
-  await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Kitchen" && document.querySelector(".hero .path")?.textContent.includes("Home"));
+  await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Kitchen" && document.querySelector(".hero .crumbs")?.textContent.includes("Home"));
   check(true, "nested notebook shows its path and name");
   await alice.click(".list header button[aria-label='New note']");
   await alice.waitForSelector(".cm-content[contenteditable=true]");
@@ -256,19 +256,17 @@ try {
     location.hash = `#/nb/${kitchen}`;
   });
   await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Kitchen");
-  await alice.click(".hero .path button");
+  await alice.click(".hero .crumbs button.crumb:not(.root)");
   await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Home");
-  await alice.click(".list header button[aria-label='Notebook menu']");
-  await alice.waitForFunction(() => [...document.querySelectorAll("[role=menuitem]")].some((b) => b.textContent.includes("New Notebook Here")));
-  await alice.evaluate(() => [...document.querySelectorAll("[role=menuitem]")].find((b) => b.textContent.includes("New Notebook Here")).click());
-  await alice.type("#new-sub-notebook input", "Garage");
-  await alice.click("dialog button[form=new-sub-notebook]");
+  await alice.click(".pane.list .folder-row.add");
+  await alice.type("#new-notebook input", "Garage");
+  await alice.click("dialog button[form=new-notebook]");
   await closed(alice);
-  await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Garage" && document.querySelector(".hero .path")?.textContent.includes("Home"));
-  check(true, "a sub-notebook is made from the notebook menu");
-  await alice.click(".hero .path button");
+  await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Garage" && document.querySelector(".hero .crumbs")?.textContent.includes("Home"));
+  check(true, "a notebook is made inside another the same way as at the top");
+  await alice.click(".hero .crumbs button.crumb:not(.root)");
   await alice.waitForFunction(() => {
-    const names = [...document.querySelectorAll(".folder-row .folder-name")].map((e) => e.textContent);
+    const names = [...document.querySelectorAll(".pane.list .folder-row:not(.add) .name")].map((e) => e.textContent);
     return names.join(",") === "Garage,Kitchen";
   });
   check(true, "a notebook lists its sub-notebooks as folders");
@@ -282,6 +280,26 @@ try {
   await closed(alice);
   await alice.waitForFunction(() => document.querySelector(".notebook-chip")?.textContent.trim() === "Garage");
   check(true, "a note moves to another notebook");
+
+  // Deep down, the middle levels fold into a "…" crumb that still reaches them.
+  const deepest = await alice.evaluate(async () => {
+    const post = (path, body) => fetch(`/api${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then((r) => r.json());
+    const tree = await fetch("/api/tree").then((r) => r.json());
+    let parent = tree.notebooks.find((n) => n.name === "Garage").id;
+    for (const name of ["Shelf", "Box", "Bag", "Pocket"]) parent = (await post("/notebooks", { name, parent_id: parent })).id;
+    return parent;
+  });
+  await alice.evaluate((id) => (location.hash = `#/nb/${id}`), deepest);
+  await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Pocket" && document.querySelector(".hero .crumb.more"));
+  const shown = await alice.$$eval(".hero .crumbs button.crumb:not(.root):not(.more)", (els) => els.map((e) => e.textContent.trim()).join(","));
+  check(shown === "Home,Box,Bag", `a deep path shows the top and nearest levels (${shown})`);
+  await alice.click(".hero .crumb.more");
+  await alice.waitForFunction(() => [...document.querySelectorAll("[role=menuitem]")].some((b) => b.textContent.includes("Garage")));
+  await alice.evaluate(() => [...document.querySelectorAll("[role=menuitem]")].find((b) => b.textContent.includes("Shelf")).click());
+  await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Shelf");
+  check(true, "the folded levels open from the … crumb");
+  await alice.evaluate((id) => (location.hash = `#/all/note/${id}`), pantry);
+  await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("Pantry"));
 
   // A photo picked from the format bar uploads and shows inline.
   const png = join(data, "dot.png");
@@ -391,14 +409,17 @@ try {
     await alice.click(".list .back");
     await new Promise((r) => setTimeout(r, 500));
     await shot("phone-sidebar-dark");
-    await alice.evaluate(() => [...document.querySelectorAll(".pane.sidebar .row")].find((b) => b.textContent.includes("Home")).click());
+    await alice.evaluate(() => [...document.querySelectorAll(".pane.sidebar .folder-row")].find((b) => b.textContent.includes("Home")).click());
     await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Home");
-    await alice.evaluate(() => [...document.querySelectorAll(".folder-row")].find((b) => b.textContent.includes("Kitchen")).click());
+    await alice.evaluate(() => [...document.querySelectorAll(".pane.list .folder-row")].find((b) => b.textContent.includes("Kitchen")).click());
     await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Kitchen");
     await shot("phone-subfolder-dark");
     await alice.click(".list .back");
     await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Home");
     await shot("phone-folders-dark");
+    await alice.evaluate((id) => (location.hash = `#/nb/${id}`), deepest);
+    await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Pocket");
+    await shot("phone-deep-dark");
   }
   console.log("all checks passed");
 } finally {

@@ -1,14 +1,14 @@
 <script lang="ts">
-  import { api, type TreeNotebook } from "./lib/api";
-  import Dialog from "./lib/Dialog.svelte";
+  import type { TreeNotebook } from "./lib/api";
+  import FolderList from "./FolderList.svelte";
+  import NewNotebookDialog from "./NewNotebookDialog.svelte";
   import Icon, { type IconName } from "./lib/Icon.svelte";
   import { app, colorFor, composeNote, navigate, notesFor, openSettings, type View } from "./lib/store.svelte";
   import { media, scrollEdge } from "./lib/ui.svelte";
 
   const count = (view: View) => notesFor(view, app.tree).length;
 
-  let creating = $state<{ parent: string | null } | null>(null);
-  let name = $state("");
+  let creating = $state(false);
 
   const byParent = $derived.by(() => {
     const ids = new Set(app.tree.notebooks.map((n) => n.id));
@@ -47,18 +47,6 @@
     return app.view.kind === view.kind && (view.kind !== "notebook" || (app.view as { id: string }).id === view.id);
   }
 
-  function startCreate() {
-    name = "";
-    creating = { parent: null };
-  }
-
-  async function create(e: SubmitEvent) {
-    e.preventDefault();
-    if (!creating || !name.trim()) return;
-    const { id } = await api.createNotebook(name.trim(), creating.parent);
-    creating = null;
-    navigate({ kind: "notebook", id });
-  }
 </script>
 
 {#snippet row(view: View, icon: IconName, label: string, owner = "", depth = 0, fold: string | null = null)}
@@ -84,9 +72,9 @@
   </li>
 {/snippet}
 
-<!-- Desktop shows the whole tree; the phone lists top-level notebooks and you open folders from there. -->
+<!-- Desktop shows the whole tree; the phone opens one level at a time. -->
 {#snippet notebookRows(nb: TreeNotebook, depth: number)}
-  {@const kids = media.phone ? [] : (byParent.get(nb.id) ?? [])}
+  {@const kids = byParent.get(nb.id) ?? []}
   {@render row({ kind: "notebook", id: nb.id }, "folder", nb.name, nb.role !== "owner" ? nb.owner : "", depth, kids.length ? nb.id : null)}
   {#if !collapsed.has(nb.id)}
     {#each kids as child (child.id)}
@@ -109,28 +97,40 @@
       {@render row({ kind: "all" }, "note", "All Notes")}
     </ul>
 
-    <h3 class="group-title">Notebooks</h3>
-    <ul class="group">
-      {#each ownRoots as nb (nb.id)}
-        {@render notebookRows(nb, 0)}
-      {/each}
-      <li>
-        <button class="row flat add" onclick={startCreate}>
-          <Icon name="newfolder" /><span class="label">New Notebook</span>
-        </button>
-      </li>
-    </ul>
-
-    {#if sharedRoots.length || hasSharedNotes}
-      <h3 class="group-title">Shared with Me</h3>
+    {#if media.phone}
+      <!-- The phone home is the top level of the same folder list every notebook shows. -->
+      <FolderList folders={ownRoots} parent={null} canCreate />
+      {#if hasSharedNotes}
+        <h3 class="group-title">Shared with Me</h3>
+        <ul class="group">{@render row({ kind: "shared-notes" }, "people", "Shared Notes")}</ul>
+      {/if}
+      {#if sharedRoots.length}
+        <FolderList folders={sharedRoots} parent={null} canCreate={false} title={hasSharedNotes ? "Shared Notebooks" : "Shared with Me"} />
+      {/if}
+    {:else}
+      <h3 class="group-title">Notebooks</h3>
       <ul class="group">
-        {#if hasSharedNotes}
-          {@render row({ kind: "shared-notes" }, "people", "Shared Notes")}
-        {/if}
-        {#each sharedRoots as nb (nb.id)}
+        {#each ownRoots as nb (nb.id)}
           {@render notebookRows(nb, 0)}
         {/each}
+        <li>
+          <button class="row flat add" onclick={() => (creating = true)}>
+            <Icon name="newfolder" /><span class="label">New Notebook</span>
+          </button>
+        </li>
       </ul>
+
+      {#if sharedRoots.length || hasSharedNotes}
+        <h3 class="group-title">Shared with Me</h3>
+        <ul class="group">
+          {#if hasSharedNotes}
+            {@render row({ kind: "shared-notes" }, "people", "Shared Notes")}
+          {/if}
+          {#each sharedRoots as nb (nb.id)}
+            {@render notebookRows(nb, 0)}
+          {/each}
+        </ul>
+      {/if}
     {/if}
   </div>
 
@@ -143,16 +143,7 @@
 </nav>
 
 {#if creating}
-  <Dialog title="New Notebook" onclose={() => (creating = null)}>
-    <form id="new-notebook" onsubmit={create}>
-      <!-- svelte-ignore a11y_autofocus -->
-      <input placeholder="Notebook name" aria-label="Notebook name" bind:value={name} autofocus />
-    </form>
-    {#snippet actions()}
-      <button onclick={() => (creating = null)}>Cancel</button>
-      <button class="suggested" type="submit" form="new-notebook" disabled={!name.trim()}>Create</button>
-    {/snippet}
-  </Dialog>
+  <NewNotebookDialog parent={null} onclose={() => (creating = false)} />
 {/if}
 
 <style>
@@ -272,10 +263,6 @@
   /* Desktop sidebar rows are inset 12px; line the headings up with their text. */
   .group-title {
     margin-left: 12px;
-  }
-
-  form input {
-    width: 100%;
   }
 
   footer {

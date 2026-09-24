@@ -8,19 +8,29 @@
 </script>
 
 <script lang="ts">
+  import type { Snippet } from "svelte";
   import Dialog from "./Dialog.svelte";
   import Icon, { type IconName } from "./Icon.svelte";
   import { media, pop } from "./ui.svelte";
 
-  let { label, items }: { label: string; items: MenuItem[] } = $props();
+  let {
+    label,
+    items,
+    trigger,
+    class: buttonClass = "flat icon",
+  }: { label: string; items: MenuItem[]; trigger?: Snippet; class?: string } = $props();
   let open = $state(false);
   let button: HTMLButtonElement;
   /** Fixed position under the button, so the popover escapes clipped lists. */
-  let at = $state({ top: 0, right: 0 });
+  let at = $state<{ top: number; right?: number; left?: number }>({ top: 0, right: 0 });
 
   function toggle() {
     const r = button.getBoundingClientRect();
-    at = { top: r.bottom + 6, right: Math.max(8, innerWidth - r.right) };
+    // Hang from whichever edge of the button is nearer the middle of the screen.
+    at =
+      r.left < innerWidth / 2
+        ? { top: r.bottom + 6, left: Math.max(8, r.left) }
+        : { top: r.bottom + 6, right: Math.max(8, innerWidth - r.right) };
     open = !open;
   }
 
@@ -36,8 +46,8 @@
 
 <svelte:window onkeydown={onkey} />
 
-<button bind:this={button} class="flat icon" class:open title={label} aria-label={label} aria-expanded={open} onclick={toggle}>
-  <Icon name="more" />
+<button bind:this={button} class={buttonClass} class:open title={label} aria-label={label} aria-expanded={open} onclick={toggle}>
+  {#if trigger}{@render trigger()}{:else}<Icon name="more" />{/if}
 </button>
 
 {#snippet list()}
@@ -60,7 +70,7 @@
 {:else if open}
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
   <div class="scrim" onclick={() => (open = false)}></div>
-  <div class="popover" role="menu" style:top="{at.top}px" style:right="{at.right}px" transition:pop>
+  <div class="popover" role="menu" class:from-left={at.left !== undefined} style:top="{at.top}px" style:right={at.right !== undefined ? `${at.right}px` : null} style:left={at.left !== undefined ? `${at.left}px` : null} transition:pop>
     {@render list()}
   </div>
 {/if}
@@ -87,6 +97,10 @@
     background: var(--popover-bg);
     box-shadow: var(--shadow-lg);
     transform-origin: top right;
+  }
+
+  .popover.from-left {
+    transform-origin: top left;
   }
 
   .item {
