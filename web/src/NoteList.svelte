@@ -1,12 +1,12 @@
 <script lang="ts">
   import { slide } from "svelte/transition";
   import { cubicOut } from "svelte/easing";
-  import { api, type TreeNote } from "./lib/api";
+  import { api, type TreeNote, type TreeNotebook } from "./lib/api";
   import Dialog from "./lib/Dialog.svelte";
   import Icon from "./lib/Icon.svelte";
   import Menu from "./lib/Menu.svelte";
   import StatusPage from "./lib/StatusPage.svelte";
-  import { app, composeNote, goBack, navigate, notesFor, openNote, parentView, trashNotebook, viewTitle } from "./lib/store.svelte";
+  import { app, composeNote, goBack, navigate, notesFor, openNote, parentView, pathOf, subtree, trashNotebook, viewTitle } from "./lib/store.svelte";
   import { media, scrollEdge } from "./lib/ui.svelte";
   import FolderList from "./FolderList.svelte";
   import MoveDialog from "./MoveDialog.svelte";
@@ -17,7 +17,10 @@
     app.view.kind === "notebook" ? app.tree.notebooks.find((n) => n.id === (app.view as { id: string }).id) : undefined,
   );
   const title = $derived(viewTitle(app.view, app.tree));
-  const canCreate = $derived(app.view.kind === "all" || (notebook !== undefined && notebook.role !== "viewer"));
+  const canEdit = $derived(notebook !== undefined && notebook.role !== "viewer");
+  /** New notes land here: the notebook you're in, or the top folder from Notes and Recent. */
+  const canCreate = $derived(app.view.kind === "root" || app.view.kind === "all" || canEdit);
+  const canMakeFolder = $derived(app.view.kind === "root" || canEdit);
 
   let query = $state("");
   /** The big title has scrolled away, so the headerbar shows the name instead. */
@@ -36,7 +39,22 @@
     return out;
   });
   const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
-  const subCount = $derived(notebook ? app.tree.notebooks.filter((n) => n.parent_id === notebook.id).length : 0);
+  const visible = $derived(new Set(app.tree.notebooks.map((n) => n.id)));
+  const hiddenShares = $derived(new Set(app.tree.shared.filter((s) => s.hidden).map((s) => s.resource_id)));
+  /** Notebooks at the top of a place: your own under Notes, other people's under Shared. */
+  const tops = (owned: boolean) =>
+    app.tree.notebooks.filter(
+      (n) => (n.role === "owner") === owned && !(n.parent_id && visible.has(n.parent_id)) && !hiddenShares.has(n.id),
+    );
+  /** The folders directly in this place, before any search. */
+  const children = $derived.by((): TreeNotebook[] => {
+    const v = app.view;
+    if (v.kind === "root") return tops(true);
+    if (v.kind === "shared-notes") return tops(false);
+    if (v.kind === "notebook") return app.tree.notebooks.filter((n) => n.parent_id === v.id);
+    return [];
+  });
+  const subCount = $derived(children.length);
   const countLabel = $derived(
     [subCount ? plural(subCount, "notebook", "notebooks") : "", plural(notesFor(app.view, app.tree).length, "note", "notes")]
       .filter(Boolean)
@@ -49,18 +67,40 @@
         ? countLabel
         : countLabel,
   );
-  /** Sub-notebooks, shown as folders above the notes. */
+  const q = $derived(query.trim().toLowerCase());
+  /**
+   * What a search looks through: this folder and everything inside it. From Notes or Recent
+   * that's everything you can see; from Shared, everything shared with you.
+   */
+  const scope = $derived.by((): ((notebookId: string | null, role: string) => boolean) => {
+    const v = app.view;
+    if (v.kind === "notebook") {
+      const ids = subtree(v.id);
+      return (id) => ids.has(id);
+    }
+    if (v.kind === "shared-notes") return (_id, role) => role !== "owner";
+    return () => true;
+  });
   const folders = $derived(
-    notebook
-      ? app.tree.notebooks
-          .filter((n) => n.parent_id === notebook.id)
-          .filter((n) => !query.trim() || n.name.toLowerCase().includes(query.trim().toLowerCase()))
-          .sort((a, b) => a.name.localeCompare(b.name))
-      : [],
+    (q
+      ? app.tree.notebooks.filter(
+          (n) => n.id !== (notebook?.id ?? "") && scope(n.parent_id, n.role) && scope(n.id, n.role) && n.name.toLowerCase().includes(q),
+        )
+      : children
+    ).toSorted((a, b) => a.name.localeCompare(b.name)),
   );
   const up = $derived(parentView(app.view));
-  const backLabel = $derived(up ? viewTitle(up, app.tree) : "Notebooks");
-  const canEdit = $derived(notebook !== undefined && notebook.role !== "viewer");
+  const searchHint = $derived(
+    app.view.kind === "notebook" ? `Search in ${title}` : app.view.kind === "shared-notes" ? "Search shared" : "Search all notes",
+  );
+  const backLabel = $derived(up ? viewTitle(up, app.tree) : "Notes");
+  /** Search results and Recent come from all over, so each row says where it lives. */
+  const showWhere = $derived(!!q || app.view.kind === "all");
+  function where(note: TreeNote) {
+    const path = pathOf(note.notebook_id);
+    if (path.length) return path.join(" › ");
+    return note.role === "owner" ? "Notes" : `Shared by ${note.owner}`;
+  }
   const menuItems = $derived.by(() => {
     if (!notebook) return [];
     const nb = notebook;
@@ -86,9 +126,10 @@
   let sharing = $state(false);
 
   const notes = $derived.by(() => {
-    const all = notesFor(app.view, app.tree);
-    const q = query.trim().toLowerCase();
-    return q ? all.filter((n) => `${n.title}\n${n.preview}`.toLowerCase().includes(q)) : all;
+    if (!q) return notesFor(app.view, app.tree);
+    return app.tree.notes
+      .filter((n) => scope(n.notebook_id, n.role) && `${n.title}\n${n.preview}`.toLowerCase().includes(q))
+      .toSorted((a, b) => b.updated_at - a.updated_at);
   });
 
   /** Apple Notes-style buckets: Today, Yesterday, Previous 7 Days, Previous 30 Days, then by month. */
@@ -97,6 +138,7 @@
     const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
     const day = 24 * 60 * 60 * 1000;
     const out: { label: string; notes: TreeNote[] }[] = [];
+    if (q) return notes.length ? [{ label: "Notes", notes }] : [];
     for (const note of notes) {
       const t = note.updated_at;
       const label =
@@ -136,14 +178,16 @@
       <Icon name="sidebar" />
     </button>
     <!-- Just a chevron: the path under the headerbar already names where it goes. -->
+    {#if up}
     <button class="flat icon circular back-icon phone-only" title="Back to {backLabel}" aria-label="Back to {backLabel}" onclick={goBack}>
       <Icon name="back" />
     </button>
+    {/if}
     <div class="title" class:shown={compact} aria-hidden={!compact}>
       <strong>{title}</strong>
     </div>
-    {#if canEdit}
-      <button class="flat icon" title="New notebook inside" aria-label="New notebook" onclick={() => (creatingFolder = true)}>
+    {#if canMakeFolder}
+      <button class="flat icon" title="New notebook" aria-label="New notebook" onclick={() => (creatingFolder = true)}>
         <Icon name="newfolder" />
       </button>
     {/if}
@@ -156,7 +200,7 @@
       <Menu label="Notebook menu" items={menuItems} />
     {/if}
     {#if canCreate}
-      <button class="suggested icon wide-only new" title="New note" aria-label="New note" onclick={() => composeNote()}>
+      <button class="suggested icon new" title="New note" aria-label="New note" onclick={() => composeNote()}>
         <Icon name="compose" />
       </button>
     {/if}
@@ -168,11 +212,12 @@
       <div class="hero">
         {#if notebook}
           <!-- Where this notebook sits: every level above it, squeezed or folded when deep. -->
-          <nav class="crumbs" class:bare={!path.length} aria-label="Notebook path">
-            <button class="crumb root phone-only" class:icon-only={path.length > 1} title="All notebooks" aria-label="All notebooks" onclick={() => navigate(null)}>
-              <Icon name="home" size={14} />{#if path.length <= 1}<span>Notebooks</span>{/if}
+          {@const home = notebook.role === "owner" ? { label: "Notes", icon: "home" as const, view: { kind: "root" as const } } : { label: "Shared", icon: "people" as const, view: { kind: "shared-notes" as const } }}
+          <nav class="crumbs" aria-label="Notebook path">
+            <button class="crumb root" class:icon-only={path.length > 1} title={home.label} aria-label={home.label} onclick={() => navigate(home.view)}>
+              <Icon name={home.icon} size={14} />{#if path.length <= 1}<span>{home.label}</span>{/if}
             </button>
-            <span class="sep phone-only"><Icon name="next" size={12} /></span>
+            <span class="sep"><Icon name="next" size={12} /></span>
             {#snippet crumb(nb: { id: string; name: string })}
               <button class="crumb" title={nb.name} onclick={() => navigate({ kind: "notebook", id: nb.id })}><span>{nb.name}</span></button>
               <span class="sep"><Icon name="next" size={12} /></span>
@@ -200,7 +245,7 @@
 
     <label class="search">
       <Icon name="search" />
-      <input type="search" placeholder="Search notes" aria-label="Search notes" bind:value={query} />
+      <input type="search" placeholder={searchHint} aria-label={searchHint} bind:value={query} />
       {#if query}
         <button class="flat icon circular clear" aria-label="Clear search" onclick={() => (query = "")}><Icon name="close" /></button>
       {/if}
@@ -208,9 +253,7 @@
 
     <!-- A new list for each view; only adds and removes within one view animate. -->
     {#key app.view.kind === "notebook" ? app.view.id : app.view.kind}
-    {#if notebook}
-      <FolderList {folders} />
-    {/if}
+    <FolderList {folders} showWhere={!!q} />
     {#each groups as group (group.label)}
       <h3 class="group-title">{group.label}</h3>
       <ul class="boxed-list">
@@ -222,6 +265,9 @@
                 <span class="time">{when(note.updated_at)}</span>
                 <span class="dim preview">{note.preview || (note.role !== "owner" ? note.owner : "No additional text")}</span>
               </span>
+              {#if showWhere}
+                <span class="where dim"><Icon name={note.notebook_id ? "folder" : note.role === "owner" ? "home" : "people"} size={12} /><span>{where(note)}</span></span>
+              {/if}
             </button>
           </li>
         {/each}
@@ -231,18 +277,17 @@
         <!-- The folders above are enough; no empty state under them. -->
       {:else if query}
         <StatusPage icon="search" title="No Results" description="Nothing matches “{query}”." tone="neutral" />
-      {:else if canCreate}
-        <StatusPage icon="note" title="No Notes Yet" description="Notes and notebooks you make here show up in this list." />
+      {:else if app.view.kind === "shared-notes"}
+        <StatusPage icon="people" title="Nothing Shared Yet" description="Notes and notebooks people share with you show up here." tone="neutral" />
+      {:else if notebook}
+        <StatusPage icon="folder" title="Empty Notebook" description={canEdit ? "New notes and notebooks you make here go inside it." : "Nothing has been added here yet."} tone="neutral" />
       {:else}
-        <StatusPage icon="note" title="No Notes Yet" description="Nothing has been shared here yet." tone="neutral" />
+        <StatusPage icon="note" title="No Notes Yet" description="Start one with the pencil button up top." />
       {/if}
     {/each}
     {/key}
   </div>
 
-  {#if canCreate}
-    <button class="fab phone-only" onclick={() => composeNote()}><Icon name="compose" /> New Note</button>
-  {/if}
 </section>
 
 {#if renaming}
@@ -258,8 +303,8 @@
   </Dialog>
 {/if}
 
-{#if creatingFolder && notebook}
-  <NewNotebookDialog parent={notebook.id} onclose={() => (creatingFolder = false)} />
+{#if creatingFolder}
+  <NewNotebookDialog parent={notebook?.id ?? null} onclose={() => (creatingFolder = false)} />
 {/if}
 
 {#if moving && notebook}
@@ -312,9 +357,6 @@
   }
 
   /* A top-level notebook on a wide screen has nothing above it. */
-  .crumbs.bare {
-    display: none;
-  }
 
   .crumbs :global(.crumb) {
     flex: 0 1 auto;
@@ -473,6 +515,21 @@
     flex: none;
   }
 
+  .where {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+    font-size: var(--text-xs);
+    font-weight: 600;
+  }
+
+  .where span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .preview {
     overflow: hidden;
     text-overflow: ellipsis;
@@ -493,11 +550,6 @@
       text-align: center;
     }
 
-    .back-icon :global(svg) {
-      width: var(--icon-touch);
-      height: var(--icon-touch);
-      color: var(--accent);
-    }
 
     .scroll {
       padding: 0 16px 96px;
@@ -507,9 +559,6 @@
       min-height: 42px;
     }
 
-    .crumbs.bare {
-      display: flex;
-    }
 
     .share span {
       display: none;

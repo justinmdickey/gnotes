@@ -1,14 +1,17 @@
 <script lang="ts">
   import type { TreeNotebook } from "./lib/api";
-  import FolderList from "./FolderList.svelte";
-  import NewNotebookDialog from "./NewNotebookDialog.svelte";
   import Icon, { type IconName } from "./lib/Icon.svelte";
-  import { app, colorFor, composeNote, navigate, notesFor, openSettings, type View } from "./lib/store.svelte";
-  import { media, scrollEdge } from "./lib/ui.svelte";
+  import { app, colorFor, navigate, notesFor, openSettings, type View } from "./lib/store.svelte";
+  import { scrollEdge } from "./lib/ui.svelte";
 
-  const count = (view: View) => notesFor(view, app.tree).length;
-
-  let creating = $state(false);
+  /** Items directly inside, notebooks and notes alike, the same count the folder rows show. */
+  function count(view: View) {
+    const notes = notesFor(view, app.tree).length;
+    if (view.kind === "root") return notes + ownRoots.length;
+    if (view.kind === "shared-notes") return notes + sharedRoots.length;
+    if (view.kind === "notebook") return notes + (byParent.get(view.id)?.length ?? 0);
+    return notes;
+  }
 
   const byParent = $derived.by(() => {
     const ids = new Set(app.tree.notebooks.map((n) => n.id));
@@ -42,6 +45,9 @@
       localStorage.setItem("gnotes.collapsed", JSON.stringify([...next]));
     } catch {}
   }
+
+  const ROOT = "@root";
+  const SHARED = "@shared";
 
   function isSelected(view: View) {
     return app.view.kind === view.kind && (view.kind !== "notebook" || (app.view as { id: string }).id === view.id);
@@ -86,10 +92,6 @@
 <nav>
   <header class="headerbar">
     <div class="title"><strong class="brand"><img src="/icon.svg" alt="" width="22" height="22" />Gnotes</strong></div>
-    <!-- New Notebook sits in the headerbar at every level, here and inside each notebook. -->
-    <button class="flat icon phone-only" title="New notebook" aria-label="New notebook" onclick={() => (creating = true)}>
-      <Icon name="newfolder" />
-    </button>
     <!-- Your avatar opens account settings, as in most phone apps. -->
     <button class="flat icon circular account" title="Account and settings" aria-label="Settings" onclick={openSettings}>
       <span class="avatar small {colorFor(app.user?.id ?? '')}">{app.user?.display_name.slice(0, 1).toUpperCase()}</span>
@@ -97,58 +99,32 @@
   </header>
 
   <div class="scroll" use:scrollEdge>
+    <!-- The same places as the phone's tab bar: your folders, Recent, and what's shared with you. -->
     <ul class="group">
-      {@render row({ kind: "all" }, "note", "All Notes")}
-    </ul>
-
-    {#if media.phone}
-      <!-- The phone home is the top level of the same folder list every notebook shows. -->
-      <FolderList folders={ownRoots} />
-      {#if hasSharedNotes}
-        <h3 class="group-title">Shared with Me</h3>
-        <ul class="group">{@render row({ kind: "shared-notes" }, "people", "Shared Notes")}</ul>
-      {/if}
-      {#if sharedRoots.length}
-        <FolderList folders={sharedRoots} title={hasSharedNotes ? "Shared Notebooks" : "Shared with Me"} />
-      {/if}
-    {:else}
-      <h3 class="group-title">Notebooks</h3>
-      <ul class="group">
+      {@render row({ kind: "root" }, "home", "Notes", "", 0, ownRoots.length ? ROOT : null)}
+      {#if !collapsed.has(ROOT)}
         {#each ownRoots as nb (nb.id)}
-          {@render notebookRows(nb, 0)}
+          {@render notebookRows(nb, 1)}
         {/each}
-        <li>
-          <button class="row flat add" onclick={() => (creating = true)}>
-            <Icon name="newfolder" /><span class="label">New Notebook</span>
-          </button>
-        </li>
-      </ul>
-
-      {#if sharedRoots.length || hasSharedNotes}
-        <h3 class="group-title">Shared with Me</h3>
-        <ul class="group">
-          {#if hasSharedNotes}
-            {@render row({ kind: "shared-notes" }, "people", "Shared Notes")}
-          {/if}
-          {#each sharedRoots as nb (nb.id)}
-            {@render notebookRows(nb, 0)}
-          {/each}
-        </ul>
       {/if}
-    {/if}
+      {@render row({ kind: "all" }, "clock", "Recent")}
+      {#if sharedRoots.length || hasSharedNotes}
+        {@render row({ kind: "shared-notes" }, "people", "Shared with Me", "", 0, sharedRoots.length ? SHARED : null)}
+        {#if !collapsed.has(SHARED)}
+          {#each sharedRoots as nb (nb.id)}
+            {@render notebookRows(nb, 1)}
+          {/each}
+        {/if}
+      {/if}
+    </ul>
   </div>
 
   <footer class="dim" title={app.status === "online" ? "Changes sync live" : "Changes will sync when the server is back"}>
     <span class="dot {app.status}"></span>
     {app.status === "online" ? "Connected" : app.status === "connecting" ? "Connecting…" : "Offline"}
   </footer>
-
-  <button class="fab phone-only" onclick={() => composeNote({ kind: "all" })}><Icon name="compose" /> New Note</button>
 </nav>
 
-{#if creating}
-  <NewNotebookDialog parent={null} onclose={() => (creating = false)} />
-{/if}
 
 <style>
   nav {

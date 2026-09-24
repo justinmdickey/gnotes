@@ -4,6 +4,7 @@ import { toast } from "./ui.svelte";
 
 /** What the note list shows. */
 export type View =
+  | { kind: "root" }
   | { kind: "all" }
   | { kind: "notebook"; id: string }
   | { kind: "shared-notes" };
@@ -12,7 +13,7 @@ export const app = $state({
   user: null as User | null,
   tree: { notebooks: [], notes: [], shared: [] } as Tree,
   status: "connecting" as Status,
-  view: { kind: "all" } as View,
+  view: { kind: "root" } as View,
   noteId: null as string | null,
   /** Which pane is visible on narrow screens. */
   pane: "list" as "sidebar" | "list" | "editor",
@@ -20,6 +21,8 @@ export const app = $state({
   freshNote: null as string | null,
   /** The Settings screen covers the whole app while open. */
   settings: false,
+  /** The note editor has focus, so the phone's tab bar steps aside for the keyboard bar. */
+  typing: false,
   /** Tablet only: the notebooks sidebar is pulled out over the list. */
   drawer: false,
   /** Optional server abilities, like speech-to-text. */
@@ -29,8 +32,9 @@ export const app = $state({
 });
 
 export function viewTitle(view: View, tree: Tree): string {
-  if (view.kind === "all") return "All Notes";
-  if (view.kind === "shared-notes") return "Shared Notes";
+  if (view.kind === "root") return "Notes";
+  if (view.kind === "all") return "Recent";
+  if (view.kind === "shared-notes") return "Shared with Me";
   return tree.notebooks.find((n) => n.id === view.id)?.name ?? "Notes";
 }
 
@@ -39,7 +43,7 @@ export async function composeNote(view: View = app.view) {
   const notebook = view.kind === "notebook" ? view.id : null;
   const { id } = await api.createNote(notebook);
   app.freshNote = id;
-  navigate(view.kind === "shared-notes" ? { kind: "all" } : view, id);
+  navigate(view.kind === "shared-notes" ? { kind: "root" } : view, id);
   void refreshTree();
 }
 
@@ -98,29 +102,30 @@ export async function endSession() {
 
 // Routes live in the hash so every screen change is a history entry and the phone's
 // back button steps back through them:
-//   #/                       notebooks (the phone's home screen)
-//   #/all  #/shared  #/nb/<id>            a note list
-//   #/all/note/<id>  #/nb/<id>/note/<id>  a note, remembering the list it came from
+//   #/                                the top folder: top-level notebooks and loose notes
+//   #/all  #/shared  #/nb/<id>        Recent, Shared with Me, a notebook
+//   #/note/<id>  #/nb/<id>/note/<id>  a note, remembering the list it came from
 
 function viewPath(view: View): string {
   if (view.kind === "notebook") return `nb/${view.id}`;
+  if (view.kind === "root") return "";
   return view.kind === "shared-notes" ? "shared" : "all";
 }
 
 function hashFor(view: View | null, noteId: string | null): string {
-  if (!view) return "#/";
-  return `#/${viewPath(view)}${noteId ? `/note/${noteId}` : ""}`;
+  const path = [viewPath(view ?? { kind: "root" }), noteId ? `note/${noteId}` : ""].filter(Boolean).join("/");
+  return `#/${path}`;
 }
 
 function apply(view: View | null, noteId: string | null) {
   app.settings = false;
   app.drawer = false;
-  if (view) app.view = view;
+  app.view = view ?? { kind: "root" };
   app.noteId = noteId;
-  app.pane = noteId ? "editor" : view ? "list" : "sidebar";
+  app.pane = noteId ? "editor" : "list";
 }
 
-/** Goes to a screen: a view's note list, a note inside it, or home with `view` null. */
+/** Goes to a screen: a view's note list, or a note inside it. `null` is the top folder. */
 export function navigate(view: View | null, noteId: string | null = null, replace = false) {
   apply(view, noteId);
   const hash = hashFor(view, noteId);
@@ -148,15 +153,48 @@ export function goBack() {
     return navigate(null, null, true);
   }
   const parent = app.noteId ? app.view : parentView(app.view);
+  // The top folder, Recent and Shared are tabs; there's nothing above them.
+  if (!app.noteId && !parent) return;
   if (history.state?.from === hashFor(parent, null)) return history.back();
   navigate(parent, null, true);
 }
 
-/** The screen above a note list: a sub-notebook's parent, or home. */
+/** The screen above a note list: a notebook's parent notebook or the top folder, or nothing for tabs. */
 export function parentView(view: View): View | null {
   if (view.kind !== "notebook") return null;
-  const parentId = app.tree.notebooks.find((n) => n.id === view.id)?.parent_id;
-  return parentId && app.tree.notebooks.some((n) => n.id === parentId) ? { kind: "notebook", id: parentId } : null;
+  const nb = app.tree.notebooks.find((n) => n.id === view.id);
+  if (nb?.parent_id && app.tree.notebooks.some((n) => n.id === nb.parent_id)) return { kind: "notebook", id: nb.parent_id };
+  // A shared notebook's top sits in Shared with Me, not in your own folders.
+  return nb && nb.role !== "owner" ? { kind: "shared-notes" } : { kind: "root" };
+}
+
+/** Where a note or notebook lives, outermost first, for "in Home › Kitchen" labels. */
+export function pathOf(notebookId: string | null): string[] {
+  const out: string[] = [];
+  let id = notebookId;
+  while (id) {
+    const nb = app.tree.notebooks.find((n) => n.id === id);
+    if (!nb) break;
+    out.unshift(nb.name);
+    id = nb.parent_id;
+  }
+  return out;
+}
+
+/** A notebook and everything inside it, for searching a folder. */
+export function subtree(id: string | null): Set<string | null> {
+  const out = new Set<string | null>([id]);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const nb of app.tree.notebooks) {
+      if (!out.has(nb.id) && (id === null ? nb.role === "owner" && (nb.parent_id === null || out.has(nb.parent_id)) : out.has(nb.parent_id))) {
+        out.add(nb.id);
+        grew = true;
+      }
+    }
+  }
+  return out;
 }
 
 /** Tablet: closes the pulled-out sidebar, leaving home for the list if that's where we were. */
@@ -174,18 +212,21 @@ export function readHash() {
   const id = "([0-9a-f-]{36})";
   const note = h.match(new RegExp(`(?:^|/)note/${id}$`))?.[1] ?? null;
   const base = h.replace(/\/?note\/[0-9a-f-]{36}$/, "");
-  let view: View | null = null;
+  let view: View = { kind: "root" };
   const nb = base.match(new RegExp(`^nb/${id}$`));
   if (nb) view = { kind: "notebook", id: nb[1] };
   else if (base === "shared") view = { kind: "shared-notes" };
-  else if (base === "all" || note) view = { kind: "all" };
+  else if (base === "all") view = { kind: "all" };
   apply(view, note);
 }
 
 export function notesFor(view: View, tree: Tree): TreeNote[] {
   switch (view.kind) {
+    case "root":
+      return tree.notes.filter((n) => n.role === "owner" && n.notebook_id === null);
     case "all":
-      return tree.notes.filter((n) => n.role === "owner");
+      // Recent: every note you can see, newest first.
+      return tree.notes.toSorted((a, b) => b.updated_at - a.updated_at);
     case "notebook":
       return tree.notes.filter((n) => n.notebook_id === view.id);
     case "shared-notes": {
@@ -214,6 +255,6 @@ export async function trashNote(id: string) {
 
 export async function trashNotebook(id: string, name: string) {
   await api.deleteNotebook(id);
-  if (app.view.kind === "notebook" && app.view.id === id) navigate({ kind: "all" }, null, true);
+  if (app.view.kind === "notebook" && app.view.id === id) navigate(parentView(app.view), null, true);
   toast(`“${name}” moved to trash`, { label: "Undo", run: () => void api.restore("notebook", id).then(refreshTree) });
 }

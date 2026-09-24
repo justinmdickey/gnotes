@@ -15,9 +15,8 @@
   import { sync } from "./lib/sync";
   import Menu from "./lib/Menu.svelte";
   import StatusPage from "./lib/StatusPage.svelte";
-  import { app, colorFor, composeNote, goBack, navigate, trashNote, viewTitle } from "./lib/store.svelte";
+  import { app, colorFor, composeNote, goBack, navigate, pathOf, trashNote, viewTitle, type View } from "./lib/store.svelte";
   import { bloom, media, scrollEdge } from "./lib/ui.svelte";
-  import { fly } from "svelte/transition";
   import FormatBar from "./FormatBar.svelte";
   import Recorder from "./Recorder.svelte";
   import { addImages, addRecording } from "./lib/attachments";
@@ -33,9 +32,16 @@
   const notebook = $derived(note?.notebook_id ? app.tree.notebooks.find((n) => n.id === note.notebook_id) : undefined);
 
   /** Wide: show that notebook's list beside this note. Phone: go to the list. */
-  function openNotebook() {
-    if (!notebook) return;
-    navigate({ kind: "notebook", id: notebook.id }, media.phone ? null : noteId);
+  /** Where the note lives, as a chip above it. Loose notes only say so when opened from elsewhere. */
+  const place = $derived(
+    notebook
+      ? { label: pathOf(notebook.id).join(" › "), icon: "folder" as const, view: { kind: "notebook", id: notebook.id } as View }
+      : note?.role === "owner" && app.view.kind !== "root"
+        ? { label: "Notes", icon: "home" as const, view: { kind: "root" } as View }
+        : null,
+  );
+  function openPlace() {
+    if (place) navigate(place.view, media.phone ? null : noteId);
   }
   let role = $state<Role | null>(null);
   let loaded = $state(false);
@@ -130,7 +136,7 @@
           editable.of(EditorView.editable.of(false)),
           EditorView.contentAttributes.of({ "aria-label": "Note text", autocapitalize: "sentences", spellcheck: "true" }),
           EditorView.updateListener.of((u) => {
-            if (u.focusChanged) focused = u.view.hasFocus;
+            if (u.focusChanged) app.typing = focused = u.view.hasFocus;
             if (u.docChanged || u.selectionSet) ({ block, inline } = activeFormats(u.state));
           }),
           LoroExtensions(
@@ -235,20 +241,8 @@
     if (view?.hasFocus) requestAnimationFrame(() => view && revealCursor(view));
   });
 
-  /** Adds a checklist item at the end of the note and starts typing in it. */
-  function startChecklist() {
-    if (!view) return;
-    const { doc: text } = view.state;
-    const last = text.line(text.lines);
-    const insert = last.text.trim() === "" ? "- [ ] " : "\n- [ ] ";
-    const from = last.text.trim() === "" ? last.from : text.length;
-    view.dispatch({
-      changes: { from, to: text.length, insert },
-      selection: { anchor: from + insert.length },
-      scrollIntoView: true,
-    });
-    view.focus();
-  }
+  // Leaving the note while typing gives the tab bar back.
+  $effect(() => () => (app.typing = false));
 
   function failed(err: unknown) {
     toast(err instanceof ApiError ? err.message : "Couldn't add that. Check your connection.");
@@ -312,14 +306,13 @@
     },
   });
 
-  const toolbarIn = (node: Element) => fly(node, { y: 60, duration: media.reduced ? 0 : 220 });
 </script>
 
 <section class:focused style:padding-bottom="{coveredBottom}px">
   <div class="top">
     <header class="headerbar">
-      <button class="flat back phone-only" onclick={goBack}>
-        <Icon name="back" /><span>{viewTitle(app.view, app.tree)}</span>
+      <button class="flat icon circular back-icon phone-only" title="Back to {viewTitle(app.view, app.tree)}" aria-label="Back to {viewTitle(app.view, app.tree)}" onclick={goBack}>
+        <Icon name="back" />
       </button>
       <div class="title"><strong>{note?.title || "New Note"}</strong></div>
       <div class="peers">
@@ -332,10 +325,14 @@
         <button class="suggested done" onclick={() => view?.contentDOM.blur()} transition:bloom>Done</button>
       {:else if role && role !== "viewer"}
         {#if role === "owner"}
-          <button class="flat accent share wide-only" aria-label="Share" title="Share this note" onclick={() => (sharing = true)}>
+          <button class="flat accent share" aria-label="Share" title="Share this note" onclick={() => (sharing = true)}>
             <Icon name="people" /><span>Share</span>
           </button>
         {/if}
+        <!-- Wide screens already have New Note over the list. -->
+        <button class="flat icon phone-only" title="New note" aria-label="New note" onclick={() => composeNote()}>
+          <Icon name="compose" />
+        </button>
         <Menu
           label="Note menu"
           items={[
@@ -373,27 +370,14 @@
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
   <div class="scroll" class:gone={lost} onclick={focusEnd} use:scrollEdge bind:this={scroller}>
     <div class="column" class:hidden={!loaded}>
-      {#if notebook}
-        <button class="chip-link notebook-chip" title="Open the {notebook.name} notebook" onclick={(e) => (e.stopPropagation(), openNotebook())}>
-          <Icon name="folder" size={14} /><span>{notebook.name}</span><Icon name="next" size={12} />
+      {#if place}
+        <button class="chip-link notebook-chip" title="Open {place.label}" onclick={(e) => (e.stopPropagation(), openPlace())}>
+          <Icon name={place.icon} size={14} /><span>{place.label}</span><Icon name="next" size={12} />
         </button>
       {/if}
-      <div class="page" class:with-chip={notebook} bind:this={parent}></div>
+      <div class="page" class:with-chip={place} bind:this={parent}></div>
     </div>
   </div>
-
-  {#if canEdit && !focused}
-    <!-- Phone, not typing: a bottom toolbar with labeled actions. -->
-    <div class="toolbar phone-only" transition:toolbarIn>
-      <button class="flat tool" onclick={startChecklist}><Icon name="checklist" /><span>Checklist</span></button>
-      <button class="flat tool" onclick={pickPhoto}><Icon name="camera" /><span>Photo</span></button>
-      <button class="flat tool" onclick={startRecording}><Icon name="mic" /><span>Record</span></button>
-      {#if role === "owner"}
-        <button class="flat tool" onclick={() => (sharing = true)}><Icon name="people" /><span>Share</span></button>
-      {/if}
-      <button class="flat tool" onclick={() => composeNote()}><Icon name="compose" /><span>New Note</span></button>
-    </div>
-  {/if}
 </section>
 
 <input bind:this={photoInput} class="file" type="file" accept="image/*" multiple onchange={onPhotos} aria-hidden="true" tabindex="-1" />
@@ -435,16 +419,6 @@
     box-shadow: 0 1px 0 var(--border);
   }
 
-  .back {
-    max-width: 40%;
-  }
-
-  .back span {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
   .done {
     min-height: 34px !important;
     padding: 0 16px;
@@ -454,33 +428,6 @@
   .share {
     gap: 6px;
     padding: 0 12px;
-  }
-
-  .toolbar {
-    display: flex;
-    justify-content: space-around;
-    padding: 4px 8px calc(4px + env(safe-area-inset-bottom));
-    border-top: 1px solid var(--border);
-    background: color-mix(in srgb, var(--headerbar-bg) 92%, transparent);
-    backdrop-filter: blur(12px);
-  }
-
-  .tool {
-    flex: 1;
-    flex-direction: column;
-    gap: 3px;
-    min-height: 54px;
-    padding: 4px 0;
-    color: var(--fg);
-    font-size: var(--text-xs);
-    font-weight: 600;
-  }
-
-  /* Blue icon, plain label: the icon marks it as tappable, the text stays easy to read. */
-  .tool :global(svg) {
-    width: var(--icon-touch);
-    height: var(--icon-touch);
-    color: var(--accent);
   }
 
   .peers {

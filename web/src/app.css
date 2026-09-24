@@ -435,6 +435,13 @@ button.back svg {
   color: var(--accent);
 }
 
+/* Back as a bare chevron, where a path on screen already says where it goes. */
+button.back-icon svg {
+  width: var(--icon-touch);
+  height: var(--icon-touch);
+  color: var(--accent);
+}
+
 button.back span {
   overflow: hidden;
   text-overflow: ellipsis;

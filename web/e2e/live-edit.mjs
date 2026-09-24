@@ -96,8 +96,8 @@ try {
   check(true, "alice shared the note with bob");
 
   // Bob sees it appear without reloading, and opens it.
-  await bob.waitForFunction(() => [...document.querySelectorAll("nav button")].some((b) => b.textContent.includes("Shared Notes")));
-  await bob.evaluate(() => [...document.querySelectorAll("nav button")].find((b) => b.textContent.includes("Shared Notes")).click());
+  await bob.waitForFunction(() => [...document.querySelectorAll("nav button")].some((b) => b.textContent.includes("Shared with Me")));
+  await bob.evaluate(() => [...document.querySelectorAll("nav button")].find((b) => b.textContent.includes("Shared with Me")).click());
   await bob.waitForFunction(() => [...document.querySelectorAll("li button")].some((b) => b.textContent.includes("Groceries")));
   await bob.evaluate(() => [...document.querySelectorAll("li button")].find((b) => b.textContent.includes("Groceries")).click());
   await bob.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("milk"));
@@ -180,7 +180,7 @@ try {
   await carol.type("input[name=password]", "password123");
   await carol.click("button[type=submit]");
   await carol.waitForSelector("nav");
-  await carol.evaluate(() => [...document.querySelectorAll("nav button")].find((b) => b.textContent.includes("Shared Notes")).click());
+  await carol.evaluate(() => [...document.querySelectorAll(".tabbar button")].find((b) => b.textContent.includes("Shared")).click());
   await carol.waitForFunction(() => [...document.querySelectorAll("li button")].some((b) => b.textContent.includes("Groceries")));
   check(true, "invitee joins from the link and sees the shared note");
 
@@ -191,7 +191,7 @@ try {
   await carol.waitForFunction(() => location.hash === "#/shared");
   await carol.goBack();
   await carol.waitForFunction(() => location.hash === "#/");
-  check(true, "back button goes note -> list -> notebooks");
+  check(true, "back button goes note -> list -> the previous tab");
 
   // A new note that's left blank is thrown away, like Apple Notes.
   const count = () => alice.$$eval("li button .note-title", (els) => els.length);
@@ -245,7 +245,7 @@ try {
   await alice.click(".list header button[aria-label='New note']");
   await alice.waitForSelector(".cm-content[contenteditable=true]");
   await alice.keyboard.type("Pantry");
-  await alice.waitForFunction(() => document.querySelector(".notebook-chip")?.textContent.trim() === "Kitchen");
+  await alice.waitForFunction(() => document.querySelector(".notebook-chip")?.textContent.trim() === "Home › Kitchen");
   check(true, "a note in a notebook shows the notebook chip");
   if (process.env.SHOTS) await (await new Promise((r) => setTimeout(r, 400)), alice.screenshot({ path: join(process.env.SHOTS, "desktop-notebook.png") }));
 
@@ -266,7 +266,7 @@ try {
   check(true, "a notebook is made inside another the same way as at the top");
   await alice.click(".hero .crumbs button.crumb:not(.root)");
   await alice.waitForFunction(() => {
-    const names = [...document.querySelectorAll(".pane.list .folder-row:not(.add) .name")].map((e) => e.textContent);
+    const names = [...document.querySelectorAll(".pane.list .folder-row .name")].map((e) => e.textContent.trim());
     return names.join(",") === "Garage,Kitchen";
   });
   check(true, "a notebook lists its sub-notebooks as folders");
@@ -278,7 +278,7 @@ try {
   await alice.waitForSelector("dialog [aria-label=Destinations]");
   await alice.evaluate(() => [...document.querySelectorAll("dialog [aria-label=Destinations] button")].find((b) => b.textContent.trim() === "Garage").click());
   await closed(alice);
-  await alice.waitForFunction(() => document.querySelector(".notebook-chip")?.textContent.trim() === "Garage");
+  await alice.waitForFunction(() => document.querySelector(".notebook-chip")?.textContent.trim() === "Home › Garage");
   check(true, "a note moves to another notebook");
 
   // Deep down, the middle levels fold into a "…" crumb that still reaches them.
@@ -374,7 +374,7 @@ try {
     await shot("phone-settings-stt");
     await alice.goto(noteUrl);
     await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("bread"));
-    await alice.evaluate(() => [...document.querySelectorAll(".toolbar button")].find((b) => b.textContent.includes("Share")).click());
+    await alice.tap(".editor header button[aria-label='Share']");
     await alice.waitForSelector("dialog button.add");
     await shot("phone-share");
     await alice.tap("dialog .actions button");
@@ -400,16 +400,22 @@ try {
     await alice.tap("button[aria-label='Text styles']");
     // The keyboard bar has its own way out, so Done at the top isn't the only one.
     await alice.tap("button[aria-label='Hide keyboard']");
-    await alice.waitForSelector(".toolbar button");
+    await alice.waitForSelector(".tabbar");
     check(await alice.evaluate(() => !document.querySelector(".cm-editor.cm-focused")), "the phone keyboard bar can hide the keyboard");
-    await alice.click(".editor .back");
+    await alice.click(".editor .back-icon");
     await new Promise((r) => setTimeout(r, 500));
     await shot("phone-list");
     await alice.emulateMediaFeatures([{ name: "prefers-color-scheme", value: "dark" }]);
-    await alice.click(".list .back-icon");
-    await new Promise((r) => setTimeout(r, 500));
-    await shot("phone-sidebar-dark");
-    await alice.evaluate(() => [...document.querySelectorAll(".pane.sidebar .folder-row")].find((b) => b.textContent.includes("Home")).click());
+    // The tab bar is the way between sections; Notes opens the top folder.
+    await alice.evaluate(() => [...document.querySelectorAll(".tabbar button")].find((b) => b.textContent.includes("Notes")).click());
+    await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Notes");
+    await shot("phone-home-dark");
+    await alice.type(".search input", "pantry");
+    await alice.waitForFunction(() => [...document.querySelectorAll(".note .where")].some((w) => w.textContent.includes("Home › Garage")));
+    check(true, "searching from the top finds notes anywhere and says where they are");
+    await shot("phone-search-dark");
+    await alice.click(".search .clear");
+    await alice.evaluate(() => [...document.querySelectorAll(".pane.list .folder-row")].find((b) => b.textContent.includes("Home")).click());
     await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Home");
     await alice.evaluate(() => [...document.querySelectorAll(".pane.list .folder-row")].find((b) => b.textContent.includes("Kitchen")).click());
     await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Kitchen");

@@ -4,7 +4,7 @@
   import Icon from "./lib/Icon.svelte";
   import Overlays from "./lib/Overlays.svelte";
   import StatusPage from "./lib/StatusPage.svelte";
-  import { app, closeDrawer, composeNote, goBack, readHash, startSession } from "./lib/store.svelte";
+  import { app, closeDrawer, composeNote, goBack, parentView, readHash, startSession } from "./lib/store.svelte";
   import { fadeIn, media, page, standalone } from "./lib/ui.svelte";
   import Editor from "./Editor.svelte";
   import Join from "./Join.svelte";
@@ -12,6 +12,7 @@
   import Settings from "./Settings.svelte";
   import NoteList from "./NoteList.svelte";
   import Sidebar from "./Sidebar.svelte";
+  import TabBar from "./TabBar.svelte";
 
   type Pane = "sidebar" | "list" | "editor";
   const order: Pane[] = ["sidebar", "list", "editor"];
@@ -51,7 +52,7 @@
     return () => clearTimeout(t);
   });
 
-  const drawerOpen = $derived(app.drawer || app.pane === "sidebar");
+  const drawerOpen = $derived(app.drawer);
 
   // Edge swipe back on phones, for home-screen installs where the browser has no back gesture.
   let shell = $state<HTMLDivElement>();
@@ -67,7 +68,8 @@
     let speed = 0;
     const start = (e: TouchEvent) => {
       const t = e.touches[0];
-      tracking = media.phone && app.pane !== "sidebar" && !app.settings && e.touches.length === 1 && t.clientX < 28;
+      const canGoBack = app.noteId !== null || parentView(app.view) !== null;
+      tracking = media.phone && canGoBack && !app.settings && e.touches.length === 1 && t.clientX < 28;
       startX = lastX = t.clientX;
       startY = t.clientY;
       lastT = e.timeStamp;
@@ -136,6 +138,7 @@
 {:else if !app.user}
   <Login />
 {:else}
+  <div class="app-frame">
   <div class="shell" class:dragging={drag !== null} class:drawer-open={drawerOpen} bind:this={shell}>
     {#each order as p (p)}
       <div
@@ -165,6 +168,10 @@
     <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
     <div class="drawer-scrim" onclick={closeDrawer}></div>
   </div>
+  {#if media.phone && !app.typing}
+    <TabBar />
+  {/if}
+  </div>
 
   {#if app.settings}
     <div class="settings-layer" transition:page>
@@ -182,11 +189,18 @@
     height: 100%;
   }
 
+  .app-frame {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+  }
+
   .shell {
     position: relative;
+    flex: 1;
+    min-height: 0;
     display: grid;
     grid-template-columns: 260px 340px 1fr;
-    height: 100%;
     overflow: hidden;
     background: var(--view-bg);
   }

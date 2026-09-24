@@ -3,11 +3,15 @@
   import { cubicOut } from "svelte/easing";
   import type { TreeNotebook } from "./lib/api";
   import Icon from "./lib/Icon.svelte";
-  import { app, navigate, notesFor } from "./lib/store.svelte";
+  import { app, navigate, notesFor, pathOf } from "./lib/store.svelte";
   import { media } from "./lib/ui.svelte";
 
   /** The notebooks in one place, top level or inside a notebook. Every level looks the same. */
-  let { folders, title = "Notebooks" }: { folders: TreeNotebook[]; title?: string } = $props();
+  let {
+    folders,
+    title = "Notebooks",
+    showWhere = false,
+  }: { folders: TreeNotebook[]; title?: string; showWhere?: boolean } = $props();
 
   const inside = (id: string) => app.tree.notebooks.filter((n) => n.parent_id === id).length;
   const reveal = (node: Element) => slide(node, { duration: media.reduced ? 0 : 200, easing: cubicOut });
@@ -20,7 +24,10 @@
       <li transition:reveal>
         <button class="flat folder-row" onclick={() => navigate({ kind: "notebook", id: nb.id })}>
           <Icon name="folder" />
-          <span class="name">{nb.name}</span>
+          <span class="name">
+            {nb.name}
+            {#if showWhere}<small class="dim">in {pathOf(nb.parent_id).join(" › ") || (nb.role === "owner" ? "Notes" : nb.owner)}</small>{/if}
+          </span>
           {#if nb.role !== "owner" && nb.parent_id === null}<span class="dim owner">{nb.owner}</span>{/if}
           <!-- Everything directly inside, notebooks and notes alike, like a file manager. -->
           <span class="dim count" title="Items inside">{inside(nb.id) + notesFor({ kind: "notebook", id: nb.id }, app.tree).length}</span>
@@ -62,6 +69,14 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .name small {
+    display: block;
+    font-size: var(--text-xs);
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .owner {
