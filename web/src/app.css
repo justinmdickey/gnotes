@@ -27,6 +27,8 @@
   --destructive: #c01c28;
   --destructive-bg: #e01b24;
   --success: #26a269;
+  /* The shared badge: Adwaita yellow, so shared things stand out from blue actions. */
+  --shared: #e5a50a;
   /* Type scale. */
   --text-xs: 0.8rem;
   --text-sm: 0.875rem;
@@ -78,6 +80,7 @@
     --destructive: #ff7b63;
     --destructive-bg: #c01c28;
     --success: #8ff0a4;
+    --shared: #f6d32d;
     --shadow-md: 0 2px 8px rgb(0 0 0 / 35%), 0 0 0 1px rgb(255 255 255 / 6%);
     --shadow-lg: 0 12px 40px rgb(0 0 0 / 50%), 0 0 0 1px rgb(255 255 255 / 8%);
   }
@@ -440,6 +443,13 @@ button.back-icon svg {
   width: var(--icon-touch);
   height: var(--icon-touch);
   color: var(--accent);
+}
+
+/* A small yellow person after a name: this item is shared. */
+.shared-badge {
+  flex: none;
+  display: inline-flex;
+  color: var(--shared);
 }
 
 button.back span {

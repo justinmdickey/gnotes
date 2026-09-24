@@ -28,6 +28,7 @@
             {nb.name}
             {#if showWhere}<small class="dim">in {pathOf(nb.parent_id).join(" › ") || (nb.role === "owner" ? "Notes" : nb.owner)}</small>{/if}
           </span>
+          {#if nb.shared}<span class="shared-badge" title="Shared"><Icon name="person" size={16} /></span>{/if}
           {#if nb.role !== "owner" && nb.parent_id === null}<span class="dim owner">{nb.owner}</span>{/if}
           <!-- Everything directly inside, notebooks and notes alike, like a file manager. -->
           <span class="dim count" title="Items inside">{inside(nb.id) + notesFor({ kind: "notebook", id: nb.id }, app.tree).length}</span>

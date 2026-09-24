@@ -193,7 +193,7 @@
     {/if}
     {#if notebook?.role === "owner"}
       <button class="flat accent share" title="Share this notebook" onclick={() => (sharing = true)}>
-        <Icon name="people" /><span>Share</span>
+        <Icon name="share" /><span>Share</span>
       </button>
     {/if}
     {#if menuItems.length}
@@ -261,7 +261,10 @@
         {#each group.notes as note (note.id)}
           <li transition:reveal>
             <button class="flat note" class:selected={app.noteId === note.id} onclick={() => openNote(note.id)}>
-              <span class="note-title">{note.title || "New Note"}</span>
+              <span class="note-title">
+                <span class="t">{note.title || "New Note"}</span>
+                {#if note.shared}<span class="shared-badge" title="Shared"><Icon name="person" size={16} /></span>{/if}
+              </span>
               <span class="meta">
                 <span class="time">{when(note.updated_at)}</span>
                 <span class="dim preview">{note.preview || (note.role !== "owner" ? note.owner : "No additional text")}</span>
@@ -499,7 +502,14 @@
   }
 
   .note-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
     font-weight: 700;
+  }
+
+  .note-title .t {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

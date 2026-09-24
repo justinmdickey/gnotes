@@ -326,7 +326,7 @@
       {:else if role && role !== "viewer"}
         {#if role === "owner"}
           <button class="flat accent share" aria-label="Share" title="Share this note" onclick={() => (sharing = true)}>
-            <Icon name="people" /><span>Share</span>
+            <Icon name="share" /><span>Share</span>
           </button>
         {/if}
         <Menu

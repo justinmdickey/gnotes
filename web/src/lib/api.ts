@@ -14,6 +14,8 @@ export interface TreeNotebook {
   owner: string;
   role: Role;
   updated_at: number;
+  /** Has a share of its own, either given by you or to you. */
+  shared: boolean;
 }
 
 export interface TreeNote {
@@ -24,6 +26,7 @@ export interface TreeNote {
   owner: string;
   role: Role;
   updated_at: number;
+  shared: boolean;
 }
 
 export interface SharedRoot {

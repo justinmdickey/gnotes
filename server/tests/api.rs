@@ -225,6 +225,11 @@ async fn sharing_controls_access() {
     assert_eq!(tree["notes"][0]["id"], note);
     assert_eq!(tree["notes"][0]["role"], "viewer");
     assert_eq!(tree["shared"][0]["resource_id"], notebook);
+    // Both sides see the notebook marked shared; the note inside isn't shared on its own.
+    assert_eq!(tree["notebooks"][0]["shared"], true);
+    assert_eq!(tree["notes"][0]["shared"], false);
+    let own = alice.get("/tree").await;
+    assert_eq!(own["notebooks"][0]["shared"], true);
 
     let (role, _, _) = bob_ws.join_and_sync(&note, None).await;
     assert_eq!(role, "viewer");
@@ -263,6 +268,7 @@ async fn sharing_controls_access() {
     assert!(res.status().is_success());
     assert_eq!(bob_ws.control("revoked").await["note"], note);
     assert_eq!(bob.get("/tree").await["notes"].as_array().unwrap().len(), 0);
+    assert_eq!(alice.get("/tree").await["notebooks"][0]["shared"], false);
 }
 
 #[tokio::test]

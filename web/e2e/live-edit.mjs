@@ -94,6 +94,8 @@ try {
   await alice.click("dialog .actions button");
   await closed(alice);
   check(true, "alice shared the note with bob");
+  await alice.waitForFunction(() => [...document.querySelectorAll(".note")].some((b) => b.textContent.includes("Groceries") && b.querySelector(".shared-badge")));
+  check(true, "a shared note shows the shared badge");
 
   // Bob sees it appear without reloading, and opens it.
   await bob.waitForFunction(() => [...document.querySelectorAll("nav button")].some((b) => b.textContent.includes("Shared with Me")));

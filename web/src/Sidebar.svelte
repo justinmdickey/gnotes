@@ -55,11 +55,12 @@
 
 </script>
 
-{#snippet row(view: View, icon: IconName, label: string, owner = "", depth = 0, fold: string | null = null)}
+{#snippet row(view: View, icon: IconName, label: string, owner = "", depth = 0, fold: string | null = null, shared = false)}
   <li class:foldable={fold}>
     <button class="row flat" class:selected={isSelected(view)} style:--depth={depth} onclick={() => navigate(view)}>
       <Icon name={icon} />
       <span class="label">{label}</span>
+      {#if shared}<span class="shared-badge" title="Shared"><Icon name="person" size={14} /></span>{/if}
       {#if owner}<span class="dim owner">{owner}</span>{/if}
       <span class="count">{count(view)}</span>
       <span class="chevron phone-only"><Icon name="next" /></span>
@@ -81,7 +82,7 @@
 <!-- Desktop shows the whole tree; the phone opens one level at a time. -->
 {#snippet notebookRows(nb: TreeNotebook, depth: number)}
   {@const kids = byParent.get(nb.id) ?? []}
-  {@render row({ kind: "notebook", id: nb.id }, "folder", nb.name, nb.role !== "owner" ? nb.owner : "", depth, kids.length ? nb.id : null)}
+  {@render row({ kind: "notebook", id: nb.id }, "folder", nb.name, nb.role !== "owner" ? nb.owner : "", depth, kids.length ? nb.id : null, nb.shared)}
   {#if !collapsed.has(nb.id)}
     {#each kids as child (child.id)}
       {@render notebookRows(child, depth + 1)}
@@ -200,6 +201,10 @@
 
   .row :global(svg) {
     color: var(--dim-fg);
+  }
+
+  .row .shared-badge :global(svg) {
+    color: var(--shared) !important;
   }
 
   .row.selected :global(svg) {

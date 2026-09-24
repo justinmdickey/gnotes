@@ -27,6 +27,8 @@ pub struct TreeNotebook {
     owner: String,
     role: Role,
     updated_at: i64,
+    /// Someone has a share on this exact item, so it shows a shared badge.
+    shared: bool,
 }
 
 #[derive(Serialize)]
@@ -38,6 +40,8 @@ pub struct TreeNote {
     owner: String,
     role: Role,
     updated_at: i64,
+    /// Someone has a share on this exact item, so it shows a shared badge.
+    shared: bool,
 }
 
 /// Something shared with the caller directly, shown under "Shared with me".
@@ -89,14 +93,14 @@ pub async fn get_tree(State(state): State<AppState>, CurrentUser(me): CurrentUse
 
     let mut notebooks: HashMap<String, TreeNotebook> = HashMap::new();
     for (id, parent_id, name, owner, updated_at) in own_notebooks {
-        notebooks.insert(id.clone(), TreeNotebook { id, parent_id, name, owner, role: Role::Owner, updated_at });
+        notebooks.insert(id.clone(), TreeNotebook { id, parent_id, name, owner, role: Role::Owner, updated_at, shared: false });
     }
     for (id, parent_id, name, owner, updated_at, role) in shared_notebooks {
         let role = Role::parse(&role).unwrap_or(Role::Viewer);
         notebooks
             .entry(id.clone())
             .and_modify(|nb| nb.role = nb.role.max(role))
-            .or_insert(TreeNotebook { id, parent_id, name, owner, role, updated_at });
+            .or_insert(TreeNotebook { id, parent_id, name, owner, role, updated_at, shared: false });
     }
 
     // Own notes, notes inside visible shared notebooks, and notes shared directly.
@@ -131,18 +135,18 @@ pub async fn get_tree(State(state): State<AppState>, CurrentUser(me): CurrentUse
 
     let mut notes: HashMap<String, TreeNote> = HashMap::new();
     for (id, notebook_id, title, preview, owner, updated_at) in own_notes {
-        notes.insert(id.clone(), TreeNote { id, notebook_id, title, preview, owner, role: Role::Owner, updated_at });
+        notes.insert(id.clone(), TreeNote { id, notebook_id, title, preview, owner, role: Role::Owner, updated_at, shared: false });
     }
     for (id, notebook_id, title, preview, owner, updated_at) in notebook_notes {
         let role = notebook_id.as_ref().and_then(|nb| notebooks.get(nb)).map_or(Role::Viewer, |nb| nb.role);
-        notes.insert(id.clone(), TreeNote { id, notebook_id, title, preview, owner, role, updated_at });
+        notes.insert(id.clone(), TreeNote { id, notebook_id, title, preview, owner, role, updated_at, shared: false });
     }
     for (id, notebook_id, title, preview, owner, updated_at, role) in direct_notes {
         let role = Role::parse(&role).unwrap_or(Role::Viewer);
         notes
             .entry(id.clone())
             .and_modify(|n| n.role = n.role.max(role))
-            .or_insert(TreeNote { id, notebook_id, title, preview, owner, role, updated_at });
+            .or_insert(TreeNote { id, notebook_id, title, preview, owner, role, updated_at, shared: false });
     }
 
     let shared: Vec<SharedRoot> = sqlx::query_as::<_, (String, String, String, bool)>(
@@ -158,6 +162,21 @@ pub async fn get_tree(State(state): State<AppState>, CurrentUser(me): CurrentUse
     })
     .map(|(share_id, resource_type, resource_id, hidden)| SharedRoot { share_id, resource_type, resource_id, hidden })
     .collect();
+
+    // Mark everything that has a share of its own: what I've shared, and what was shared with me.
+    let ids: Vec<&String> = notebooks.keys().chain(notes.keys()).collect();
+    let with_shares: Vec<(String, String)> = sqlx::query_as(
+        "SELECT DISTINCT resource_type, resource_id FROM shares WHERE resource_id IN (SELECT value FROM json_each(?))",
+    )
+    .bind(serde_json::to_string(&ids)?)
+    .fetch_all(db)
+    .await?;
+    for (kind, id) in with_shares {
+        match kind.as_str() {
+            "notebook" => notebooks.get_mut(&id).map(|nb| nb.shared = true),
+            _ => notes.get_mut(&id).map(|n| n.shared = true),
+        };
+    }
 
     let mut notebooks: Vec<_> = notebooks.into_values().collect();
     notebooks.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
