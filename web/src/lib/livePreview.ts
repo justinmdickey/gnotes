@@ -92,34 +92,29 @@ function audioPlayer(src: string, label: string): HTMLElement {
   return wrap;
 }
 
-/** Shown on a blank first line so it's clear the note's title goes there. */
-class TitleHint extends WidgetType {
-  constructor(readonly addLine: boolean) {
-    super();
-  }
+const emptyTitle = Decoration.line({ class: "cm-title-empty" });
 
-  eq(other: TitleHint) {
-    return other.addLine === this.addLine;
+/** Above a note that starts with a photo or memo: tap to make a title line over it. */
+class TitleHint extends WidgetType {
+  eq() {
+    return true;
   }
 
   toDOM(view: EditorView) {
     const el = document.createElement("span");
-    el.className = this.addLine ? "cm-title-hint add" : "cm-title-hint";
-    el.textContent = this.addLine ? "Add a title" : "Title";
-    if (this.addLine) {
-      // The note starts with a photo or memo: make a title line above it.
-      el.addEventListener("mousedown", (e) => {
-        e.preventDefault();
-        if (!view.state.facet(EditorView.editable)) return;
-        view.dispatch({ changes: { from: 0, insert: "\n" }, selection: { anchor: 0 }, userEvent: "input" });
-        view.focus();
-      });
-    }
+    el.className = "cm-title-hint add";
+    el.textContent = "Add a title";
+    el.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      if (!view.state.facet(EditorView.editable)) return;
+      view.dispatch({ changes: { from: 0, insert: "\n" }, selection: { anchor: 0 }, userEvent: "input" });
+      view.focus();
+    });
     return el;
   }
 
   ignoreEvent() {
-    return !this.addLine;
+    return false;
   }
 }
 
@@ -277,9 +272,11 @@ function build(view: EditorView): { decorations: DecorationSet; atomic: Decorati
   if (embedLines.has(1)) firstLineIsHeading = true;
   const first = state.doc.line(1);
   if (embedLines.has(1) && view.state.facet(EditorView.editable)) {
-    decos.push(Decoration.widget({ widget: new TitleHint(true), side: -1 }).range(0));
-  } else if (first.length === 0 && state.doc.lines > 1 && !active.has(1)) {
-    decos.push(Decoration.widget({ widget: new TitleHint(false), side: 1 }).range(0));
+    decos.push(Decoration.widget({ widget: new TitleHint(), side: -1 }).range(0));
+  } else if (first.length === 0 && (state.doc.lines === 1 || !active.has(1))) {
+    // A blank title line says "Title" through CSS on the line itself. An inline widget
+    // there would sit before the caret and throw the caret off the big title text.
+    decos.push(emptyTitle.range(0));
   }
 
   for (const { from, to } of view.visibleRanges) {

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, untrack } from "svelte";
   import { Compartment, EditorSelection, EditorState } from "@codemirror/state";
-  import { EditorView, keymap, placeholder } from "@codemirror/view";
+  import { EditorView, keymap } from "@codemirror/view";
   import { defaultKeymap } from "@codemirror/commands";
   import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
   import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
@@ -128,7 +128,6 @@
           livePreview,
           dropImages,
           EditorView.lineWrapping,
-          placeholder("Title"),
           keymap.of([...formatKeymap, ...defaultKeymap]),
           // While typing, the text moves up a line at a time to keep this much room below the
           // cursor, so the line being written never touches the format bar or keyboard.
@@ -716,8 +715,17 @@
     padding: 0;
   }
 
-  .page :global(.cm-placeholder) {
+  /* The blank title line's hint, drawn off to the side of the text so the caret keeps its place. */
+  .page :global(.cm-title-empty) {
+    position: relative;
+  }
+
+  .page :global(.cm-title-empty)::before {
+    content: "Title";
+    position: absolute;
+    inset: 0 auto auto 0;
     color: var(--dim-fg);
+    pointer-events: none;
   }
 
   .page :global(.cm-h1) {

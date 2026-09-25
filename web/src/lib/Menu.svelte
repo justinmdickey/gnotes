@@ -11,7 +11,7 @@
   import type { Snippet } from "svelte";
   import Dialog from "./Dialog.svelte";
   import Icon, { type IconName } from "./Icon.svelte";
-  import { media, pop } from "./ui.svelte";
+  import { media, pop, portal } from "./ui.svelte";
 
   let {
     label,
@@ -44,7 +44,8 @@
   }
 </script>
 
-<svelte:window onkeydown={onkey} />
+<!-- The popover is placed once, under the button; a resize would leave it behind, so close it. -->
+<svelte:window onkeydown={onkey} onresize={() => (open = false)} />
 
 <button bind:this={button} class={buttonClass} class:open title={label} aria-label={label} aria-expanded={open} onclick={toggle}>
   {#if trigger}{@render trigger()}{:else}<Icon name="more" />{/if}
@@ -69,8 +70,8 @@
   </Dialog>
 {:else if open}
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-  <div class="scrim" onclick={() => (open = false)}></div>
-  <div class="popover" role="menu" class:from-left={at.left !== undefined} style:top="{at.top}px" style:right={at.right !== undefined ? `${at.right}px` : null} style:left={at.left !== undefined ? `${at.left}px` : null} transition:pop>
+  <div class="scrim" use:portal onclick={() => (open = false)}></div>
+  <div class="popover" use:portal role="menu" class:from-left={at.left !== undefined} style:top="{at.top}px" style:right={at.right !== undefined ? `${at.right}px` : null} style:left={at.left !== undefined ? `${at.left}px` : null} transition:pop>
     {@render list()}
   </div>
 {/if}

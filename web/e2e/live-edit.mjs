@@ -244,8 +244,25 @@ try {
   await alice.evaluate((id) => (location.hash = `#/nb/${id}`), kitchen);
   await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Kitchen" && document.querySelector(".hero .crumbs")?.textContent.includes("Home"));
   check(true, "nested notebook shows its path and name");
+  // The notebook menu floats above the editor pane instead of being clipped by the list.
+  await alice.click(".list header button[aria-label='Notebook menu']");
+  await alice.waitForSelector(".popover [role=menuitem]");
+  check(
+    await alice.evaluate(() => {
+      const pop = document.querySelector(".popover");
+      return pop.parentElement === document.body && [...pop.querySelectorAll("[role=menuitem]")].every((it) => {
+        const b = it.getBoundingClientRect();
+        return pop.contains(document.elementFromPoint(b.right - 6, b.top + b.height / 2));
+      });
+    }),
+    "the notebook menu sits above every pane",
+  );
+  await alice.keyboard.press("Escape");
+  await alice.waitForFunction(() => !document.querySelector(".popover"));
   await alice.click(".list header button[aria-label='New note']");
   await alice.waitForSelector(".cm-content[contenteditable=true]");
+  // The "Title" hint is drawn by the line, not an inline widget that would push the caret off the title.
+  check(await alice.$eval(".cm-line", (l) => l.classList.contains("cm-title-empty") && !l.querySelector("[contenteditable=false]")), "an empty title line has only the caret on it");
   await alice.keyboard.type("Pantry");
   await alice.waitForFunction(() => document.querySelector(".notebook-chip")?.textContent.trim() === "Home › Kitchen");
   check(true, "a note in a notebook shows the notebook chip");

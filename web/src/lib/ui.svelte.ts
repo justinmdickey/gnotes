@@ -114,3 +114,12 @@ export function scrollEdge(node: HTMLElement) {
   update();
   return { destroy: () => node.removeEventListener("scroll", update) };
 }
+
+/**
+ * Moves an element to the end of <body>, so a popover floats above every pane instead of
+ * being clipped or covered by the pane it was opened from.
+ */
+export function portal(node: HTMLElement) {
+  document.body.append(node);
+  return { destroy: () => node.remove() };
+}
