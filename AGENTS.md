@@ -2,6 +2,10 @@
 
 Self-hosted Markdown notes with live shared editing. `server/` is Rust (axum, SQLite via sqlx, Loro CRDT per note); `web/` is a Svelte 5 (runes) PWA with a CodeMirror 6 editor. Why things are built this way: `docs/DESIGN.md`.
 
+## Find work
+
+Future work is tracked as issues on Forgejo (`git.erisdor.com/justin/gnotes`), read with `tea`: `tea issues ls` to list, `tea issue <n>` to read one. Each issue says where to start and when it's done. Skip `decision` issues until Justin has decided, and `epic` issues until he says to start. Put `Closes #<n>` in the commit body that finishes one.
+
 ## Working loop
 
 For every task, in order:
