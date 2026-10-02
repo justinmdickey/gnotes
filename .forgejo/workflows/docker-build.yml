@@ -40,7 +40,12 @@ jobs:
           set -eu
           curl -fsSL https://download.docker.com/linux/static/stable/x86_64/docker-29.7.1.tgz \
             | tar xz -C /usr/local/bin --strip-components=1 docker/docker
+      # The `docker` driver builds in the runner's own daemon, whose layer cache lasts between jobs
+      # (until the runner pod restarts), so unchanged layers like the Rust dependencies are reused.
+      # The default driver made a fresh builder per job and cached nothing.
       - uses: docker/setup-buildx-action@v3
+        with:
+          driver: docker
       - uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -59,10 +64,26 @@ jobs:
             type=sha
             type=raw,value=latest,enable={{is_default_branch}}
       # No cache-from/cache-to: type=gha is GitHub-hosted and type=registry
-      # fails the whole build on a cache miss.
+      # fails the whole build on a cache miss. The daemon's own cache (above) does the job.
       - uses: docker/build-push-action@v5
         with:
           context: .
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+      # Tells Flux the image is out (Receiver `ci` in kubernetes-homelab), so it scans now; the
+      # second call, once the image bump is committed, makes it fetch and apply that commit.
+      # Best-effort: if it misses, Flux's own timers still roll the release out a minute or two later.
+      - name: Tell Flux
+        env:
+          HOOK: ${{ secrets.FLUX_RECEIVER_URL }}
+        run: |
+          [ -n "$HOOK" ] || exit 0
+          curl -fsS -m 10 -X POST "$HOOK" -o /dev/null || echo "Flux didn't answer; it will catch up on its own"
+          sleep 20
+          curl -fsS -m 10 -X POST "$HOOK" -o /dev/null || echo "Flux didn't answer; it will catch up on its own"
+      # The daemon's disk is a 16Gi emptyDir shared with every repo's builds; keep the cache bounded
+      # so it can't fill up and get the runner pod evicted.
+      - name: Trim the build cache
+        if: always()
+        run: docker builder prune --force --max-used-space 6GB

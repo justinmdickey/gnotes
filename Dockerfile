@@ -8,9 +8,14 @@ RUN npm run build
 
 FROM rust:1.97-slim AS server
 WORKDIR /src
+# Dependencies first, against stub sources, so this layer is reused until Cargo.toml or Cargo.lock
+# changes and a release only compiles gnotes itself. Two jobs keeps it under the CI runner's memory limit.
 COPY Cargo.toml Cargo.lock ./
+COPY server/Cargo.toml server/
+RUN mkdir server/src && echo "fn main() {}" > server/src/main.rs && touch server/src/lib.rs \
+    && CARGO_BUILD_JOBS=2 cargo build --release -p gnotes-server \
+    && rm -rf server/src target/release/.fingerprint/gnotes-server-* target/release/deps/*gnotes_server*
 COPY server/ server/
-# Two jobs keeps the build under the CI runner's memory limit.
 RUN CARGO_BUILD_JOBS=2 cargo build --release -p gnotes-server
 
 FROM debian:trixie-slim
