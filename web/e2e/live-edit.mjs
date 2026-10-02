@@ -291,6 +291,16 @@ try {
   await alice.waitForFunction(() => [...document.querySelectorAll(".note-title")].some((t) => t.textContent.trim() === "Camping"), { timeout: 5000 });
   check(await alice.evaluate(() => document.querySelector(".hero h1")?.textContent === "Vault" && !document.querySelector(".drop-target")), "dropped Markdown imports into the open notebook");
 
+  // The sidebar lists a folder's notebooks first, then its notes A–Z, and a note row opens the note.
+  const sidebar = () => alice.evaluate(() => [...document.querySelectorAll("nav .row .label")].map((l) => l.textContent));
+  await alice.waitForFunction(() => [...document.querySelectorAll("nav .note-row .label")].some((l) => l.textContent === "Camping"));
+  const rows = await sidebar();
+  const at = (name) => rows.indexOf(name);
+  check(at("Vault") < at("Trips") && at("Trips") < at("Lisbon") && at("Lisbon") < at("Camping") && at("Camping") < at("Ideas"), `sidebar shows folders, then notes (${rows})`);
+  await alice.click("nav .note-row ::-p-text(Ideas)");
+  await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("fly"));
+  check(await alice.evaluate(() => document.querySelector("nav .row.selected .label")?.textContent === "Ideas"), "a sidebar note opens and takes the highlight from its folder");
+
   // Pointing at a folder in the sidebar shows a + that makes a notebook or a note inside it.
   await alice.hover("nav li:has(button[aria-label='New in Vault'])");
   await alice.click("nav button[aria-label='New in Vault']");

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { TreeNotebook } from "./lib/api";
+  import type { TreeNote, TreeNotebook } from "./lib/api";
   import Icon, { type IconName } from "./lib/Icon.svelte";
   import Menu from "./lib/Menu.svelte";
   import NewNotebookDialog from "./NewNotebookDialog.svelte";
@@ -51,7 +51,31 @@
   const ROOT = "@root";
   const SHARED = "@shared";
 
+  /** A folder's own notes, A–Z so rows don't jump while you type. Desktop and tablet only. */
+  function notesIn(view: View): TreeNote[] {
+    if (media.phone) return [];
+    return notesFor(view, app.tree).toSorted((a, b) => (a.title || "New Note").localeCompare(b.title || "New Note"));
+  }
+
+  const rootNotes = $derived(notesIn({ kind: "root" }));
+  const sharedNotes = $derived(notesIn({ kind: "shared-notes" }));
+
+  /** Notes whose rows are on screen, i.e. no folder above them is folded. */
+  const shownNotes = $derived.by(() => {
+    const out = new Set<string>();
+    const walk = (view: View, fold: string, kids: TreeNotebook[]) => {
+      if (collapsed.has(fold)) return;
+      for (const n of notesIn(view)) out.add(n.id);
+      for (const nb of kids) walk({ kind: "notebook", id: nb.id }, nb.id, byParent.get(nb.id) ?? []);
+    };
+    walk({ kind: "root" }, ROOT, ownRoots);
+    walk({ kind: "shared-notes" }, SHARED, sharedRoots);
+    return out;
+  });
+
+  /** The open note's own row takes the highlight; its folder keeps it only when the note's row is folded away. */
   function isSelected(view: View) {
+    if (app.noteId && shownNotes.has(app.noteId)) return false;
     return app.view.kind === view.kind && (view.kind !== "notebook" || (app.view as { id: string }).id === view.id);
   }
 
@@ -161,7 +185,7 @@
       <button
         class="flat icon circular fold"
         class:closed={collapsed.has(fold)}
-        aria-label="{collapsed.has(fold) ? 'Show' : 'Hide'} notebooks in {label}"
+        aria-label="{collapsed.has(fold) ? 'Show' : 'Hide'} what's in {label}"
         aria-expanded={!collapsed.has(fold)}
         onclick={() => toggle(fold)}
       >
@@ -171,13 +195,40 @@
   </li>
 {/snippet}
 
-<!-- Desktop shows the whole tree; the phone opens one level at a time. -->
+{#snippet noteRow(note: TreeNote, folder: View, depth: number)}
+  <li>
+    <button
+      class="row flat note-row"
+      class:selected={app.noteId === note.id}
+      style:--depth={depth}
+      onclick={() => navigate(folder, note.id)}
+      draggable={note.role !== "viewer"}
+      ondragstart={(e) => {
+        drag.item = { kind: "note", id: note.id };
+        e.dataTransfer?.setData("application/x-gnotes", note.id);
+        if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+      }}
+      ondragend={endDrag}
+    >
+      <Icon name="note" />
+      <span class="label">{note.title || "New Note"}</span>
+      {#if note.shared}<span class="shared-badge" title="Shared"><Icon name="person" size={14} /></span>{/if}
+    </button>
+  </li>
+{/snippet}
+
+<!-- Desktop shows the whole tree, notebooks first and then notes; the phone opens one level at a time. -->
 {#snippet notebookRows(nb: TreeNotebook, depth: number)}
+  {@const view = { kind: "notebook", id: nb.id } as View}
   {@const kids = byParent.get(nb.id) ?? []}
-  {@render row({ kind: "notebook", id: nb.id }, "folder", nb.name, nb.role !== "owner" ? nb.owner : "", depth, kids.length ? nb.id : null, nb.shared)}
+  {@const notes = notesIn(view)}
+  {@render row(view, "folder", nb.name, nb.role !== "owner" ? nb.owner : "", depth, kids.length || notes.length ? nb.id : null, nb.shared)}
   {#if !collapsed.has(nb.id)}
     {#each kids as child (child.id)}
       {@render notebookRows(child, depth + 1)}
+    {/each}
+    {#each notes as note (note.id)}
+      {@render noteRow(note, view, depth + 1)}
     {/each}
   {/if}
 {/snippet}
@@ -194,18 +245,24 @@
   <div class="scroll" use:scrollEdge>
     <!-- The same places as the phone's tab bar: your folders, Recent, and what's shared with you. -->
     <ul class="group">
-      {@render row({ kind: "root" }, "home", "Notes", "", 0, ownRoots.length ? ROOT : null)}
+      {@render row({ kind: "root" }, "home", "Notes", "", 0, ownRoots.length || rootNotes.length ? ROOT : null)}
       {#if !collapsed.has(ROOT)}
         {#each ownRoots as nb (nb.id)}
           {@render notebookRows(nb, 1)}
         {/each}
+        {#each rootNotes as note (note.id)}
+          {@render noteRow(note, { kind: "root" }, 1)}
+        {/each}
       {/if}
       {@render row({ kind: "all" }, "clock", "Recent")}
       {#if sharedRoots.length || hasSharedNotes}
-        {@render row({ kind: "shared-notes" }, "people", "Shared with Me", "", 0, sharedRoots.length ? SHARED : null)}
+        {@render row({ kind: "shared-notes" }, "people", "Shared with Me", "", 0, sharedRoots.length || sharedNotes.length ? SHARED : null)}
         {#if !collapsed.has(SHARED)}
           {#each sharedRoots as nb (nb.id)}
             {@render notebookRows(nb, 1)}
+          {/each}
+          {#each sharedNotes as note (note.id)}
+            {@render noteRow(note, { kind: "shared-notes" }, 1)}
           {/each}
         {/if}
       {/if}
@@ -336,6 +393,11 @@
   .row.selected {
     background: var(--active);
     font-weight: 700;
+  }
+
+  /* Notes sit under the folders in plain weight, so the folders still read as the structure. */
+  .note-row {
+    font-weight: 400;
   }
 
   .row :global(svg) {
