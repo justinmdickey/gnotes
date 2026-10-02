@@ -1,6 +1,6 @@
 import { api, ApiError, type Features, type Tree, type TreeNote, type User } from "./api";
 import { sync, type Status } from "./sync";
-import { toast } from "./ui.svelte";
+import { media, toast } from "./ui.svelte";
 
 /** What the note list shows. */
 export type View =
@@ -30,6 +30,14 @@ export const app = $state({
   /** Why the user was sent back to the login screen, if it wasn't their choice. */
   signedOutReason: "" as string,
 });
+
+/**
+ * Wide screens in a folder use two panes: the sidebar tree, and either the folder's page or the open
+ * note. Recent and Shared keep their list beside the note, since the date order is the point there.
+ */
+export function twoPane(view: View = app.view): boolean {
+  return media.wide && (view.kind === "root" || view.kind === "notebook");
+}
 
 export function viewTitle(view: View, tree: Tree): string {
   if (view.kind === "root") return "Notes";

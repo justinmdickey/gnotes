@@ -3,10 +3,13 @@ import { cubicOut, backOut } from "svelte/easing";
 import type { TransitionConfig } from "svelte/transition";
 
 const phoneQuery = matchMedia("(max-width: 700px)");
+/** Wide enough for the sidebar to stay out, not a drawer. */
+const wideQuery = matchMedia("(min-width: 1001px)");
 const reducedQuery = matchMedia("(prefers-reduced-motion: reduce)");
 
-export const media = $state({ phone: phoneQuery.matches, reduced: reducedQuery.matches });
+export const media = $state({ phone: phoneQuery.matches, wide: wideQuery.matches, reduced: reducedQuery.matches });
 phoneQuery.addEventListener("change", (e) => (media.phone = e.matches));
+wideQuery.addEventListener("change", (e) => (media.wide = e.matches));
 reducedQuery.addEventListener("change", (e) => (media.reduced = e.matches));
 
 /** Installed to the home screen, where there's no browser back swipe of its own. */

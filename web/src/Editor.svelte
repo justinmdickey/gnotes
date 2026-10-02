@@ -15,7 +15,7 @@
   import { sync } from "./lib/sync";
   import Menu from "./lib/Menu.svelte";
   import StatusPage from "./lib/StatusPage.svelte";
-  import { app, colorFor, composeNote, goBack, navigate, pathOf, trashNote, viewTitle, type View } from "./lib/store.svelte";
+  import { app, colorFor, composeNote, goBack, navigate, pathOf, trashNote, twoPane, viewTitle, type View } from "./lib/store.svelte";
   import { bloom, media, scrollEdge } from "./lib/ui.svelte";
   import FormatBar from "./FormatBar.svelte";
   import Recorder from "./Recorder.svelte";
@@ -310,9 +310,12 @@
 <section class:focused style:padding-bottom="{coveredBottom}px">
   <div class="top">
     <header class="headerbar">
-      <button class="flat icon circular back-icon phone-only" title="Back to {viewTitle(app.view, app.tree)}" aria-label="Back to {viewTitle(app.view, app.tree)}" onclick={goBack}>
-        <Icon name="back" />
-      </button>
+      <!-- Phones, and wide screens in a folder where the note covers the folder's page. -->
+      {#if media.phone || twoPane()}
+        <button class="flat icon circular back-icon" title="Back to {viewTitle(app.view, app.tree)}" aria-label="Back to {viewTitle(app.view, app.tree)}" onclick={goBack}>
+          <Icon name="back" />
+        </button>
+      {/if}
       <div class="title"><strong>{note?.title || "New Note"}</strong></div>
       <div class="peers">
         {#each peers as peer (peer.name)}
@@ -337,6 +340,12 @@
               : []),
           ]}
         />
+      {/if}
+      {#if twoPane()}
+        <!-- The folder's New note button is hidden under the note, so it moves up here. -->
+        <button class="suggested icon new" title="New note" aria-label="New note" onclick={() => composeNote()}>
+          <Icon name="compose" />
+        </button>
       {/if}
     </header>
 
@@ -816,5 +825,11 @@
     .notebook-chip {
       margin: 14px 0 0 12px;
     }
+  }
+
+  .new {
+    margin-left: 2px;
+    min-width: 36px;
+    border-radius: 50%;
   }
 </style>

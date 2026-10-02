@@ -5,7 +5,7 @@
   import Icon from "./lib/Icon.svelte";
   import Overlays from "./lib/Overlays.svelte";
   import StatusPage from "./lib/StatusPage.svelte";
-  import { addableView, app, closeDrawer, composeNote, goBack, importable, importNotes, parentView, readHash, startSession, viewTitle } from "./lib/store.svelte";
+  import { addableView, app, closeDrawer, composeNote, goBack, importable, importNotes, parentView, readHash, startSession, twoPane, viewTitle } from "./lib/store.svelte";
   import { fadeIn, media, page, standalone, toast } from "./lib/ui.svelte";
   import Editor from "./Editor.svelte";
   import Join from "./Join.svelte";
@@ -174,7 +174,7 @@
 {:else}
   <div class="app-frame">
   <div class="main">
-  <div class="shell" class:dragging={drag !== null} class:drawer-open={drawerOpen} bind:this={shell}>
+  <div class="shell" class:dragging={drag !== null} class:drawer-open={drawerOpen} class:two-pane={twoPane()} class:reading={!!app.noteId} bind:this={shell}>
     {#each order as p (p)}
       <div
         class="pane {p}"
@@ -429,6 +429,27 @@
 
     .dragging .pane {
       transition: none !important;
+    }
+  }
+
+  /* Wide, in a folder: the tree and one main pane, showing the folder's page or the open note. */
+  @media (min-width: 1001px) {
+    .shell.two-pane {
+      grid-template-columns: 260px 1fr;
+    }
+
+    .shell.two-pane:not(.reading) .editor,
+    .shell.two-pane.reading .list {
+      display: none;
+    }
+
+    .shell.two-pane .list {
+      border-right: none;
+    }
+
+    /* The folder page keeps a readable width in the middle of the pane. */
+    .shell.two-pane .list :global(.scroll) {
+      padding-inline: max(12px, calc((100% - 720px) / 2));
     }
   }
 

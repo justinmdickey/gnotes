@@ -216,10 +216,11 @@ try {
   // A new note that's left blank is thrown away, like Apple Notes.
   const count = () => alice.$$eval("li button .note-title", (els) => els.length);
   const before = await count();
-  await alice.click(".list header button[aria-label='New note']");
+  // With a note open on a wide screen, New note sits in the note's headerbar and other notes are in the sidebar.
+  await alice.click(".pane.editor header button[aria-label='New note']");
   await alice.waitForFunction((n) => document.querySelectorAll("li button .note-title").length === n + 1, {}, before);
   await alice.waitForSelector(".cm-content[contenteditable=true]");
-  await alice.evaluate(() => [...document.querySelectorAll("li button")].find((b) => b.textContent.includes("Groceries")).click());
+  await alice.click("nav .note-row ::-p-text(Groceries)");
   await alice.waitForFunction((n) => document.querySelectorAll("li button .note-title").length === n, { timeout: 5000 }, before);
   check(true, "blank new note is discarded on leaving");
 
@@ -301,6 +302,20 @@ try {
   await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("fly"));
   check(await alice.evaluate(() => document.querySelector("nav .row.selected .label")?.textContent === "Ideas"), "a sidebar note opens and takes the highlight from its folder");
 
+  // Wide screens in a folder use two panes: the note covers the folder's page, and Back returns to it.
+  const panes = () => alice.evaluate(() => ["list", "editor"].filter((p) => getComputedStyle(document.querySelector(`.pane.${p}`)).display !== "none"));
+  check(JSON.stringify(await panes()) === '["editor"]', "an open note fills the main pane in a folder");
+  if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-two-pane-note.png") });
+  await alice.click(".pane.editor header button[aria-label='Back to Vault']");
+  await alice.waitForFunction(() => !location.hash.includes("/note/"));
+  check(JSON.stringify(await panes()) === '["list"]', "Back shows the folder's page in its place");
+  if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-two-pane-folder.png") });
+  await alice.click("nav .row ::-p-text(Recent)");
+  await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Recent");
+  check(JSON.stringify(await panes()) === '["list","editor"]', "Recent keeps its list beside the note");
+  await alice.click("nav .row ::-p-text(Vault)");
+  await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Vault");
+
   // Pointing at a folder in the sidebar shows a + that makes a notebook or a note inside it.
   await alice.hover("nav li:has(button[aria-label='New in Vault'])");
   await alice.click("nav button[aria-label='New in Vault']");
@@ -335,7 +350,7 @@ try {
   const tree = () => alice.evaluate(() => fetch("/api/tree").then((r) => r.json()));
   const nbId = async (name) => (await tree()).notebooks.find((n) => n.name === name).id;
   const socks = (await tree()).notes.find((n) => n.title === "Socks").id;
-  await dragTo(alice, ".note ::-p-text(Socks)", "nav li:has(button[aria-label='New in Trips']) .row", "desktop-drag-note");
+  await dragTo(alice, "nav .note-row ::-p-text(Socks)", "nav li:has(button[aria-label='New in Trips']) .row", "desktop-drag-note");
   await alice.waitForFunction(() => document.querySelector(".toast")?.innerText.includes("Moved to Trips"));
   check((await tree()).notes.find((n) => n.id === socks).notebook_id === (await nbId("Trips")), "a note dragged onto a sidebar notebook moves there");
   if (process.env.SHOTS) await alice.emulateMediaFeatures([{ name: "prefers-color-scheme", value: "dark" }]);
