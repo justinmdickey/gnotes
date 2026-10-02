@@ -174,6 +174,33 @@ fn edit(doc: &LoroDoc, pos: usize, text: &str) -> Vec<u8> {
 }
 
 #[tokio::test]
+async fn first_account_from_the_browser() {
+    let dir = TempDir::new().unwrap();
+    let server = start(&dir).await;
+    let http = reqwest::Client::builder().cookie_store(true).build().unwrap();
+    let setup = format!("http://{}/api/auth/setup", server.base);
+    let needed = |v: Value| v["needed"].as_bool().unwrap();
+    assert!(needed(http.get(&setup).send().await.unwrap().json().await.unwrap()));
+
+    let short = http.post(&setup).json(&json!({ "username": "ann", "password": "short" })).send().await.unwrap();
+    assert_eq!(short.status(), 400);
+    let res = http
+        .post(&setup)
+        .json(&json!({ "username": "Ann", "display_name": "Ann", "password": "password123" }))
+        .send()
+        .await
+        .unwrap();
+    assert!(res.status().is_success());
+    let me: Value = http.get(format!("http://{}/api/me", server.base)).send().await.unwrap().json().await.unwrap();
+    assert_eq!((me["username"].as_str(), me["is_admin"].as_bool()), (Some("ann"), Some(true)));
+
+    // Once there's an account, nobody else can set the server up.
+    assert!(!needed(http.get(&setup).send().await.unwrap().json().await.unwrap()));
+    let again = reqwest::Client::new().post(&setup).json(&json!({ "username": "eve", "password": "password123" })).send().await.unwrap();
+    assert_eq!(again.status(), 409);
+}
+
+#[tokio::test]
 async fn login_me_logout() {
     let dir = TempDir::new().unwrap();
     let server = start(&dir).await;

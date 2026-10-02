@@ -167,6 +167,9 @@ export const api = {
   me: () => request<User>("GET", "/me"),
   login: (username: string, password: string) => request<User>("POST", "/auth/login", { username, password }),
   logout: () => request("POST", "/auth/logout", {}),
+  setupNeeded: () => request<{ needed: boolean }>("GET", "/auth/setup"),
+  setup: (username: string, display_name: string, password: string) =>
+    request<User>("POST", "/auth/setup", { username, display_name, password }),
   users: () => request<UserSummary[]>("GET", "/users"),
   updateMe: (display_name: string) => request<User>("PATCH", "/me", { display_name }),
   changePassword: (current: string, next: string) => request("POST", "/me/password", { current, new: next }),

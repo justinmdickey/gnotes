@@ -40,7 +40,7 @@ fn read_password() -> anyhow::Result<String> {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
+        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,loro_internal=warn".into()))
         .init();
     let cli = Cli::parse();
     let config = Config::from_env()?;

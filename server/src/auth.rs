@@ -193,6 +193,40 @@ pub async fn logout(State(state): State<AppState>, jar: CookieJar) -> ApiResult<
     Ok((jar, Json(json!({ "ok": true }))))
 }
 
+#[derive(Deserialize)]
+pub struct SetupBody {
+    username: String,
+    #[serde(default)]
+    display_name: String,
+    password: String,
+}
+
+/// `GET /auth/setup`: whether the server still needs its first account.
+pub async fn setup_needed(State(state): State<AppState>) -> ApiResult<Json<Value>> {
+    let (users,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users").fetch_one(&state.db).await?;
+    Ok(Json(json!({ "needed": users == 0 })))
+}
+
+/// `POST /auth/setup`: makes the first account, an admin, and signs it in. Only works while the
+/// server has no accounts, so a fresh install can be set up from the browser.
+pub async fn setup(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    jar: CookieJar,
+    Json(body): Json<SetupBody>,
+) -> ApiResult<(CookieJar, Json<User>)> {
+    // One at a time, so two people racing on a fresh server can't both become admin.
+    static FIRST: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _first = FIRST.lock().await;
+    let (users,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users").fetch_one(&state.db).await?;
+    if users > 0 {
+        return Err(AppError::Conflict("This server is already set up".into()));
+    }
+    let user = create_user(&state.db, &body.username.trim().to_lowercase(), &body.display_name, &body.password, true).await?;
+    let jar = start_session(&state, &user.id, &headers, jar).await?;
+    Ok((jar, Json(user)))
+}
+
 pub async fn me(CurrentUser(user): CurrentUser) -> Json<User> {
     Json(user)
 }

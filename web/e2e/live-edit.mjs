@@ -77,9 +77,8 @@ const env = {
   GNOTES_WEB_DIR: join(root, "web/dist"),
 };
 
-for (const [name, display] of [["alice", "Alice"], ["bob", "Bob"]]) {
-  const admin = name === "alice" ? ["--admin"] : [];
-  const r = spawnSync(bin, ["create-user", name, "--display-name", display, ...admin], { env: { ...env, GNOTES_PASSWORD: "password123" } });
+function createUser(name, display) {
+  const r = spawnSync(bin, ["create-user", name, "--display-name", display], { env: { ...env, GNOTES_PASSWORD: "password123" } });
   if (r.status !== 0) throw new Error(`create-user ${name}: ${r.stderr}`);
 }
 const server = spawn(bin, [], { env, stdio: "inherit" });
@@ -143,7 +142,20 @@ try {
     // A fake microphone, allowed without a prompt, for the voice memo test.
     args: ["--no-sandbox", "--disable-gpu", "--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream"],
   });
-  const alice = await login(browser, "alice");
+  // A fresh server asks for its first account on the login screen; Alice makes it and is the admin.
+  const alice = await (await browser.createBrowserContext()).newPage();
+  await alice.setViewport({ width: 1280, height: 800 });
+  alice.on("pageerror", (e) => console.error("[alice] page error:", e.message));
+  await alice.goto(base);
+  await alice.waitForSelector("input[name=name]");
+  await alice.type("input[name=name]", "Alice");
+  check((await alice.$eval("input[name=username]", (el) => el.value)) === "alice", "first-run setup suggests a username from the name");
+  if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "first-run.png") });
+  await alice.type("input[name=password]", "password123");
+  await alice.click("button[type=submit]");
+  await alice.waitForSelector("nav");
+  check((await (await fetch(`${base}/api/auth/setup`)).json()).needed === false, "first-run setup makes the first account");
+  createUser("bob", "Bob");
   const bob = await login(browser, "bob");
 
   // Alice writes a note and shares it with Bob.

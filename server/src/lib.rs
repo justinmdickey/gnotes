@@ -144,6 +144,7 @@ pub fn router(state: AppState) -> Router {
         .route("/health", get(|| async { Json(json!({ "ok": true })) }))
         .route("/auth/login", post(auth::login))
         .route("/auth/logout", post(auth::logout))
+        .route("/auth/setup", get(auth::setup_needed).post(auth::setup))
         .route("/me", get(auth::me).patch(account::update_me))
         .route("/me/password", post(account::change_password))
         .route("/me/logout-others", post(account::logout_others))
