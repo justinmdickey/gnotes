@@ -2,6 +2,7 @@ pub mod account;
 pub mod attachments;
 pub mod auth;
 pub mod error;
+pub mod import;
 pub mod invites;
 pub mod perms;
 pub mod rooms;
@@ -138,6 +139,7 @@ pub fn router(state: AppState) -> Router {
         .route("/attachments/{id}", get(attachments::download))
         .route("/attachments/{id}/meta", get(attachments::meta))
         .route("/attachments/{id}/transcribe", post(attachments::transcribe))
+        .route("/import", post(import::import).layer(DefaultBodyLimit::max(import::MAX_IMPORT)))
         .route("/features", get(attachments::features))
         .route("/admin/settings", get(settings::get_settings))
         .route("/admin/settings/whisper", axum::routing::put(settings::put_whisper))

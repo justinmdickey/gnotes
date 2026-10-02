@@ -562,6 +562,96 @@ async fn attachments_follow_note_access() {
     assert_eq!(res.status(), 400);
 }
 
+async fn import(user: &User, notebook: Option<&str>, files: Vec<(&str, Vec<u8>)>) -> reqwest::Response {
+    let mut form = reqwest::multipart::Form::new();
+    if let Some(nb) = notebook {
+        form = form.text("notebook_id", nb.to_owned());
+    }
+    for (name, bytes) in files {
+        form = form.part("file", reqwest::multipart::Part::bytes(bytes).file_name(name.to_owned()));
+    }
+    user.http.post(user.url("/import")).multipart(form).send().await.unwrap()
+}
+
+fn zip_of(files: &[(&str, &[u8])]) -> Vec<u8> {
+    use std::io::Write;
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let when = zip::DateTime::from_date_and_time(2021, 3, 4, 5, 6, 8).unwrap();
+    for (name, bytes) in files {
+        zip.start_file(*name, zip::write::SimpleFileOptions::default().last_modified_time(when)).unwrap();
+        zip.write_all(bytes).unwrap();
+    }
+    zip.finish().unwrap().into_inner()
+}
+
+#[tokio::test]
+async fn import_zip_of_markdown_folders() {
+    let dir = TempDir::new().unwrap();
+    let server = start(&dir).await;
+    let alice = user(&server, "alice").await;
+    let bob = user(&server, "bob").await;
+    let png = b"\x89PNG fake image bytes".to_vec();
+    let zip = zip_of(&[
+        ("Vault/Recipes/Pancakes.md", b"flour\r\n![batter](../attachments/my%20photo.png)\n"),
+        ("Vault/Ideas.md", b"---\ntitle: Big ideas\ntags: [x]\n---\nfly ![[my photo.png]]"),
+        ("Vault/attachments/my photo.png", &png),
+        ("Vault/.obsidian/app.json", b"{}"),
+        ("Vault/budget.xlsx", b"PK"),
+    ]);
+    let res = import(&alice, None, vec![("export.zip", zip)]).await;
+    assert!(res.status().is_success(), "{}", res.status());
+    let result: Value = res.json().await.unwrap();
+    assert_eq!((result["notes"].as_i64(), result["notebooks"].as_i64(), result["attachments"].as_i64()), (Some(2), Some(2), Some(2)));
+    assert_eq!(result["skipped"], json!(["Vault/budget.xlsx"]));
+
+    // The wrapping folder becomes the notebook; folders without notes (attachments, .obsidian) don't.
+    let tree = alice.get("/tree").await;
+    let notebooks = tree["notebooks"].as_array().unwrap();
+    let vault = notebooks.iter().find(|n| n["name"] == "Vault").unwrap();
+    assert_eq!(vault["id"], result["notebook_id"]);
+    assert!(vault["parent_id"].is_null());
+    let recipes = notebooks.iter().find(|n| n["name"] == "Recipes").unwrap();
+    assert_eq!(recipes["parent_id"], vault["id"]);
+    assert_eq!(notebooks.len(), 2);
+
+    // Titles come from the file name or front matter, and dates from the zip.
+    let notes = tree["notes"].as_array().unwrap();
+    let pancakes = notes.iter().find(|n| n["title"] == "Pancakes").unwrap();
+    assert_eq!(pancakes["notebook_id"], recipes["id"]);
+    assert_eq!(pancakes["preview"], "flour");
+    assert_eq!(pancakes["updated_at"], 1614834368000i64);
+    let ideas = notes.iter().find(|n| n["title"] == "Big ideas").unwrap();
+    assert_eq!(ideas["notebook_id"], vault["id"]);
+
+    // Image links point at stored attachments, readable through the note.
+    let id: Uuid = pancakes["id"].as_str().unwrap().parse().unwrap();
+    let body = gnotes_server::rooms::note_body(&server.state, id).await.unwrap();
+    let att = body.split("(att:").nth(1).unwrap().split(')').next().unwrap().to_owned();
+    assert_eq!(body, format!("# Pancakes\n\nflour\n![batter](att:{att})"));
+    let res = alice.http.get(alice.url(&format!("/attachments/{att}"))).send().await.unwrap();
+    assert_eq!(res.headers()["content-type"], "image/png");
+    assert_eq!(res.bytes().await.unwrap().to_vec(), png);
+    let id: Uuid = ideas["id"].as_str().unwrap().parse().unwrap();
+    let body = gnotes_server::rooms::note_body(&server.state, id).await.unwrap();
+    assert!(body.starts_with("# Big ideas\n\nfly ![](att:"), "{body}");
+
+    // Loose files go straight into the chosen notebook; a viewer can't import there.
+    let res = import(&alice, vault["id"].as_str(), vec![("Todo.md", b"- milk".to_vec()), ("x.pdf", b"%PDF".to_vec())]).await;
+    let result: Value = res.json().await.unwrap();
+    assert_eq!((result["notes"].as_i64(), result["notebooks"].as_i64()), (Some(1), Some(0)));
+    assert_eq!(result["skipped"], json!(["x.pdf"]));
+    let tree = alice.get("/tree").await;
+    let todo = tree["notes"].as_array().unwrap().iter().find(|n| n["title"] == "Todo").unwrap().clone();
+    assert_eq!(todo["notebook_id"], vault["id"]);
+    alice
+        .post("/shares", json!({ "resource_type": "notebook", "resource_id": vault["id"], "username": "bob", "role": "viewer" }))
+        .await;
+    let res = import(&bob, vault["id"].as_str(), vec![("Todo.md", b"x".to_vec())]).await;
+    assert_eq!(res.status(), 403);
+    let res = import(&alice, None, vec![("x.pdf", b"%PDF".to_vec())]).await;
+    assert_eq!(res.status(), 400);
+}
+
 /// A stand-in for an OpenAI-compatible speech-to-text server. Returns its base URL.
 async fn fake_whisper() -> String {
     let fake = axum::Router::new()

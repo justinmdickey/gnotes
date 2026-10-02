@@ -38,19 +38,42 @@ export function viewTitle(view: View, tree: Tree): string {
   return tree.notebooks.find((n) => n.id === view.id)?.name ?? "Notes";
 }
 
-/** Apple Notes-style compose: make the note and drop straight into it. */
-export async function composeNote(view: View = app.view) {
-  // Where you can't add notes (Shared, a view-only notebook), a new note goes in the top folder.
-  if (view.kind === "shared-notes") view = { kind: "root" };
+/** Where new notes from `view` go: Shared and view-only notebooks can't take them, so the top folder does. */
+export function addableView(view: View): View {
+  if (view.kind === "shared-notes") return { kind: "root" };
   if (view.kind === "notebook") {
     const id = view.id;
-    if (app.tree.notebooks.find((n) => n.id === id)?.role === "viewer") view = { kind: "root" };
+    if (app.tree.notebooks.find((n) => n.id === id)?.role === "viewer") return { kind: "root" };
   }
+  return view;
+}
+
+/** Apple Notes-style compose: make the note and drop straight into it. */
+export async function composeNote(view: View = app.view) {
+  view = addableView(view);
   const notebook = view.kind === "notebook" ? view.id : null;
   const { id } = await api.createNote(notebook);
   app.freshNote = id;
   navigate(view, id);
   void refreshTree();
+}
+
+/** Files an import takes: Markdown and zips of it. */
+export const importable = (f: File) => /\.(md|markdown|txt|zip)$/i.test(f.name);
+
+/** Brings Markdown notes in from files or zips, then offers to show where they went. */
+export async function importNotes(files: File[], view: View = { kind: "root" }) {
+  view = addableView(view);
+  toast(files.length === 1 ? `Importing ${files[0].name}…` : `Importing ${files.length} files…`, undefined, 60_000);
+  try {
+    const r = await api.importNotes(files, view.kind === "notebook" ? view.id : null);
+    void refreshTree();
+    const where: View = r.notebook_id ? { kind: "notebook", id: r.notebook_id } : view;
+    const skipped = r.skipped.length ? ` · ${r.skipped.length} other ${r.skipped.length === 1 ? "file" : "files"} skipped` : "";
+    toast(`Imported ${r.notes} ${r.notes === 1 ? "note" : "notes"}${skipped}`, { label: "Show", run: () => navigate(where) });
+  } catch (err) {
+    toast(err instanceof ApiError ? err.message : "Couldn't reach the server");
+  }
 }
 
 let refreshing: Promise<void> | null = null;

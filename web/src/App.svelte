@@ -1,11 +1,12 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { fade } from "svelte/transition";
   import { api } from "./lib/api";
   import Icon from "./lib/Icon.svelte";
   import Overlays from "./lib/Overlays.svelte";
   import StatusPage from "./lib/StatusPage.svelte";
-  import { app, closeDrawer, composeNote, goBack, parentView, readHash, startSession } from "./lib/store.svelte";
-  import { fadeIn, media, page, standalone } from "./lib/ui.svelte";
+  import { addableView, app, closeDrawer, composeNote, goBack, importable, importNotes, parentView, readHash, startSession, viewTitle } from "./lib/store.svelte";
+  import { fadeIn, media, page, standalone, toast } from "./lib/ui.svelte";
   import Editor from "./Editor.svelte";
   import Join from "./Join.svelte";
   import Login from "./Login.svelte";
@@ -114,6 +115,39 @@
     return undefined;
   }
 
+  // Dropping Markdown files or a zip anywhere imports them into the folder you're in. Images dropped
+  // on the editor are left to it, which puts them in the note. This runs in the capture phase so the
+  // editor doesn't paste a zip in as text first.
+  let dropping = $state(false);
+  let dropTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function forImport(e: DragEvent) {
+    if (!app.user || !e.dataTransfer?.types.includes("Files")) return false;
+    const images = [...e.dataTransfer.items].some((i) => i.kind === "file" && i.type.startsWith("image/"));
+    return !(images && e.target instanceof Element && e.target.closest(".cm-editor"));
+  }
+
+  function ondragover(e: DragEvent) {
+    if (!forImport(e)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer!.dropEffect = "copy";
+    dropping = true;
+    // dragleave fires for every child crossed, so the overlay goes when dragover stops coming instead.
+    clearTimeout(dropTimer);
+    dropTimer = setTimeout(() => (dropping = false), 150);
+  }
+
+  function ondrop(e: DragEvent) {
+    if (!forImport(e)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    dropping = false;
+    const files = [...e.dataTransfer!.files].filter(importable);
+    if (files.length) void importNotes(files, app.view);
+    else toast("Drop .md files or a .zip of them to import");
+  }
+
   function onkey(e: KeyboardEvent) {
     if (e.key === "Escape" && drawerOpen && !media.phone && app.drawer) closeDrawer();
   }
@@ -129,7 +163,7 @@
   });
 </script>
 
-<svelte:window onkeydown={onkey} />
+<svelte:window onkeydown={onkey} ondragovercapture={ondragover} ondropcapture={ondrop} />
 
 {#if !checked}
   <div class="splash"><span class="spinner dim"></span></div>
@@ -186,6 +220,15 @@
       <Settings />
     </div>
   {/if}
+{/if}
+
+{#if dropping}
+  {@const into = addableView(app.view)}
+  <div class="drop-target" transition:fade={{ duration: 120 }}>
+    <div class="drop-card">
+      <StatusPage icon="import" title="Drop to Import" description="Markdown files or a .zip go into {viewTitle(into, app.tree)}" />
+    </div>
+  </div>
 {/if}
 
 <Overlays />
@@ -248,6 +291,26 @@
 
 
 
+
+  .drop-target {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    background: var(--scrim);
+    pointer-events: none;
+  }
+
+  .drop-card {
+    width: min(360px, 100%);
+    padding-bottom: 8px;
+    border: 2px dashed var(--accent);
+    border-radius: var(--radius-lg);
+    background: var(--dialog-bg);
+    box-shadow: var(--shadow-lg);
+  }
 
   .settings-layer {
     position: fixed;

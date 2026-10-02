@@ -93,6 +93,16 @@ export interface AttachmentMeta {
   size: number;
 }
 
+export interface ImportResult {
+  notes: number;
+  notebooks: number;
+  attachments: number;
+  /** Files that weren't notes or something a note links to. */
+  skipped: string[];
+  /** The notebook the first zip became. */
+  notebook_id: string | null;
+}
+
 export interface Features {
   transcription: boolean;
   max_upload: number;
@@ -172,6 +182,17 @@ export const api = {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new ApiError(res.status, data.error ?? "unknown", data.message ?? res.statusText);
     return data as AttachmentMeta;
+  },
+  /** Markdown files or zips of them; a zip becomes a notebook. `notebookId` null is the top folder. */
+  async importNotes(files: File[], notebookId: string | null): Promise<ImportResult> {
+    const form = new FormData();
+    if (notebookId) form.append("notebook_id", notebookId);
+    for (const file of files) form.append("file", file, file.name);
+    const res = await fetch("/api/import", { method: "POST", body: form, credentials: "same-origin" });
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 413) throw new ApiError(413, "too_large", "Imports can be up to 200 MB at a time");
+    if (!res.ok) throw new ApiError(res.status, data.error ?? "unknown", data.message ?? res.statusText);
+    return data as ImportResult;
   },
   restore: (kind: "note" | "notebook", id: string) => request("POST", `/trash/${kind}/${id}/restore`, {}),
   /** Permanently removes the note only if it's blank; the server refuses otherwise. */

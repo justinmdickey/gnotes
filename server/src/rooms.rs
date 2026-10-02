@@ -393,6 +393,25 @@ pub async fn note_body(state: &AppState, note: Uuid) -> anyhow::Result<String> {
     Ok(st.doc.get_text("body").to_string())
 }
 
+/// Gives a note that has never been opened its first content, e.g. from an import.
+pub async fn seed<'c>(
+    db: impl sqlx::SqliteExecutor<'c>,
+    note: &str,
+    body: &str,
+) -> anyhow::Result<()> {
+    let doc = LoroDoc::new();
+    doc.get_text("body").insert(0, body)?;
+    doc.commit();
+    sqlx::query("INSERT INTO note_snapshots (note_id, snapshot, version, updated_at) VALUES (?, ?, ?, ?)")
+        .bind(note)
+        .bind(doc.export(ExportMode::Snapshot)?)
+        .bind(doc.oplog_vv().encode())
+        .bind(now_ms())
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
 /// Joins `conn` to a note's room, loading it if needed.
 pub async fn join(
     state: &AppState,

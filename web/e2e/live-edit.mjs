@@ -2,7 +2,7 @@
 // Usage: npm run build && cargo build -p gnotes-server && node e2e/live-edit.mjs
 // Env: CHROME (default /usr/bin/chromium), SHOTS (directory for screenshots, optional).
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -232,6 +232,47 @@ try {
   if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-settings.png") });
   await alice.click(".settings-layer .back");
   await alice.waitForFunction(() => !document.querySelector(".settings-layer"));
+  await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("bread"));
+
+  // A zip picked in Settings becomes a notebook with its folders inside, and the toast's Show opens it.
+  const beforeImport = await alice.evaluate(() => location.hash);
+  const vault = join(data, "vault");
+  mkdirSync(join(vault, "Vault/Trips"), { recursive: true });
+  writeFileSync(join(vault, "Vault/Trips/Lisbon.md"), "pastel de nata");
+  writeFileSync(join(vault, "Vault/Ideas.md"), "# Ideas\nfly");
+  spawnSync("zip", ["-qr", join(data, "Vault.zip"), "Vault"], { cwd: vault });
+  await alice.click("nav button[aria-label='Settings']");
+  const [importer] = await Promise.all([alice.waitForFileChooser(), alice.click(".settings-layer ::-p-text(Import…)")]);
+  await importer.accept([join(data, "Vault.zip")]);
+  await alice.waitForFunction(() => document.querySelector(".toast")?.innerText.includes("Imported 2 notes"), { timeout: 5000 });
+  await alice.click(".toast ::-p-text(Show)");
+  await alice.waitForFunction(() => !document.querySelector(".settings-layer") && document.querySelector(".hero h1")?.textContent === "Vault");
+  check(await alice.evaluate(() => document.body.innerText.includes("Trips") && document.body.innerText.includes("Ideas")), "an imported zip becomes a notebook with its folders and notes");
+
+  // Markdown dropped on the window lands in the folder you're in, even dropped on the editor.
+  if (process.env.SHOTS) {
+    // Keep a drag going while the shot is taken; the overlay leaves when dragover stops.
+    await alice.evaluate(() => {
+      const dt = new DataTransfer();
+      dt.items.add(new File(["x"], "x.md"));
+      window.__drag = setInterval(() => document.body.dispatchEvent(new DragEvent("dragover", { dataTransfer: dt, bubbles: true, cancelable: true })), 50);
+    });
+    await alice.waitForSelector(".drop-target");
+    await new Promise((r) => setTimeout(r, 300));
+    await alice.screenshot({ path: join(process.env.SHOTS, "desktop-drop-import.png") });
+    await alice.evaluate(() => clearInterval(window.__drag));
+    await alice.waitForFunction(() => !document.querySelector(".drop-target"));
+  }
+  await alice.evaluate(() => {
+    const dt = new DataTransfer();
+    dt.items.add(new File(["- tent\n- stove"], "Camping.md", { type: "text/markdown" }));
+    const at = document.querySelector(".cm-content") ?? document.body;
+    at.dispatchEvent(new DragEvent("dragover", { dataTransfer: dt, bubbles: true, cancelable: true }));
+    at.dispatchEvent(new DragEvent("drop", { dataTransfer: dt, bubbles: true, cancelable: true }));
+  });
+  await alice.waitForFunction(() => [...document.querySelectorAll(".note-title")].some((t) => t.textContent.trim() === "Camping"), { timeout: 5000 });
+  check(await alice.evaluate(() => document.querySelector(".hero h1")?.textContent === "Vault" && !document.querySelector(".drop-target")), "dropped Markdown imports into the open notebook");
+  await alice.evaluate((hash) => (location.hash = hash), beforeImport);
   await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("bread"));
 
   // Inside a nested notebook the list shows its path and name, and its notes show a notebook chip.

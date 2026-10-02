@@ -74,6 +74,17 @@ These copies are for backup and leaving the app. The SQL database and Loro snaps
 - Audio recordings use the same syntax. The editor shows an audio player for audio MIME types.
 - Every attachment request checks the requester's access to the note it belongs to.
 
+### Import
+
+`POST /import` brings existing Markdown in, for moving from Obsidian, Bear or a plain folder. The PWA sends files from Account › Import, or from a drop anywhere on the window into the open folder.
+
+- A `.zip` becomes a notebook named after its one top folder, or after the zip. Folders inside become notebooks; folders with no notes (e.g. `attachments/`) don't.
+- Loose `.md`/`.txt` files go straight into the target notebook.
+- `![alt](path)` and Obsidian's `![[path]]` to an image or recording in the zip become attachments. Paths resolve next to the note first, then by file name anywhere in the zip.
+- YAML front matter is dropped; its `title:` is kept. A note whose first line isn't a heading gets `# <file name>` on top, so the list shows a real title.
+- Notes keep the zip's modified times, so an import doesn't flood Recent. Hidden files and folders (`.obsidian`) are ignored; anything else unused is listed as skipped.
+- Content is written as a fresh Loro snapshot. Everything lands in one transaction, so a failed import leaves no half-made notebooks.
+
 ## Permissions
 
 A user's effective role on a note is the highest of:
@@ -129,6 +140,7 @@ DELETE /shares/:id
 
 POST   /attachments                multipart {note_id, file}   (phase 2)
 GET    /attachments/:id                                        (phase 2)
+POST   /import                     multipart {notebook_id?, file...}: .md, .txt or .zip -> counts, skipped
 
 POST   /admin/users                admin only
 GET    /invites                    admin: pending invite links

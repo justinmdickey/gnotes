@@ -3,7 +3,7 @@
   import Dialog from "./lib/Dialog.svelte";
   import Icon from "./lib/Icon.svelte";
   import Menu from "./lib/Menu.svelte";
-  import { app, colorFor, endSession, goBack } from "./lib/store.svelte";
+  import { app, colorFor, endSession, goBack, importable, importNotes } from "./lib/store.svelte";
   import { ask, scrollEdge, toast } from "./lib/ui.svelte";
 
   /** Shown as the phone's Account tab rather than a full screen with Back. */
@@ -23,6 +23,7 @@
   let resetting = $state<AdminUser | null>(null);
   let resetTo = $state("");
   let newInvite = $state<string | null>(null);
+  let picker = $state<HTMLInputElement>();
   const canShare = "share" in navigator;
   const canCopy = "clipboard" in navigator;
 
@@ -190,6 +191,26 @@
         <li>
           <span class="label">Password</span>
           <button onclick={() => (changingPassword = true)}>Change…</button>
+        </li>
+      </ul>
+
+      <h2 class="group-title">Notes</h2>
+      <ul class="boxed">
+        <li>
+          <span class="label">Import notes<span class="dim sub">Markdown files, or a .zip of folders from Obsidian, Bear or another app</span></span>
+          <button onclick={() => picker?.click()}>Import…</button>
+          <input
+            bind:this={picker}
+            class="picker"
+            type="file"
+            multiple
+            accept=".md,.markdown,.txt,.zip,text/markdown,text/plain,application/zip"
+            onchange={(e) => {
+              const files = [...(e.currentTarget.files ?? [])].filter(importable);
+              e.currentTarget.value = "";
+              if (files.length) void importNotes(files);
+            }}
+          />
         </li>
       </ul>
 
@@ -464,6 +485,10 @@
 
   .sub {
     font-size: var(--text-sm);
+  }
+
+  .picker {
+    display: none;
   }
 
   .value {

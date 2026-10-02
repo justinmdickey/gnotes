@@ -43,14 +43,52 @@ fn blob_path(data_dir: &Path, sha: &str) -> PathBuf {
 }
 
 /// Only types the editor knows how to show; anything else would just be a download.
-fn allowed(mime: &str) -> bool {
+pub(crate) fn allowed(mime: &str) -> bool {
     mime.starts_with("image/") && mime != "image/svg+xml" || mime.starts_with("audio/")
 }
 
-fn clean_filename(name: &str) -> String {
+pub(crate) fn clean_filename(name: &str) -> String {
     let base = name.rsplit(['/', '\\']).next().unwrap_or("").trim();
     let cleaned: String = base.chars().filter(|c| !c.is_control()).take(120).collect();
     if cleaned.is_empty() { "attachment".into() } else { cleaned }
+}
+
+/// The MIME type for a file name, for files that arrive without one (e.g. inside a zip).
+pub(crate) fn mime_for(filename: &str) -> Option<&'static str> {
+    let ext = filename.rsplit_once('.')?.1.to_ascii_lowercase();
+    Some(match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "avif" => "image/avif",
+        "heic" => "image/heic",
+        "bmp" => "image/bmp",
+        "mp3" => "audio/mpeg",
+        "m4a" => "audio/mp4",
+        "ogg" | "oga" => "audio/ogg",
+        "opus" => "audio/opus",
+        "wav" => "audio/wav",
+        "webm" => "audio/webm",
+        "flac" => "audio/flac",
+        _ => return None,
+    })
+}
+
+/// Stores bytes already in memory by content hash and returns the hash.
+pub(crate) async fn store_blob(state: &AppState, bytes: &[u8]) -> std::io::Result<String> {
+    let sha: String = Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect();
+    let dest = blob_path(&state.config.data_dir, &sha);
+    if tokio::fs::try_exists(&dest).await? {
+        return Ok(sha);
+    }
+    tokio::fs::create_dir_all(dest.parent().unwrap()).await?;
+    let tmp_dir = state.config.data_dir.join("blobs").join("tmp");
+    tokio::fs::create_dir_all(&tmp_dir).await?;
+    let tmp = tmp_dir.join(new_id());
+    tokio::fs::write(&tmp, bytes).await?;
+    tokio::fs::rename(&tmp, &dest).await?;
+    Ok(sha)
 }
 
 /// Looks up an attachment the caller can at least read.
