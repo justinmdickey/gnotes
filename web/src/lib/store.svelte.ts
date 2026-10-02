@@ -287,3 +287,42 @@ export async function trashNotebook(id: string, name: string) {
   if (app.view.kind === "notebook" && app.view.id === id) navigate(parentView(app.view), null, true);
   toast(`“${name}” moved to trash`, { label: "Undo", run: () => void api.restore("notebook", id).then(refreshTree) });
 }
+
+/** A note or notebook being dragged onto a sidebar folder (desktop only). */
+export type Movable = { kind: "note" | "notebook"; id: string };
+export const drag = $state({ item: null as Movable | null });
+
+function placeOf(item: Movable) {
+  if (item.kind === "note") {
+    const n = app.tree.notes.find((x) => x.id === item.id);
+    return n && { role: n.role, owner: n.owner, at: n.notebook_id };
+  }
+  const nb = app.tree.notebooks.find((x) => x.id === item.id);
+  return nb && { role: nb.role, owner: nb.owner, at: nb.parent_id };
+}
+
+/** Whether `item` can move into `target` (a notebook id, or null for the top folder); the same rules as Move to…. */
+export function canMoveTo(item: Movable, target: string | null): boolean {
+  const from = placeOf(item);
+  if (!from || from.role === "viewer" || from.at === target) return false;
+  // Only the owner can put things at the top level.
+  if (target === null) return from.role === "owner";
+  const nb = app.tree.notebooks.find((x) => x.id === target);
+  if (!nb || nb.role === "viewer" || nb.owner !== from.owner) return false;
+  // A notebook can't go inside itself or anything in it.
+  return item.kind === "note" || !subtree(item.id).has(target);
+}
+
+/** Moves a note or notebook, with Undo to put it back. */
+export async function moveTo(item: Movable, target: string | null) {
+  const from = placeOf(item)?.at ?? null;
+  const send = (to: string | null) => (item.kind === "note" ? api.moveNote(item.id, to) : api.moveNotebook(item.id, to));
+  try {
+    await send(target);
+    await refreshTree();
+    const label = target ? (app.tree.notebooks.find((n) => n.id === target)?.name ?? "notebook") : "Notes";
+    toast(`Moved to ${label}`, { label: "Undo", run: () => void send(from).then(refreshTree) });
+  } catch (err) {
+    toast(err instanceof ApiError ? err.message : "Couldn't move it");
+  }
+}

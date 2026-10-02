@@ -3,8 +3,8 @@
   import Icon, { type IconName } from "./lib/Icon.svelte";
   import Menu from "./lib/Menu.svelte";
   import NewNotebookDialog from "./NewNotebookDialog.svelte";
-  import { app, colorFor, composeNote, navigate, notesFor, openSettings, type View } from "./lib/store.svelte";
-  import { scrollEdge } from "./lib/ui.svelte";
+  import { app, canMoveTo, colorFor, composeNote, drag, moveTo, navigate, notesFor, openSettings, type View } from "./lib/store.svelte";
+  import { media, scrollEdge } from "./lib/ui.svelte";
 
   /** Items directly inside, notebooks and notes alike, the same count the folder rows show. */
   function count(view: View) {
@@ -63,14 +63,78 @@
     return app.tree.notebooks.find((n) => n.id === id)?.role !== "viewer";
   }
 
+  // Desktop drag and drop: notebooks drag from here, notes from the list, and both drop on a folder row.
+  /** Where a row drops things: a notebook id, null for the top folder, undefined for neither. */
+  const dropInto = (view: View) => (view.kind === "root" ? null : view.kind === "notebook" ? view.id : undefined);
+  /** The row a drag is over, by its fold key, so it can light up. */
+  let dropKey = $state<string | null>(null);
+  let openTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function dragOver(e: DragEvent, view: View, fold: string | null) {
+    const target = dropInto(view);
+    if (target === undefined || !drag.item || !canMoveTo(drag.item, target)) return;
+    e.preventDefault();
+    e.dataTransfer!.dropEffect = "move";
+    const key = target ?? ROOT;
+    if (dropKey === key) return;
+    dropKey = key;
+    clearTimeout(openTimer);
+    // Hovering a folded notebook opens it, so a drag can reach the notebooks inside.
+    if (fold && collapsed.has(fold)) openTimer = setTimeout(() => collapsed.has(fold) && toggle(fold), 600);
+  }
+
+  function dragLeave(e: DragEvent) {
+    const li = e.currentTarget as HTMLElement;
+    if (e.relatedTarget instanceof Node && li.contains(e.relatedTarget)) return;
+    dropKey = null;
+    clearTimeout(openTimer);
+  }
+
+  function dropOn(e: DragEvent, view: View) {
+    const target = dropInto(view);
+    const item = drag.item;
+    endDrag();
+    if (target === undefined || !item || !canMoveTo(item, target)) return;
+    e.preventDefault();
+    void moveTo(item, target);
+  }
+
+  function endDrag() {
+    drag.item = null;
+    dropKey = null;
+    clearTimeout(openTimer);
+  }
+
   /** The notebook a New Notebook dialog is open for; `null` is the top folder. */
   let newNotebookIn = $state<string | null | undefined>(undefined);
 </script>
 
 {#snippet row(view: View, icon: IconName, label: string, owner = "", depth = 0, fold: string | null = null, shared = false)}
   {@const canAdd = addable(view)}
-  <li class:foldable={fold} class:addable={canAdd}>
-    <button class="row flat" class:selected={isSelected(view)} style:--depth={depth} onclick={() => navigate(view)}>
+  {@const movable = view.kind === "notebook" && !media.phone && app.tree.notebooks.find((n) => n.id === (view as { id: string }).id)?.role !== "viewer"}
+  <li
+    class:foldable={fold}
+    class:addable={canAdd}
+    class:drop={dropKey !== null && dropInto(view) !== undefined && dropKey === (dropInto(view) ?? ROOT)}
+    ondragover={(e) => dragOver(e, view, fold)}
+    ondragleave={dragLeave}
+    ondrop={(e) => dropOn(e, view)}
+  >
+    <button
+      class="row flat"
+      class:selected={isSelected(view)}
+      style:--depth={depth}
+      onclick={() => navigate(view)}
+      draggable={movable}
+      ondragstart={(e) => {
+        if (view.kind !== "notebook") return;
+        drag.item = { kind: "notebook", id: view.id };
+        // A private type, so the editor doesn't take the drop as text.
+        e.dataTransfer?.setData("application/x-gnotes", view.id);
+        if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+      }}
+      ondragend={endDrag}
+    >
       <Icon name={icon} />
       <span class="label">{label}</span>
       {#if shared}<span class="shared-badge" title="Shared"><Icon name="person" size={14} /></span>{/if}
@@ -313,6 +377,21 @@
     font-weight: 700;
     color: var(--dim-fg);
     text-align: center;
+  }
+
+  /* A drag is over this folder: it lights up like the place you're about to be. */
+  .drop .row,
+  .drop .row.selected {
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+
+  .drop .row :global(svg) {
+    color: var(--accent);
+  }
+
+  .drop .count {
+    color: var(--accent);
   }
 
   .row.selected .count {

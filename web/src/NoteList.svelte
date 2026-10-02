@@ -6,7 +6,7 @@
   import Icon from "./lib/Icon.svelte";
   import Menu from "./lib/Menu.svelte";
   import StatusPage from "./lib/StatusPage.svelte";
-  import { app, composeNote, goBack, navigate, notesFor, openNote, parentView, pathOf, subtree, trashNotebook, viewTitle } from "./lib/store.svelte";
+  import { app, composeNote, drag, goBack, navigate, notesFor, openNote, parentView, pathOf, subtree, trashNotebook, viewTitle } from "./lib/store.svelte";
   import { media, scrollEdge } from "./lib/ui.svelte";
   import FolderList from "./FolderList.svelte";
   import MoveDialog from "./MoveDialog.svelte";
@@ -260,7 +260,19 @@
       <ul class="boxed-list">
         {#each group.notes as note (note.id)}
           <li transition:reveal>
-            <button class="flat note" class:selected={app.noteId === note.id} onclick={() => openNote(note.id)}>
+            <!-- On desktop a note drags onto a notebook in the sidebar to move there. -->
+            <button
+              class="flat note"
+              class:selected={app.noteId === note.id}
+              onclick={() => openNote(note.id)}
+              draggable={!media.phone && note.role !== "viewer"}
+              ondragstart={(e) => {
+                drag.item = { kind: "note", id: note.id };
+                e.dataTransfer?.setData("application/x-gnotes", note.id);
+                if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+              }}
+              ondragend={() => (drag.item = null)}
+            >
               <span class="note-title">
                 <span class="t">{note.title || "New Note"}</span>
                 {#if note.shared}<span class="shared-badge" title="Shared"><Icon name="person" size={16} /></span>{/if}

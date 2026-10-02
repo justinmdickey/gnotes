@@ -55,6 +55,24 @@ const closed = (page) => page.waitForFunction(() => !document.querySelector("dia
 
 const text = (page) => page.$eval(".cm-content", (el) => el.innerText);
 
+/** Sidebar rows lit as drop targets at the end of the last drag. */
+let dragLit = [];
+
+/** A real mouse drag from one element to another, the way HTML drag and drop sees it. */
+async function dragTo(page, from, to, shot) {
+  const box = async (sel) => (await page.waitForSelector(sel)).boundingBox();
+  const a = await box(from);
+  const b = await box(to);
+  await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2);
+  await page.mouse.down();
+  for (let i = 1; i <= 10; i++) await page.mouse.move(a.x + a.width / 2 + ((b.x - a.x) * i) / 10, a.y + a.height / 2 + ((b.y - a.y) * i) / 10);
+  await page.mouse.move(b.x + 40, b.y + b.height / 2);
+  await new Promise((r) => setTimeout(r, 100));
+  if (shot && process.env.SHOTS) await page.screenshot({ path: join(process.env.SHOTS, `${shot}.png`) });
+  dragLit = await page.evaluate(() => [...document.querySelectorAll("nav li.drop .label")].map((l) => l.textContent));
+  await page.mouse.up();
+}
+
 async function login(browser, username) {
   const ctx = await browser.createBrowserContext();
   const page = await ctx.newPage();
@@ -302,6 +320,26 @@ try {
   await alice.keyboard.type("Socks");
   await alice.waitForFunction(() => [...document.querySelectorAll(".note-title")].some((t) => t.textContent.trim() === "Socks"));
   check(await alice.evaluate(() => document.querySelector(".hero h1")?.textContent === "Packing"), "the sidebar + makes a note inside the folder you point at");
+
+  // Desktop drag and drop: a note from the list and a notebook in the sidebar move onto sidebar folders.
+  const tree = () => alice.evaluate(() => fetch("/api/tree").then((r) => r.json()));
+  const nbId = async (name) => (await tree()).notebooks.find((n) => n.name === name).id;
+  const socks = (await tree()).notes.find((n) => n.title === "Socks").id;
+  await dragTo(alice, ".note ::-p-text(Socks)", "nav li:has(button[aria-label='New in Trips']) .row", "desktop-drag-note");
+  await alice.waitForFunction(() => document.querySelector(".toast")?.innerText.includes("Moved to Trips"));
+  check((await tree()).notes.find((n) => n.id === socks).notebook_id === (await nbId("Trips")), "a note dragged onto a sidebar notebook moves there");
+  if (process.env.SHOTS) await alice.emulateMediaFeatures([{ name: "prefers-color-scheme", value: "dark" }]);
+  await dragTo(alice, "nav li:has(button[aria-label='New in Packing']) .row", "nav li:has(button[aria-label='New in Notes']) .row", "desktop-drag-notebook-dark");
+  if (process.env.SHOTS) await alice.emulateMediaFeatures([]);
+  check(dragLit.length === 1 && dragLit[0] === "Notes", `only the folder under the drag lights up (${dragLit})`);
+  await alice.waitForFunction(() => document.querySelector(".toast")?.innerText.includes("Moved to Notes"));
+  check((await tree()).notebooks.find((n) => n.name === "Packing").parent_id === null, "a notebook dragged onto Notes moves to the top");
+  await alice.click(".toast ::-p-text(Undo)");
+  await alice.waitForFunction(async (vault) => (await fetch("/api/tree").then((r) => r.json())).notebooks.find((n) => n.name === "Packing").parent_id === vault, {}, await nbId("Vault"));
+  check(true, "Undo puts a dragged notebook back");
+  await dragTo(alice, "nav li:has(button[aria-label='New in Vault']) .row", "nav li:has(button[aria-label='New in Trips']) .row");
+  await new Promise((r) => setTimeout(r, 400));
+  check((await tree()).notebooks.find((n) => n.name === "Vault").parent_id === null, "a notebook can't be dropped inside itself");
   await alice.evaluate((hash) => (location.hash = hash), beforeImport);
   await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("bread"));
 
