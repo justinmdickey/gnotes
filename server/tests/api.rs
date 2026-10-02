@@ -685,7 +685,7 @@ async fn fake_whisper() -> String {
 async fn transcription_uses_the_configured_service() {
     let fake_url = fake_whisper().await;
     let dir = TempDir::new().unwrap();
-    let whisper = WhisperConfig { url: fake_url, model: "small".into(), key: Some("sekrit".into()) };
+    let whisper = WhisperConfig { url: fake_url, model: "small".into(), key: Some("sekrit".into()), realtime_url: None };
     let server = start_with(&dir, Some(whisper)).await;
     let alice = user(&server, "alice").await;
     assert_eq!(alice.get("/features").await["transcription"], true);
@@ -760,4 +760,84 @@ async fn admin_changes_speech_to_text_in_the_app() {
     // An empty URL turns it off.
     admin.send(reqwest::Method::PUT, "/admin/settings/whisper", json!({ "url": "" })).await;
     assert_eq!(admin.get("/features").await["transcription"], false);
+}
+
+/// A stand-in realtime speech-to-text service: echoes each audio chunk's size as a delta and, on
+/// commit, finishes with the total. Returns its ws:// URL.
+async fn fake_realtime() -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/v1/realtime", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        while let Ok((tcp, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
+                let mut total = 0;
+                while let Some(Ok(Message::Text(text))) = ws.next().await {
+                    let event: Value = serde_json::from_str(&text).unwrap();
+                    let reply = match event["type"].as_str().unwrap() {
+                        "session.update" => {
+                            assert_eq!(event["session"]["sample_rate"], 16000);
+                            json!({ "type": "session.updated" })
+                        }
+                        "input_audio_buffer.append" => {
+                            let n = STANDARD.decode(event["audio"].as_str().unwrap()).unwrap().len();
+                            total += n;
+                            json!({ "type": "conversation.item.input_audio_transcription.delta", "delta": format!("{n} ") })
+                        }
+                        "input_audio_buffer.commit" => {
+                            json!({ "type": "conversation.item.input_audio_transcription.completed", "transcript": format!("{total} bytes") })
+                        }
+                        _ => continue,
+                    };
+                    ws.send(Message::Text(reply.to_string().into())).await.unwrap();
+                }
+            });
+        }
+    });
+    url
+}
+
+#[tokio::test]
+async fn live_transcription_relays_audio_and_text() {
+    let dir = TempDir::new().unwrap();
+    let whisper = WhisperConfig {
+        url: "http://127.0.0.1:9/v1".into(),
+        model: "small".into(),
+        key: None,
+        realtime_url: Some(fake_realtime().await),
+    };
+    let server = start_with(&dir, Some(whisper)).await;
+    let alice = user(&server, "alice").await;
+    assert_eq!(alice.get("/features").await["live_transcription"], true);
+
+    let mut req = format!("ws://{}/api/transcribe/live", alice.base).into_client_request().unwrap();
+    req.headers_mut().insert("cookie", alice.cookie.parse().unwrap());
+    let (mut ws, _) = tokio_tungstenite::connect_async(req).await.unwrap();
+    let mut next = async || -> Value {
+        loop {
+            if let Message::Text(t) = ws.next().await.unwrap().unwrap() {
+                return serde_json::from_str(&t).unwrap();
+            }
+        }
+    };
+    assert_eq!(next().await["t"], "ready");
+    drop(next);
+    ws.send(Message::Binary(vec![0u8; 3200].into())).await.unwrap();
+    ws.send(Message::Binary(vec![0u8; 1600].into())).await.unwrap();
+    ws.send(Message::Text(r#"{"t":"commit"}"#.into())).await.unwrap();
+    let mut got = Vec::new();
+    while got.len() < 3 {
+        if let Message::Text(t) = ws.next().await.unwrap().unwrap() {
+            got.push(serde_json::from_str::<Value>(&t).unwrap());
+        }
+    }
+    assert_eq!(got[0], json!({ "t": "delta", "text": "3200 " }));
+    assert_eq!(got[1], json!({ "t": "delta", "text": "1600 " }));
+    assert_eq!(got[2], json!({ "t": "final", "text": "4800 bytes" }));
+
+    // The live URL has to be a websocket address.
+    auth::create_user(&server.state.db, "root", "", "password123", true).await.unwrap();
+    let root = login(&server.base, "root").await;
+    let body = json!({ "url": "http://127.0.0.1:9/v1", "realtime_url": "http://nope" });
+    assert_eq!(root.send(reqwest::Method::PUT, "/admin/settings/whisper", body).await.status(), 400);
 }

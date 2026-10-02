@@ -105,6 +105,8 @@ export interface ImportResult {
 
 export interface Features {
   transcription: boolean;
+  /** Text appears in the note while a voice memo is being recorded. */
+  live_transcription: boolean;
   max_upload: number;
 }
 
@@ -114,12 +116,14 @@ export interface WhisperSettings {
   model: string;
   has_key: boolean;
   from_env: boolean;
+  realtime_url: string;
 }
 
 /** `key` absent keeps the saved one; null clears it. */
 export interface WhisperInput {
   url: string;
   model: string;
+  realtime_url: string;
   key?: string | null;
 }
 

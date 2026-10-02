@@ -43,6 +43,15 @@
     bottom: calc(76px + env(safe-area-inset-bottom));
   }
 
+  /* While a voice memo records, toasts sit above its bar instead of on it. */
+  :global(body:has(.recorder)) .toasts {
+    bottom: calc(84px + env(safe-area-inset-bottom));
+  }
+
+  :global(body:has(.recorder)) .toasts.phone {
+    bottom: calc(136px + env(safe-area-inset-bottom));
+  }
+
   .toast {
     grid-area: 1 / 1;
     display: flex;

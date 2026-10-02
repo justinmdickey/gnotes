@@ -3,6 +3,7 @@
 // Env: CHROME (default /usr/bin/chromium), SHOTS (directory for screenshots, optional).
 import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -21,6 +22,46 @@ const whisper = createServer((req, res) => {
     res.end(JSON.stringify({ text: "remember the milk" }));
   });
 }).listen(port + 1, "127.0.0.1");
+// A stand-in realtime speech-to-text service, speaking just enough websocket to stream a few words
+// back while audio arrives and the full sentence when the recording is committed.
+const realtime = createServer().listen(port + 2, "127.0.0.1");
+realtime.on("upgrade", (req, sock) => {
+  const accept = createHash("sha1").update(req.headers["sec-websocket-key"] + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").digest("base64");
+  sock.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
+  const send = (obj) => {
+    const data = Buffer.from(JSON.stringify(obj));
+    const head = data.length < 126 ? Buffer.from([0x81, data.length]) : Buffer.from([0x81, 126, data.length >> 8, data.length & 255]);
+    sock.write(Buffer.concat([head, data]));
+  };
+  const words = ["remember ", "the ", "milk "];
+  let chunks = 0;
+  let buf = Buffer.alloc(0);
+  sock.on("error", () => {});
+  sock.on("data", (d) => {
+    buf = Buffer.concat([buf, d]);
+    for (;;) {
+      if (buf.length < 2) return;
+      let len = buf[1] & 0x7f;
+      let off = 2;
+      if (len === 126) [len, off] = [buf.readUInt16BE(2), 4];
+      else if (len === 127) [len, off] = [Number(buf.readBigUInt64BE(2)), 10];
+      const mask = buf.subarray(off, off + 4);
+      off += 4;
+      if (buf.length < off + len) return;
+      const payload = Buffer.from(buf.subarray(off, off + len)).map((b, i) => b ^ mask[i % 4]);
+      const op = buf[0] & 0x0f;
+      buf = buf.subarray(off + len);
+      if (op === 8) return void sock.end();
+      if (op !== 1) continue;
+      const event = JSON.parse(payload.toString());
+      if (event.type === "session.update") send({ type: "session.updated" });
+      else if (event.type === "input_audio_buffer.append" && ++chunks % 4 === 0 && chunks / 4 <= words.length)
+        send({ type: "conversation.item.input_audio_transcription.delta", delta: words[chunks / 4 - 1] });
+      else if (event.type === "input_audio_buffer.commit")
+        send({ type: "conversation.item.input_audio_transcription.completed", transcript: "Remember the milk and the eggs." });
+    }
+  });
+});
 const env = {
   ...process.env,
   GNOTES_DATA_DIR: data,
@@ -243,8 +284,9 @@ try {
 
   // The admin points speech-to-text at a service from Settings, tests it and saves it.
   await alice.type(".stt input[type=url]", `http://127.0.0.1:${port + 1}/v1`);
+  await alice.type(".stt input[placeholder^='Optional, e.g. ws']", `ws://127.0.0.1:${port + 2}/v1/realtime`);
   await alice.evaluate(() => [...document.querySelectorAll(".stt button")].find((b) => b.textContent === "Test").click());
-  await alice.waitForFunction(() => document.querySelector(".stt .status")?.textContent.includes("Connected"), { timeout: 5000 });
+  await alice.waitForFunction(() => document.querySelector(".stt .status")?.textContent.includes("live transcription works"), { timeout: 8000 });
   await alice.click(".stt button[type=submit]");
   await alice.waitForFunction(() => document.body.innerText.includes("Speech-to-text saved"));
   check(true, "admin sets up speech-to-text in settings");
@@ -492,11 +534,22 @@ try {
   // A voice memo records, embeds a player, and gets its transcript underneath.
   await alice.click(".cm-content");
   await alice.click("button[aria-label='Record voice memo']");
-  await alice.waitForSelector("dialog .stop:not([disabled])");
-  await new Promise((r) => setTimeout(r, 1500));
-  await alice.click("dialog .stop");
+  await alice.waitForSelector(".recorder .stop:not([disabled])");
+  check(await alice.evaluate(() => !document.querySelector("dialog")), "recording shows a small bar, not a dialog over the note");
+  // With a live URL set, words land in the note while still recording.
+  await alice.waitForFunction(() => document.querySelector(".cm-content").innerText.includes("remember the"), { timeout: 8000 });
+  check(await alice.evaluate(() => document.querySelector(".recorder .tag.on")?.textContent.trim() === "Live"), "the live transcript writes into the note while recording");
+  if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-recording-live.png") });
+  await alice.click(".recorder .stop");
   await alice.waitForSelector(".cm-audio", { timeout: 5000 });
-  await alice.waitForFunction(() => document.querySelector(".cm-content").innerText.includes("remember the milk"), { timeout: 5000 });
+  await alice.waitForFunction(() => document.querySelector(".cm-content").innerText.includes("Remember the milk and the eggs."), { timeout: 5000 });
+  check(
+    await alice.evaluate(() => {
+      const text = document.querySelector(".cm-content").innerText;
+      return !text.includes("remember the milk") && text.split("Remember the milk").length === 2;
+    }),
+    "stopping swaps in the final transcript under the recording",
+  );
   check(true, "a voice memo embeds a player with its transcript");
   if (process.env.SHOTS) {
     await closed(alice);
@@ -615,6 +668,14 @@ try {
     check(inPocket === 0, "the tab bar + makes a note in the current folder");
     await alice.evaluate(() => document.activeElement?.blur());
     await shot("phone-compose-dark");
+    // The recording bar floats above the format bar on a phone, with the note still in view.
+    await alice.tap(".cm-content");
+    await alice.waitForSelector("button[aria-label='Record voice memo']", { visible: true });
+    await alice.tap("button[aria-label='Record voice memo']");
+    await alice.waitForSelector(".recorder .stop:not([disabled])");
+    await shot("phone-recording-dark");
+    await alice.tap(".recorder button[aria-label='Discard recording']");
+    await alice.waitForFunction(() => !document.querySelector(".recorder"));
     // Account is a tab like the others: the tab bar stays and there's no Back.
     await alice.evaluate(() => [...document.querySelectorAll(".tabbar button")].find((b) => b.textContent.includes("Account")).click());
     await alice.waitForFunction(() => document.querySelector(".tab-page h1")?.textContent === "Account");
@@ -629,5 +690,6 @@ try {
   await browser?.close();
   server.kill();
   whisper.close();
+  realtime.close();
   rmSync(data, { recursive: true, force: true });
 }

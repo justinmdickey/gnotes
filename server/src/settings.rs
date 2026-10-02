@@ -33,6 +33,7 @@ fn describe(w: Option<&WhisperConfig>, saved: bool) -> Value {
         "model": w.map(|w| w.model.as_str()).unwrap_or("whisper-1"),
         // The key is never sent back; the app only learns whether one is set.
         "has_key": w.is_some_and(|w| w.key.is_some()),
+        "realtime_url": w.and_then(|w| w.realtime_url.as_deref()).unwrap_or(""),
         "from_env": !saved && w.is_some(),
     })
 }
@@ -54,6 +55,9 @@ pub struct WhisperBody {
     /// Absent keeps the saved key, null or "" clears it.
     #[serde(default, deserialize_with = "crate::util::double_option")]
     key: Option<Option<String>>,
+    /// Empty turns live transcription off.
+    #[serde(default)]
+    realtime_url: String,
 }
 
 impl WhisperBody {
@@ -74,7 +78,12 @@ impl WhisperBody {
             None => current.and_then(|c| c.key.clone()),
             Some(k) => k.map(|k| k.trim().to_owned()).filter(|k| !k.is_empty()),
         };
-        Ok(Some(WhisperConfig { url, model, key }))
+        let realtime_url = match self.realtime_url.trim().trim_end_matches('/') {
+            "" => None,
+            u if u.starts_with("ws://") || u.starts_with("wss://") => Some(u.to_owned()),
+            _ => return Err(AppError::BadRequest("The live URL needs to start with ws:// or wss://".into())),
+        };
+        Ok(Some(WhisperConfig { url, model, key, realtime_url }))
     }
 }
 
@@ -132,6 +141,13 @@ pub async fn test_whisper(
             }
         }
         Ok(res) => (false, format!("The service answered with {}", res.status())),
+    };
+    let (ok, message) = match (&w.realtime_url, ok) {
+        (Some(_), true) => match crate::live::check(&w).await {
+            Ok(()) => (true, format!("{message} · live transcription works")),
+            Err(why) => (false, format!("{message}, but live transcription didn't: {why}")),
+        },
+        _ => (ok, message),
     };
     Ok(Json(json!({ "ok": ok, "message": message })))
 }

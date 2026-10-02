@@ -203,7 +203,8 @@ A client opens one websocket to `/api/ws` (authenticated by the session cookie) 
 - **Views:** notebook tree, note list, editor, "Shared with me", trash, share dialog, settings. The layout adapts from a phone (one pane) to a desktop (sidebar, list and editor side by side), the same way libadwaita's split views do.
 - **Editor:** CodeMirror 6 with Markdown highlighting and in-place styling instead of a separate preview pane. `LoroExtensions(doc, {ephemeral, user}, undoManager, doc => doc.getText("body"))` handles sync, cursors and undo.
 - **Offline:** each note's Loro snapshot is saved in IndexedDB after every change, along with a cached copy of `/tree`. On reconnect the client rejoins open notes with its saved version, so offline edits merge on their own. Creating a note offline gives it a client-made UUIDv7 id that the server accepts.
-- **Voice notes:** recorded with MediaRecorder (Opus in WebM on Chrome and Firefox, AAC in MP4 on Safari), uploaded as an attachment, and linked into the note. When the server has speech-to-text, the transcript goes on the line under the player. Recording needs HTTPS.
+- **Voice notes:** recorded with MediaRecorder (Opus in WebM on Chrome and Firefox, AAC in MP4 on Safari), uploaded as an attachment, and linked into the note. When the server has speech-to-text, the transcript goes on the line under the player. Recording needs HTTPS. Recording shows a small floating bar, not a dialog, so the note stays readable.
+- **Live transcripts:** with a live URL set, the app streams 16 kHz PCM from an AudioWorklet over `/api/transcribe/live`, and the server relays it to the realtime endpoint (OpenAI realtime transcription events, flat `session.update`). The browser can't reach that endpoint itself (it's usually plain `ws://` on the server's network). Words are written into the note as they arrive; each final transcript replaces its stretch, and the player goes above it on stop. If nothing comes through live, the whole recording is transcribed as before.
 - **Photos:** picked from the camera or library, pasted, or dropped. Images over 2048px or 1.5 MB are shrunk to JPEG in the browser before upload.
 - **Install:** a web app manifest plus a service worker that caches the app shell. The UI encourages installing to the home screen, because iOS can clear storage for tabs that aren't installed.
 
@@ -214,7 +215,7 @@ docker run -v gnotes-data:/data -p 8080:8080 gnotes
 ```
 
 - Config comes from environment variables: `GNOTES_DATA_DIR` (default `./data`), `GNOTES_BIND` (default `0.0.0.0:8080`), `GNOTES_PUBLIC_URL` (used to validate the websocket Origin header).
-- Speech-to-text is set by an admin under Settings → Speech-to-Text: an OpenAI-compatible API URL including the version (e.g. `http://whisper:8000/v1`), a model and an optional key. Once saved there, it overrides the env defaults `GNOTES_WHISPER_URL`, `GNOTES_WHISPER_MODEL` (default `whisper-1`) and `GNOTES_WHISPER_KEY`. The key is never sent back to the app.
+- Speech-to-text is set by an admin under Settings → Speech-to-Text: an OpenAI-compatible API URL including the version (e.g. `http://whisper:8000/v1`), a model and an optional key. Once saved there, it overrides the env defaults `GNOTES_WHISPER_URL`, `GNOTES_WHISPER_MODEL` (default `whisper-1`) and `GNOTES_WHISPER_KEY`. An optional live URL (`ws://` or `wss://`, e.g. `ws://whisper:8000/v1/realtime`, env `GNOTES_WHISPER_REALTIME_URL`) turns on live transcripts. The key is never sent back to the app.
 - The data folder holds everything: `gnotes.db`, `blobs/` and `export/`. Backing up means copying that folder.
 
 ## Phases

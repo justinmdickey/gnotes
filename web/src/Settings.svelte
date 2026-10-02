@@ -34,22 +34,24 @@
     whisper = settings.whisper;
     whisperUrl = whisper.url;
     whisperModel = whisper.model;
+    whisperLive = whisper.realtime_url;
   }
 
   let whisper = $state<WhisperSettings | null>(null);
   let whisperUrl = $state("");
   let whisperModel = $state("");
+  let whisperLive = $state("");
   /** What's typed in the key field; empty means "keep the saved key". */
   let whisperKey = $state("");
   let clearKey = $state(false);
   let testing = $state(false);
   let testResult = $state<{ ok: boolean; message: string } | null>(null);
   const whisperDirty = $derived(
-    whisper !== null && (whisperUrl.trim() !== whisper.url || whisperModel.trim() !== whisper.model || whisperKey !== "" || clearKey),
+    whisper !== null && (whisperUrl.trim() !== whisper.url || whisperModel.trim() !== whisper.model || whisperLive.trim() !== whisper.realtime_url || whisperKey !== "" || clearKey),
   );
 
   function whisperInput(): WhisperInput {
-    const body: WhisperInput = { url: whisperUrl, model: whisperModel };
+    const body: WhisperInput = { url: whisperUrl, model: whisperModel, realtime_url: whisperLive };
     if (whisperKey) body.key = whisperKey;
     else if (clearKey) body.key = null;
     return body;
@@ -69,9 +71,10 @@
       whisper = (await api.saveWhisper(whisperInput())).whisper;
       whisperUrl = whisper.url;
       whisperModel = whisper.model;
+      whisperLive = whisper.realtime_url;
       whisperKey = "";
       clearKey = false;
-      app.features = { ...app.features, transcription: whisper.enabled };
+      app.features = { ...app.features, transcription: whisper.enabled, live_transcription: whisper.enabled && !!whisper.realtime_url };
     }, turningOff ? "Transcription turned off" : "Speech-to-text saved");
   }
   loadAdmin();
@@ -287,7 +290,7 @@
           <form class="boxed stt" onsubmit={saveWhisper}>
             <p class="dim explain">
               Voice memos are sent here to be transcribed. Any OpenAI-compatible service works, such as faster-whisper-server
-              or OpenAI. Leave the URL empty to turn it off.
+              or OpenAI. Leave the URL empty to turn it off. Add a live URL to see words in the note while you record.
             </p>
             <label class="field">
               <span>Service URL</span>
@@ -296,6 +299,10 @@
             <label class="field">
               <span>Model</span>
               <input placeholder="whisper-1" autocapitalize="none" spellcheck="false" bind:value={whisperModel} />
+            </label>
+            <label class="field">
+              <span>Live URL</span>
+              <input type="url" placeholder="Optional, e.g. ws://whisper:8000/v1/realtime" autocapitalize="none" spellcheck="false" bind:value={whisperLive} />
             </label>
             <label class="field">
               <span>API key</span>

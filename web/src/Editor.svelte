@@ -19,7 +19,8 @@
   import { bloom, media, scrollEdge } from "./lib/ui.svelte";
   import FormatBar from "./FormatBar.svelte";
   import Recorder from "./Recorder.svelte";
-  import { addImages, addRecording } from "./lib/attachments";
+  import { addImages, addLiveRecording, addRecording, LiveTranscript } from "./lib/attachments";
+  import type { LiveHandlers } from "./lib/live";
   import { toast } from "./lib/ui.svelte";
   import { ApiError } from "./lib/api";
   import MoveDialog from "./MoveDialog.svelte";
@@ -270,19 +271,43 @@
     if (view && files.length) void withBusy(() => addImages(view!, noteId, files, addAtEnd));
   }
 
+  /** The live transcript being written for the recording in progress, made when the first words arrive. */
+  let liveText: LiveTranscript | null = null;
+  const liveHandlers: LiveHandlers = {
+    ondelta: (text) => transcript()?.delta(text),
+    onfinal: (text) => transcript()?.final(text),
+    onerror: (message) => toast(message),
+  };
+  function transcript() {
+    if (!liveText && view) liveText = new LiveTranscript(view, addAtEnd);
+    return liveText;
+  }
+
   function startRecording() {
     addAtEnd = !view?.hasFocus;
     view?.contentDOM.blur();
+    liveText = null;
     recording = true;
   }
 
   function saveRecording(audio: File) {
     recording = false;
+    const live = liveText;
+    liveText = null;
     if (!view) return;
     const v = view;
     void withBusy(async () => {
+      if (live?.hasText) return addLiveRecording(v, noteId, audio, live);
+      // Nothing came through live (no words, or it failed): transcribe the whole recording instead.
+      live?.remove();
       await addRecording(v, noteId, audio, app.features.transcription, addAtEnd);
     });
+  }
+
+  function discardRecording() {
+    recording = false;
+    liveText?.remove();
+    liveText = null;
   }
 
   /** Pasted or dropped images upload straight into the note. */
@@ -382,6 +407,15 @@
       <div class="page" class:with-chip={place} bind:this={parent}></div>
     </div>
   </div>
+  {#if recording}
+    <!-- Floats over the note, above the phone's format bar and keyboard, so the transcript stays readable. -->
+    <Recorder
+      live={app.features.live_transcription ? liveHandlers : null}
+      bottom={media.phone ? keyboard + formatHeight + 12 : 24}
+      onsave={saveRecording}
+      onclose={discardRecording}
+    />
+  {/if}
 </section>
 
 <input bind:this={photoInput} class="file" type="file" accept="image/*" multiple onchange={onPhotos} aria-hidden="true" tabindex="-1" />
@@ -390,9 +424,6 @@
   <div class="adding" transition:bloom><span class="spinner"></span>Adding…</div>
 {/if}
 
-{#if recording}
-  <Recorder onsave={saveRecording} onclose={() => (recording = false)} />
-{/if}
 
 {#if moving}
   <MoveDialog kind="note" id={noteId} name={note?.title ?? ""} onclose={() => (moving = false)} />

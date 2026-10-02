@@ -33,7 +33,7 @@ const MAX_MESSAGE: usize = 16 * 1024 * 1024;
 const PING_EVERY: Duration = Duration::from_secs(25);
 
 /// Browsers always send Origin; it must match the configured public URL or this host.
-fn origin_allowed(state: &AppState, headers: &HeaderMap) -> bool {
+pub(crate) fn origin_allowed(state: &AppState, headers: &HeaderMap) -> bool {
     let Some(origin) = headers.get(ORIGIN).and_then(|v| v.to_str().ok()) else {
         return true;
     };

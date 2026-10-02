@@ -26,10 +26,11 @@ tower-http = { version = "0.7", features = ["fs", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1.26.1", features = ["v7", "serde"] }
+# Streams voice memos to a realtime speech-to-text service as they're recorded.
+tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-webpki-roots"] }
 # Reads note exports dropped in for import.
 zip = { version = "8.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 [dev-dependencies]
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "cookies", "multipart"] }
 tempfile = "3.27.0"
-tokio-tungstenite = "0.30.0"

@@ -4,6 +4,7 @@ pub mod auth;
 pub mod error;
 pub mod import;
 pub mod invites;
+pub mod live;
 pub mod perms;
 pub mod rooms;
 pub mod settings;
@@ -47,6 +48,9 @@ pub struct WhisperConfig {
     pub url: String,
     pub model: String,
     pub key: Option<String>,
+    /// Optional realtime endpoint, e.g. `ws://whisper:8000/v1/realtime`, for live transcripts while recording.
+    #[serde(default)]
+    pub realtime_url: Option<String>,
 }
 
 impl Config {
@@ -63,6 +67,7 @@ impl Config {
                 url,
                 model: env::var("GNOTES_WHISPER_MODEL").unwrap_or_else(|_| "whisper-1".into()),
                 key: env::var("GNOTES_WHISPER_KEY").ok().filter(|s| !s.is_empty()),
+                realtime_url: env::var("GNOTES_WHISPER_REALTIME_URL").ok().filter(|s| !s.is_empty()),
             }),
         })
     }
@@ -141,6 +146,7 @@ pub fn router(state: AppState) -> Router {
         .route("/attachments/{id}/transcribe", post(attachments::transcribe))
         .route("/import", post(import::import).layer(DefaultBodyLimit::max(import::MAX_IMPORT)))
         .route("/features", get(attachments::features))
+        .route("/transcribe/live", get(live::handler))
         .route("/admin/settings", get(settings::get_settings))
         .route("/admin/settings/whisper", axum::routing::put(settings::put_whisper))
         .route("/admin/settings/whisper/test", post(settings::test_whisper))

@@ -271,5 +271,10 @@ pub async fn transcribe(
 
 /// `GET /features`: what this server can do beyond the basics.
 pub async fn features(State(state): State<AppState>, CurrentUser(_): CurrentUser) -> Json<Value> {
-    Json(json!({ "transcription": state.whisper.read().await.is_some(), "max_upload": MAX_UPLOAD }))
+    let whisper = state.whisper.read().await;
+    Json(json!({
+        "transcription": whisper.is_some(),
+        "live_transcription": whisper.as_ref().is_some_and(|w| w.realtime_url.is_some()),
+        "max_upload": MAX_UPLOAD,
+    }))
 }
