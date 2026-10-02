@@ -88,6 +88,72 @@
     { tag: [tags.processingInstruction, tags.contentSeparator, tags.meta], color: "var(--dim-fg)" },
   ]);
 
+  // The Summary tab: an AI summary of the whole note, made the first time the tab is opened (and again
+  // on request), shown read-only with the note's own styling. The note's editor stays as it is underneath.
+  let tab = $state<"note" | "summary">("note");
+  let summary = $state<{ text: string; stale: boolean; at: number } | null>(null);
+  let summarizing = $state(false);
+  let summaryError = $state("");
+  let summaryParent = $state<HTMLDivElement>();
+  let summaryView: EditorView | null = null;
+
+  function keep(s: { summary: string | null; stale?: boolean; created_at?: number }) {
+    summary = s.summary ? { text: s.summary, stale: !!s.stale, at: s.created_at ?? Date.now() } : null;
+  }
+
+  async function makeSummary() {
+    summarizing = true;
+    summaryError = "";
+    try {
+      keep(await api.summarize(noteId));
+    } catch (err) {
+      summaryError = err instanceof ApiError ? err.message : "Couldn't reach the server";
+    }
+    summarizing = false;
+  }
+
+  /** Opening the tab is the trigger: it shows the saved summary, or makes one when there's none. */
+  async function openSummary() {
+    tab = "summary";
+    view?.contentDOM.blur();
+    if (summarizing) return;
+    try {
+      const saved = await api.summary(noteId);
+      if (saved.summary) keep(saved);
+      else await makeSummary();
+    } catch (err) {
+      summaryError = err instanceof ApiError ? err.message : "Couldn't reach the server";
+    }
+  }
+
+  $effect(() => {
+    const text = summary?.text;
+    const el = summaryParent;
+    if (!text || !el) return;
+    untrack(() => {
+      // Titled like a note, so the first line gets the title style and the summary reads as body text.
+      const doc = `Summary\n${text}`;
+      if (summaryView) return void summaryView.dispatch({ changes: { from: 0, to: summaryView.state.doc.length, insert: doc } });
+      summaryView = new EditorView({
+        parent: el,
+        state: EditorState.create({
+          doc,
+          extensions: [
+            markdown({ base: markdownLanguage }),
+            syntaxHighlighting(markdownStyle),
+            livePreview,
+            EditorView.lineWrapping,
+            EditorView.editable.of(false),
+            EditorState.readOnly.of(true),
+            EditorView.contentAttributes.of({ "aria-label": "Summary" }),
+          ],
+        }),
+      });
+    });
+  });
+
+  const madeAt = (ms: number) => new Date(ms).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+
   /** Editable only once content has arrived, so nothing is typed into a doc that's about to be replaced. */
   function refreshEditable() {
     view?.dispatch({ effects: editable.reconfigure(EditorView.editable.of(canEdit)) });
@@ -114,7 +180,7 @@
    * at the start. Beside the text is part of the editor itself, so it never gets here.
    */
   function focusEnd(e: MouseEvent) {
-    if (!view || !canEdit || view.contentDOM.contains(e.target as Node)) return;
+    if (!view || !canEdit || tab !== "note" || view.contentDOM.contains(e.target as Node)) return;
     const above = e.clientY < view.contentDOM.getBoundingClientRect().top;
     view.dispatch({ selection: EditorSelection.cursor(above ? 0 : view.state.doc.length), scrollIntoView: true });
     view.focus();
@@ -215,6 +281,7 @@
       // Like Apple Notes, a note left blank doesn't stick around.
       const blank = hasData && !lost && role === "owner" && doc.getText("body").toString().trim() === "";
       sync.close(noteId);
+      summaryView?.destroy();
       if (blank) api.discardNote(noteId).catch(() => {});
       offDoc();
       offPresence();
@@ -370,7 +437,7 @@
       {/if}
     </header>
 
-    {#if canEdit && view}
+    {#if canEdit && view && tab === "note"}
       <div class="format" style:bottom="{keyboard}px" bind:offsetHeight={formatHeight}>
         <FormatBar {view} {block} {inline} onphoto={pickPhoto} onrecord={startRecording} ondone={() => view?.contentDOM.blur()} />
       </div>
@@ -395,15 +462,46 @@
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
   <div class="scroll" class:gone={lost} onclick={focusEnd} use:scrollEdge bind:this={scroller}>
     <div class="column" class:hidden={!loaded}>
-      {#if place}
-        <button class="chip-link notebook-chip" title="Open {place.label}" onclick={(e) => (e.stopPropagation(), openPlace())}>
-          <Icon name={place.icon} size={14} /><span>{place.label}</span><Icon name="next" size={12} />
-        </button>
+      {#if place || app.features.summaries}
+        <!-- Where the note lives, and its Note / Summary tabs. -->
+        <div class="note-head">
+          {#if place}
+            <button class="chip-link notebook-chip" title="Open {place.label}" onclick={(e) => (e.stopPropagation(), openPlace())}>
+              <Icon name={place.icon} size={14} /><span>{place.label}</span><Icon name="next" size={12} />
+            </button>
+          {/if}
+          {#if app.features.summaries}
+            <div class="tabs" role="tablist" aria-label="Note or summary">
+              <button role="tab" aria-selected={tab === "note"} class:on={tab === "note"} onclick={(e) => (e.stopPropagation(), (tab = "note"))}>Note</button>
+              <button role="tab" aria-selected={tab === "summary"} class:on={tab === "summary"} onclick={(e) => (e.stopPropagation(), void openSummary())}>Summary</button>
+            </div>
+          {/if}
+        </div>
       {/if}
-      <div class="page" class:with-chip={place} class:can-edit={canEdit}
+      {#if tab === "summary"}
+        <div class="summary-state">
+          {#if summarizing}
+            <span class="dim"><span class="spinner"></span> Summarizing…</span>
+          {:else if summaryError}
+            <span class="error-text">{summaryError}</span>
+            <button class="flat" onclick={(e) => (e.stopPropagation(), void makeSummary())}>Try Again</button>
+          {:else if summary}
+            {#if summary.stale}
+              <span class="stale">The note has changed since this summary.</span>
+              <button class="suggested" onclick={(e) => (e.stopPropagation(), void makeSummary())}>Update</button>
+            {:else}
+              <span class="dim">Made {madeAt(summary.at)}</span>
+              <button class="flat" onclick={(e) => (e.stopPropagation(), void makeSummary())}>Regenerate</button>
+            {/if}
+          {/if}
+        </div>
+      {/if}
+      <div class="page" class:with-chip={place || app.features.summaries} class:tab-hidden={tab !== "note"} class:can-edit={canEdit}
         class:can-read={canEdit && app.features.photo_text}
         class:can-transcribe={canEdit && app.features.transcription}
         bind:this={parent}></div>
+      <!-- After the note's editor, so it stays the first .cm-content on the page. -->
+      <div class="page summary-page" class:shown={tab === "summary" && !!summary} bind:this={summaryParent}></div>
     </div>
   </div>
   {#if recording}
@@ -872,10 +970,85 @@
     padding-top: 10px;
   }
 
-  /* Which notebook this note lives in; tap to open it. */
+  /* Which notebook this note lives in (tap to open it), and the Note / Summary tabs, lined up with the text. */
+  .note-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 20px max(var(--gutter), calc((100% - var(--measure)) / 2)) 0 max(18px, calc((100% - var(--measure)) / 2 - 6px));
+  }
+
   .notebook-chip {
-    margin: 20px 0 0 max(18px, calc((100% - var(--measure)) / 2 - 6px));
-    max-width: calc(100% - 36px);
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .tabs {
+    flex: none;
+    display: flex;
+    gap: 2px;
+    margin-left: auto;
+    padding: 2px;
+    border-radius: var(--radius-pill);
+    background: var(--button-bg);
+  }
+
+  .tabs button {
+    min-height: 28px;
+    padding: 0 14px;
+    border-radius: var(--radius-pill);
+    background: transparent;
+    color: var(--dim-fg);
+    font-size: var(--text-sm);
+    font-weight: 700;
+  }
+
+  .tabs button.on {
+    background: var(--view-bg);
+    color: var(--accent);
+    box-shadow: var(--shadow-sm);
+  }
+
+  /* Summarizing…, when it was made, or that the note has moved on since. */
+  .summary-state {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 40px;
+    padding: 14px max(var(--gutter), calc((100% - var(--measure)) / 2)) 0;
+    font-size: var(--text-sm);
+  }
+
+  .summary-state > span:first-child {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .summary-state .spinner {
+    width: 14px;
+    height: 14px;
+    color: var(--accent);
+  }
+
+  .summary-state .stale {
+    color: var(--fg);
+    font-weight: 600;
+  }
+
+  .summary-state .error-text {
+    color: var(--destructive);
+  }
+
+  .summary-page,
+  .tab-hidden {
+    display: none;
+  }
+
+  .summary-page.shown {
+    display: block;
+    padding-top: 10px;
   }
 
   .hidden {
@@ -1010,8 +1183,8 @@
       padding-top: 8px;
     }
 
-    .notebook-chip {
-      margin: 14px 0 0 12px;
+    .note-head {
+      padding: 14px 12px 0;
     }
   }
 

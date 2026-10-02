@@ -103,12 +103,22 @@ export interface ImportResult {
   notebook_id: string | null;
 }
 
+/** A note's AI summary. `summary` is null until someone asks for one. */
+export interface NoteSummary {
+  summary: string | null;
+  /** The note has changed since this summary was made. */
+  stale?: boolean;
+  created_at?: number;
+}
+
 export interface Features {
   transcription: boolean;
   /** Text appears in the note while a voice memo is being recorded. */
   live_transcription: boolean;
-  /** Photos added to a note get the text in them written underneath. */
+  /** Photos can have the text in them read out, on request. */
   photo_text: boolean;
+  /** Notes can be summarized, on request, in their Summary tab. */
+  summaries: boolean;
   max_upload: number;
 }
 
@@ -176,11 +186,16 @@ export const api = {
 
   createNote: (notebook_id: string | null) => request<{ id: string }>("POST", "/notes", { notebook_id }),
   deleteNote: (id: string) => request("DELETE", `/notes/${id}`),
-  adminSettings: () => request<{ whisper: ServiceSettings; vision: ServiceSettings }>("GET", "/admin/settings"),
+  adminSettings: () => request<{ whisper: ServiceSettings; vision: ServiceSettings; summary: ServiceSettings }>("GET", "/admin/settings"),
   saveWhisper: (body: ServiceInput) => request<{ whisper: ServiceSettings }>("PUT", "/admin/settings/whisper", body),
   testWhisper: (body: ServiceInput) => request<{ ok: boolean; message: string }>("POST", "/admin/settings/whisper/test", body),
-  saveVision: (body: ServiceInput) => request<{ vision: ServiceSettings }>("PUT", "/admin/settings/vision", body),
-  testVision: (body: ServiceInput) => request<{ ok: boolean; message: string }>("POST", "/admin/settings/vision/test", body),
+  /** The chat-API services: reading photos and summarizing notes. */
+  saveChat: <K extends "vision" | "summary">(kind: K, body: ServiceInput) =>
+    request<Record<K, ServiceSettings>>("PUT", `/admin/settings/${kind}`, body).then((r) => r[kind]),
+  testChat: (kind: "vision" | "summary", body: ServiceInput) =>
+    request<{ ok: boolean; message: string }>("POST", `/admin/settings/${kind}/test`, body),
+  summary: (noteId: string) => request<NoteSummary>("GET", `/notes/${noteId}/summary`),
+  summarize: (noteId: string) => request<NoteSummary>("POST", `/notes/${noteId}/summary`, {}),
   photoText: (id: string) => request<{ text: string }>("POST", `/attachments/${id}/text`, {}),
   features: () => request<Features>("GET", "/features"),
   attachmentMeta: (id: string) => request<AttachmentMeta>("GET", `/attachments/${id}/meta`),

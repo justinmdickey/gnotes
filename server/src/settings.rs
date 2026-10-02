@@ -5,14 +5,13 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::{
-    AppState, VisionConfig, WhisperConfig,
+    AppState, ChatConfig, WhisperConfig,
     account::require_admin,
     auth::CurrentUser,
     error::{ApiResult, AppError},
 };
 
 const WHISPER_KEY: &str = "whisper";
-const VISION_KEY: &str = "vision";
 
 /// Loads a saved setting. `None` means nothing is saved, so the env default applies.
 async fn load<T: serde::de::DeserializeOwned>(db: &sqlx::SqlitePool, key: &str) -> anyhow::Result<Option<Option<T>>> {
@@ -41,9 +40,49 @@ pub async fn load_whisper(db: &sqlx::SqlitePool) -> anyhow::Result<Option<Option
     load(db, WHISPER_KEY).await
 }
 
-/// Loads the saved photo-reading setting.
-pub async fn load_vision(db: &sqlx::SqlitePool) -> anyhow::Result<Option<Option<VisionConfig>>> {
-    load(db, VISION_KEY).await
+/// The services that speak the OpenAI chat API, each its own setting.
+#[derive(Clone, Copy)]
+pub enum Chat {
+    /// Reads the text in photos.
+    Vision,
+    /// Summarizes notes.
+    Summary,
+}
+
+impl Chat {
+    fn from_path(name: &str) -> ApiResult<Self> {
+        match name {
+            "vision" => Ok(Chat::Vision),
+            "summary" => Ok(Chat::Summary),
+            _ => Err(AppError::NotFound),
+        }
+    }
+
+    fn key(self) -> &'static str {
+        match self {
+            Chat::Vision => "vision",
+            Chat::Summary => "summary",
+        }
+    }
+
+    fn slot(self, state: &AppState) -> &tokio::sync::RwLock<Option<ChatConfig>> {
+        match self {
+            Chat::Vision => &state.vision,
+            Chat::Summary => &state.summary,
+        }
+    }
+
+    fn example_model(self) -> &'static str {
+        match self {
+            Chat::Vision => "qwen2.5vl",
+            Chat::Summary => "llama3.1",
+        }
+    }
+}
+
+/// Loads a saved chat-service setting.
+pub async fn load_chat(db: &sqlx::SqlitePool, chat: Chat) -> anyhow::Result<Option<Option<ChatConfig>>> {
+    load(db, chat.key()).await
 }
 
 /// A service URL as typed: trimmed, without a trailing slash, and http(s). Empty means off.
@@ -96,7 +135,7 @@ async fn check_models(state: &AppState, url: &str, key: Option<&String>, model: 
     }
 }
 
-fn describe_vision(v: Option<&VisionConfig>, saved: bool) -> Value {
+fn describe_chat(v: Option<&ChatConfig>, saved: bool) -> Value {
     json!({
         "enabled": v.is_some(),
         "url": v.map(|v| v.url.as_str()).unwrap_or(""),
@@ -122,13 +161,12 @@ fn describe(w: Option<&WhisperConfig>, saved: bool) -> Value {
 pub async fn get_settings(State(state): State<AppState>, CurrentUser(me): CurrentUser) -> ApiResult<Json<Value>> {
     require_admin(&me)?;
     let saved = load_whisper(&state.db).await?.is_some();
-    let vision_saved = load_vision(&state.db).await?.is_some();
-    let whisper = state.whisper.read().await;
-    let vision = state.vision.read().await;
-    Ok(Json(json!({
-        "whisper": describe(whisper.as_ref(), saved),
-        "vision": describe_vision(vision.as_ref(), vision_saved),
-    })))
+    let mut out = json!({ "whisper": describe(state.whisper.read().await.as_ref(), saved) });
+    for chat in [Chat::Vision, Chat::Summary] {
+        let saved = load_chat(&state.db, chat).await?.is_some();
+        out[chat.key()] = describe_chat(chat.slot(&state).read().await.as_ref(), saved);
+    }
+    Ok(Json(out))
 }
 
 #[derive(Deserialize)]
@@ -200,8 +238,8 @@ pub async fn test_whisper(
 }
 
 #[derive(Deserialize)]
-pub struct VisionBody {
-    /// Empty turns photo reading off.
+pub struct ChatBody {
+    /// Empty turns the service off.
     url: String,
     #[serde(default)]
     model: String,
@@ -210,44 +248,48 @@ pub struct VisionBody {
     key: Option<Option<String>>,
 }
 
-impl VisionBody {
-    fn resolve(self, current: Option<&VisionConfig>) -> ApiResult<Option<VisionConfig>> {
+impl ChatBody {
+    fn resolve(self, chat: Chat, current: Option<&ChatConfig>) -> ApiResult<Option<ChatConfig>> {
         let Some(url) = clean_url(&self.url)? else { return Ok(None) };
         // Local servers have no sensible default model, so it has to be named.
         let model = self.model.trim().to_owned();
         if model.is_empty() {
-            return Err(AppError::BadRequest("Enter the vision model's name, e.g. qwen2.5vl".into()));
+            return Err(AppError::BadRequest(format!("Enter the model's name, e.g. {}", chat.example_model())));
         }
         let key = resolve_key(self.key, current.and_then(|c| c.key.as_ref()));
-        Ok(Some(VisionConfig { url, model, key }))
+        Ok(Some(ChatConfig { url, model, key }))
     }
 }
 
-/// `PUT /admin/settings/vision`
-pub async fn put_vision(
+/// `PUT /admin/settings/{vision|summary}`
+pub async fn put_chat(
     State(state): State<AppState>,
     CurrentUser(me): CurrentUser,
-    Json(body): Json<VisionBody>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+    Json(body): Json<ChatBody>,
 ) -> ApiResult<Json<Value>> {
     require_admin(&me)?;
-    let mut vision = state.vision.write().await;
-    let next = body.resolve(vision.as_ref())?;
-    save(&state.db, VISION_KEY, &next).await?;
-    *vision = next;
-    Ok(Json(json!({ "vision": describe_vision(vision.as_ref(), true) })))
+    let chat = Chat::from_path(&name)?;
+    let mut slot = chat.slot(&state).write().await;
+    let next = body.resolve(chat, slot.as_ref())?;
+    save(&state.db, chat.key(), &next).await?;
+    *slot = next;
+    Ok(Json(json!({ chat.key(): describe_chat(slot.as_ref(), true) })))
 }
 
-/// `POST /admin/settings/vision/test`
-pub async fn test_vision(
+/// `POST /admin/settings/{vision|summary}/test`
+pub async fn test_chat(
     State(state): State<AppState>,
     CurrentUser(me): CurrentUser,
-    Json(body): Json<VisionBody>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+    Json(body): Json<ChatBody>,
 ) -> ApiResult<Json<Value>> {
     require_admin(&me)?;
-    let current = state.vision.read().await.clone();
-    let Some(v) = body.resolve(current.as_ref())? else {
+    let chat = Chat::from_path(&name)?;
+    let current = chat.slot(&state).read().await.clone();
+    let Some(c) = body.resolve(chat, current.as_ref())? else {
         return Err(AppError::BadRequest("Enter the service URL first".into()));
     };
-    let (ok, message) = check_models(&state, &v.url, v.key.as_ref(), &v.model).await;
+    let (ok, message) = check_models(&state, &c.url, c.key.as_ref(), &c.model).await;
     Ok(Json(json!({ "ok": ok, "message": message })))
 }

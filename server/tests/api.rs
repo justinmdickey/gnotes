@@ -23,6 +23,7 @@ async fn start(dir: &TempDir) -> Server {
 async fn start_with(dir: &TempDir, whisper: Option<WhisperConfig>) -> Server {
     let config = Config {
         vision: None,
+        summary: None,
         data_dir: dir.path().to_path_buf(),
         bind: "127.0.0.1:0".parse().unwrap(),
         web_dir: dir.path().join("web"),
@@ -895,5 +896,64 @@ async fn photos_are_read_by_the_configured_vision_model() {
     assert_eq!(alice.post(&format!("/attachments/{}/text", blank["id"].as_str().unwrap()), json!({})).await["text"], "");
     let memo: Value = upload(&alice, &note, "m.webm", "audio/webm", vec![7; 10]).await.json().await.unwrap();
     let res = alice.send(reqwest::Method::POST, &format!("/attachments/{}/text", memo["id"].as_str().unwrap()), json!({})).await;
+    assert_eq!(res.status(), 400);
+}
+
+/// A stand-in chat model for summaries: checks it was sent the note and answers with a fenced summary.
+async fn fake_summarizer() -> String {
+    let fake = axum::Router::new().route(
+        "/v1/chat/completions",
+        axum::routing::post(|axum::Json(body): axum::Json<Value>| async move {
+            assert_eq!(body["model"], "llama3.1");
+            let prompt = body["messages"][0]["content"].as_str().unwrap().to_owned();
+            assert!(prompt.contains("Call Bob about the roof") && prompt.contains("## Key points"), "{prompt}");
+            let content = "```markdown\nA plan for the roof.\n\n## Key points\n- Bob does roofs\n\n## Action items\n- [ ] Call Bob\n```";
+            axum::Json(json!({ "choices": [{ "message": { "role": "assistant", "content": content } }] }))
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/v1", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, fake).await });
+    url
+}
+
+#[tokio::test]
+async fn notes_are_summarized_on_request() {
+    let fake_url = fake_summarizer().await;
+    let dir = TempDir::new().unwrap();
+    let server = start(&dir).await;
+    auth::create_user(&server.state.db, "root", "", "password123", true).await.unwrap();
+    let root = login(&server.base, "root").await;
+    let alice = user(&server, "alice").await;
+    let bob = user(&server, "bob").await;
+    assert_eq!(alice.get("/features").await["summaries"], false);
+    let saved = root.send(reqwest::Method::PUT, "/admin/settings/summary", json!({ "url": fake_url, "model": "llama3.1" })).await;
+    assert!(saved.status().is_success());
+    assert_eq!(root.get("/admin/settings").await["summary"]["model"], "llama3.1");
+    assert_eq!(alice.get("/features").await["summaries"], true);
+
+    let res = import(&alice, None, vec![("Plan.md", b"Call Bob about the roof\nBuy nails".to_vec()), ("Short.md", b"# Short".to_vec())]).await;
+    assert!(res.status().is_success());
+    let tree = alice.get("/tree").await;
+    let note = |title: &str| tree["notes"].as_array().unwrap().iter().find(|n| n["title"] == title).unwrap()["id"].as_str().unwrap().to_owned();
+    let plan = note("Plan");
+
+    // Nothing until someone asks; then it's made, cleaned of fences, and kept.
+    assert!(alice.get(&format!("/notes/{plan}/summary")).await["summary"].is_null());
+    let made = alice.post(&format!("/notes/{plan}/summary"), json!({})).await;
+    assert_eq!(made["summary"], "A plan for the roof.\n\n## Key points\n- Bob does roofs\n\n## Action items\n- [ ] Call Bob");
+    let got = alice.get(&format!("/notes/{plan}/summary")).await;
+    assert_eq!((got["summary"].clone(), got["stale"].clone()), (made["summary"].clone(), json!(false)));
+
+    // It says when the note no longer matches what was summarized.
+    sqlx::query("UPDATE note_summaries SET body_hash = 'older'").execute(&server.state.db).await.unwrap();
+    assert_eq!(alice.get(&format!("/notes/{plan}/summary")).await["stale"], true);
+
+    // Readers of the note can see and ask for it; others can't; a one-line note has nothing to summarize.
+    let res = bob.send(reqwest::Method::GET, &format!("/notes/{plan}/summary"), json!({})).await;
+    assert_eq!(res.status(), 404);
+    alice.post("/shares", json!({ "resource_type": "note", "resource_id": plan, "username": "bob", "role": "viewer" })).await;
+    assert_eq!(bob.get(&format!("/notes/{plan}/summary")).await["stale"], true);
+    let res = alice.send(reqwest::Method::POST, &format!("/notes/{}/summary", note("Short")), json!({})).await;
     assert_eq!(res.status(), 400);
 }

@@ -15,13 +15,18 @@ const data = mkdtempSync(join(tmpdir(), "gnotes-e2e-"));
 const port = 18000 + Math.floor(Math.random() * 1000);
 const base = `http://127.0.0.1:${port}`;
 // A stand-in speech-to-text service: answers every transcription request the same way.
-// It's also the vision model: a photo always reads as a short shopping list, a moment later.
+// It's also the chat model: a photo always reads as a short shopping list, and a note (text only)
+// summarizes to a fixed summary, each a moment later.
 const whisper = createServer((req, res) => {
-  req.resume();
+  const chunks = [];
+  req.on("data", (c) => chunks.push(c));
   req.on("end", () => {
     res.setHeader("content-type", "application/json");
     if (req.url.endsWith("/chat/completions")) {
-      setTimeout(() => res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: "SHOPPING LIST\nOat milk" } }] })), 800);
+      const body = JSON.parse(Buffer.concat(chunks).toString());
+      const photo = Array.isArray(body.messages[0].content);
+      const content = photo ? "SHOPPING LIST\nOat milk" : "Things to buy this week.\n\n## Key points\n- **Milk** and eggs\n\n## Action items\n- [ ] Buy bread";
+      setTimeout(() => res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content } }] })), 800);
     } else res.end(JSON.stringify({ text: "remember the milk" }));
   });
 }).listen(port + 1, "127.0.0.1");
@@ -308,10 +313,45 @@ try {
   await alice.click(".vision button[type=submit]");
   await alice.waitForFunction(() => document.body.innerText.includes("Text from photos saved"));
   check(true, "admin sets up text from photos in settings");
+  await alice.type(".summaries input[type=url]", `http://127.0.0.1:${port + 1}/v1`);
+  await alice.type(".summaries input[placeholder='llama3.1']", "llama3.1");
+  await alice.click(".summaries button[type=submit]");
+  await alice.waitForFunction(() => document.body.innerText.includes("Summaries saved"));
+  check(true, "admin sets up summaries in settings");
   if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-settings.png") });
   await alice.click(".settings-layer .back");
   await alice.waitForFunction(() => !document.querySelector(".settings-layer"));
   await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("bread"));
+
+  // The Summary tab summarizes the note the first time it's opened, and says when the note has moved on.
+  await alice.click(".tabs ::-p-text(Summary)");
+  await alice.waitForSelector(".summary-state .spinner");
+  await alice.waitForFunction(() => document.querySelector(".summary-page.shown .cm-content")?.innerText.includes("Things to buy this week."), { timeout: 5000 });
+  check(
+    await alice.evaluate(() => {
+      const page = document.querySelector(".summary-page.shown");
+      return !!page.querySelector(".cm-checkbox") && page.innerText.includes("Key points") && !page.innerText.includes("##") && !document.querySelector(".format");
+    }),
+    "opening Summary makes one, drawn like a note, with the format bar put away",
+  );
+  if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-summary.png") });
+  await alice.click(".tabs ::-p-text(Note)");
+  await alice.waitForFunction(() => !document.querySelector(".summary-page.shown") && !!document.querySelector(".format"));
+  await alice.click(".cm-content");
+  await alice.keyboard.down("Control");
+  await alice.keyboard.press("End");
+  await alice.keyboard.up("Control");
+  await alice.keyboard.type(" and jam");
+  await new Promise((r) => setTimeout(r, 600));
+  await alice.click(".tabs ::-p-text(Summary)");
+  await alice.waitForFunction(() => document.querySelector(".summary-state")?.innerText.includes("changed since"), { timeout: 5000 });
+  check(true, "reopening Summary after an edit says the note has changed");
+  await alice.click(".summary-state ::-p-text(Update)");
+  await alice.waitForFunction(() => document.querySelector(".summary-state")?.innerText.includes("Made"), { timeout: 5000 });
+  check(true, "Update makes a fresh summary");
+  await alice.click(".tabs ::-p-text(Note)");
+  await alice.keyboard.press("Backspace");
+  for (let i = 0; i < 7; i++) await alice.keyboard.press("Backspace");
 
   // A zip picked in Settings becomes a notebook with its folders inside, and the toast's Show opens it.
   const beforeImport = await alice.evaluate(() => location.hash);
@@ -800,6 +840,11 @@ try {
     await alice.waitForSelector(".cm-attachment.is-image img");
     await alice.evaluate(() => document.activeElement?.blur());
     await shot("phone-attachments-dark");
+    // The Summary tab on a phone, on a note with plenty in it.
+    await alice.tap(".tabs button:last-child");
+    await alice.waitForFunction(() => document.querySelector(".summary-page.shown .cm-content")?.innerText.includes("Things to buy"), { timeout: 5000 });
+    await shot("phone-summary-dark");
+    await alice.tap(".tabs button:first-child");
     // Account is a tab like the others: the tab bar stays and there's no Back.
     await alice.evaluate(() => [...document.querySelectorAll(".tabbar button")].find((b) => b.textContent.includes("Account")).click());
     await alice.waitForFunction(() => document.querySelector(".tab-page h1")?.textContent === "Account");

@@ -26,7 +26,7 @@ export const app = $state({
   /** Tablet only: the notebooks sidebar is pulled out over the list. */
   drawer: false,
   /** Optional server abilities, like speech-to-text. */
-  features: { transcription: false, live_transcription: false, photo_text: false, max_upload: 0 } as Features,
+  features: { transcription: false, live_transcription: false, photo_text: false, summaries: false, max_upload: 0 } as Features,
   /** Why the user was sent back to the login screen, if it wasn't their choice. */
   signedOutReason: "" as string,
 });

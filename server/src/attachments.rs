@@ -302,33 +302,11 @@ pub async fn photo_text(
     }
     let bytes = tokio::fs::read(blob_path(&state.config.data_dir, &att.sha256)).await?;
     let image = format!("data:{};base64,{}", att.mime, STANDARD.encode(&bytes));
-    let body = json!({
-        "model": vision.model,
-        "temperature": 0,
-        "messages": [{
-            "role": "user",
-            "content": [
-                { "type": "text", "text": READ_PROMPT },
-                { "type": "image_url", "image_url": { "url": image } },
-            ],
-        }],
-    });
-    let mut req = state.http.post(format!("{}/chat/completions", vision.url)).json(&body);
-    if let Some(key) = &vision.key {
-        req = req.bearer_auth(key);
-    }
-    let res = req.send().await.map_err(|e| {
-        tracing::warn!("photo reading request failed: {e:#}");
-        AppError::Conflict("Couldn't reach the photo reading service".into())
-    })?;
-    if !res.status().is_success() {
-        let status = res.status();
-        let body = res.text().await.unwrap_or_default();
-        tracing::warn!("photo reading failed with {status}: {body}");
-        return Err(AppError::Conflict("The photo reading service returned an error".into()));
-    }
-    let answer: Value = res.json().await?;
-    let text = clean_reading(answer["choices"][0]["message"]["content"].as_str().unwrap_or_default());
+    let content = json!([
+        { "type": "text", "text": READ_PROMPT },
+        { "type": "image_url", "image_url": { "url": image } },
+    ]);
+    let text = clean_reading(&crate::chat::complete(&state, &vision, content, "photo reading").await?);
     Ok(Json(json!({ "text": text })))
 }
 
@@ -339,6 +317,7 @@ pub async fn features(State(state): State<AppState>, CurrentUser(_): CurrentUser
         "transcription": whisper.is_some(),
         "live_transcription": whisper.as_ref().is_some_and(|w| w.realtime_url.is_some()),
         "photo_text": state.vision.read().await.is_some(),
+        "summaries": state.summary.read().await.is_some(),
         "max_upload": MAX_UPLOAD,
     }))
 }

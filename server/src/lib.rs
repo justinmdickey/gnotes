@@ -1,6 +1,7 @@
 pub mod account;
 pub mod attachments;
 pub mod auth;
+pub mod chat;
 pub mod error;
 pub mod import;
 pub mod invites;
@@ -9,6 +10,7 @@ pub mod perms;
 pub mod rooms;
 pub mod settings;
 pub mod shares;
+pub mod summary;
 pub mod tree;
 pub mod util;
 pub mod ws;
@@ -40,13 +42,15 @@ pub struct Config {
     /// Default speech-to-text for voice notes, from env. An admin's saved setting overrides it.
     pub whisper: Option<WhisperConfig>,
     /// Default photo reading, from env. An admin's saved setting overrides it.
-    pub vision: Option<VisionConfig>,
+    pub vision: Option<ChatConfig>,
+    /// Default note summaries, from env. An admin's saved setting overrides it.
+    pub summary: Option<ChatConfig>,
 }
 
-/// An OpenAI-compatible chat API with a vision model, for reading the text in photos, e.g. Ollama,
-/// llama.cpp or vLLM on local hardware, or a hosted one.
+/// An OpenAI-compatible chat API, e.g. Ollama, llama.cpp or vLLM on local hardware, or a hosted one.
+/// Used with a vision model to read the text in photos, and with a text model to summarize notes.
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
-pub struct VisionConfig {
+pub struct ChatConfig {
     /// Base URL including the version, e.g. `http://ollama:11434/v1`. `/chat/completions` is appended.
     pub url: String,
     pub model: String,
@@ -65,6 +69,12 @@ pub struct WhisperConfig {
     pub realtime_url: Option<String>,
 }
 
+/// `GNOTES_<PREFIX>_URL`, `_MODEL` and `_KEY`, when the URL is set.
+fn chat_from_env(prefix: &str) -> Option<ChatConfig> {
+    let var = |name: &str| env::var(format!("GNOTES_{prefix}_{name}")).ok().filter(|s| !s.is_empty());
+    var("URL").map(|url| ChatConfig { url, model: var("MODEL").unwrap_or_default(), key: var("KEY") })
+}
+
 impl Config {
     pub fn from_env() -> anyhow::Result<Self> {
         Ok(Self {
@@ -81,11 +91,8 @@ impl Config {
                 key: env::var("GNOTES_WHISPER_KEY").ok().filter(|s| !s.is_empty()),
                 realtime_url: env::var("GNOTES_WHISPER_REALTIME_URL").ok().filter(|s| !s.is_empty()),
             }),
-            vision: env::var("GNOTES_VISION_URL").ok().filter(|s| !s.is_empty()).map(|url| VisionConfig {
-                url,
-                model: env::var("GNOTES_VISION_MODEL").unwrap_or_default(),
-                key: env::var("GNOTES_VISION_KEY").ok().filter(|s| !s.is_empty()),
-            }),
+            vision: chat_from_env("VISION"),
+            summary: chat_from_env("SUMMARY"),
         })
     }
 
@@ -105,7 +112,9 @@ pub struct AppState {
     /// The speech-to-text service in use right now. Admins can change it while running.
     pub whisper: Arc<tokio::sync::RwLock<Option<WhisperConfig>>>,
     /// The photo-reading service in use right now.
-    pub vision: Arc<tokio::sync::RwLock<Option<VisionConfig>>>,
+    pub vision: Arc<tokio::sync::RwLock<Option<ChatConfig>>>,
+    /// The note-summary service in use right now.
+    pub summary: Arc<tokio::sync::RwLock<Option<ChatConfig>>>,
 }
 
 impl AppState {
@@ -169,8 +178,9 @@ pub fn router(state: AppState) -> Router {
         .route("/admin/settings", get(settings::get_settings))
         .route("/admin/settings/whisper", axum::routing::put(settings::put_whisper))
         .route("/admin/settings/whisper/test", post(settings::test_whisper))
-        .route("/admin/settings/vision", axum::routing::put(settings::put_vision))
-        .route("/admin/settings/vision/test", post(settings::test_vision))
+        .route("/admin/settings/{chat}", axum::routing::put(settings::put_chat))
+        .route("/admin/settings/{chat}/test", post(settings::test_chat))
+        .route("/notes/{id}/summary", get(summary::get_summary).post(summary::summarize))
         .route("/attachments/{id}/text", post(attachments::photo_text))
         .route("/ws", get(ws::handler))
         .fallback(|| async { error::AppError::NotFound });
@@ -192,13 +202,18 @@ pub async fn build(config: Config) -> anyhow::Result<AppState> {
         Some(saved) => saved,
         None => config.whisper.clone(),
     };
-    let vision = match settings::load_vision(&db).await? {
+    let vision = match settings::load_chat(&db, settings::Chat::Vision).await? {
         Some(saved) => saved,
         None => config.vision.clone(),
+    };
+    let summary = match settings::load_chat(&db, settings::Chat::Summary).await? {
+        Some(saved) => saved,
+        None => config.summary.clone(),
     };
     Ok(AppState {
         whisper: Arc::new(tokio::sync::RwLock::new(whisper)),
         vision: Arc::new(tokio::sync::RwLock::new(vision)),
+        summary: Arc::new(tokio::sync::RwLock::new(summary)),
         db,
         config: Arc::new(config),
         rooms: Default::default(),

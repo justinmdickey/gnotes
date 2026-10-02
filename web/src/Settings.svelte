@@ -34,10 +34,12 @@
     [users, invites, settings] = await Promise.all([api.adminUsers(), api.invites(), api.adminSettings()]);
     whisper = settings.whisper;
     vision = settings.vision;
+    summary = settings.summary;
   }
 
   let whisper = $state<ServiceSettings | null>(null);
   let vision = $state<ServiceSettings | null>(null);
+  let summary = $state<ServiceSettings | null>(null);
 
   loadAdmin();
 
@@ -275,14 +277,33 @@
             urlPlaceholder="http://ollama:11434/v1"
             modelPlaceholder="qwen2.5vl"
             bind:settings={vision}
-            test={api.testVision}
+            test={(body) => api.testChat("vision", body)}
             save={async (body) => {
-              const saved = (await api.saveVision(body)).vision;
+              const saved = await api.saveChat("vision", body);
               app.features = { ...app.features, photo_text: saved.enabled };
               return saved;
             }}
             saved="Text from photos saved"
             off="Text from photos turned off"
+          />
+        {/if}
+
+        {#if summary}
+          <h2 class="group-title">AI Summaries</h2>
+          <ServiceForm
+            name="summaries"
+            explain="A note's Summary tab sends the note here and shows what comes back: the gist, key points and action items. Nothing is sent until someone opens that tab. Any OpenAI-compatible chat service works, such as Ollama, llama.cpp or vLLM on your own hardware. Leave the URL empty to turn it off."
+            urlPlaceholder="http://ollama:11434/v1"
+            modelPlaceholder="llama3.1"
+            bind:settings={summary}
+            test={(body) => api.testChat("summary", body)}
+            save={async (body) => {
+              const saved = await api.saveChat("summary", body);
+              app.features = { ...app.features, summaries: saved.enabled };
+              return saved;
+            }}
+            saved="Summaries saved"
+            off="Summaries turned off"
           />
         {/if}
 

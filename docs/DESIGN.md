@@ -14,6 +14,7 @@ Gnotes is a self-hosted Markdown notes app. One server holds a household's accou
 | Roles | Owner, editor, viewer. |
 | Encryption | TLS in transit. No end-to-end encryption, so the server admin can read notes. |
 | Speech-to-text | The server forwards voice memos to an external OpenAI-compatible transcription API (e.g. faster-whisper). The note keeps the recording and the transcript. |
+| AI summaries | On demand: a note's Summary tab sends the whole note to an OpenAI-compatible chat API (local or hosted) the first time it's opened, and shows the gist, key points and action items read-only. Kept in `note_summaries` beside the note, not in its text, with a hash of the text it covers so the tab can say when the note has changed. |
 | Text from photos | On demand: Get Text on a photo (on hover, always on touch) sends it to an OpenAI-compatible chat API with a vision model (e.g. Ollama or llama.cpp on local hardware), and the text it reads goes under the photo. |
 
 **CRDT** (conflict-free replicated data type): a data structure where edits made on different devices, even offline, merge automatically without conflicts.
