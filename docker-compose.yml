@@ -1,0 +1,25 @@
+# docker compose up -d, then open http://localhost:8080 and create the first account.
+services:
+  gnotes:
+    image: ghcr.io/justinmdickey/gnotes:latest
+    # Or build it from this checkout instead:
+    # build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - gnotes-data:/data
+    environment:
+      # The address people open, when it isn't localhost. With https:// the session cookie is
+      # marked secure. Recording needs https (or localhost) in the browser.
+      # GNOTES_PUBLIC_URL: https://notes.example.com
+      # Optional AI services; they can also be set later in Settings by the admin.
+      # GNOTES_WHISPER_URL: http://speaches:8000/v1
+      # GNOTES_WHISPER_MODEL: Systran/faster-whisper-small
+      # GNOTES_VISION_URL: http://ollama:11434/v1
+      # GNOTES_VISION_MODEL: qwen2.5vl
+      # GNOTES_SUMMARY_URL: http://ollama:11434/v1
+      # GNOTES_SUMMARY_MODEL: llama3.2
+    restart: unless-stopped
+
+volumes:
+  gnotes-data:
