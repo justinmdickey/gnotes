@@ -40,22 +40,23 @@ jobs:
           set -eu
           curl -fsSL https://download.docker.com/linux/static/stable/x86_64/docker-29.7.1.tgz \
             | tar xz -C /usr/local/bin --strip-components=1 docker/docker
-      # The daemon's disk is a 16Gi emptyDir shared with every repo's jobs, and filling it evicts
-      # the runner (2026-10-02). Clear what earlier jobs left (dangling images, old builders' state
-      # volumes) and trim the build cache before building, so a cold build always has room. The
-      # runner takes one job at a time, so nothing in use is touched.
-      - name: Make room
-        run: |
-          docker image prune --force
-          docker volume prune --all --force
-          docker builder prune --force --max-used-space 6GB
-          docker system df
       # The `docker` driver builds in the runner's own daemon, whose layer cache lasts between jobs
       # (until the runner pod restarts), so unchanged layers like the Rust dependencies are reused.
       # The default driver made a fresh builder per job and cached nothing.
       - uses: docker/setup-buildx-action@v3
         with:
           driver: docker
+      # The daemon's disk is a 16Gi emptyDir shared with every repo's jobs, and filling it evicts
+      # the runner (2026-10-02). Clear what earlier jobs left (dangling images, old builders' state
+      # volumes) and trim the build cache before building, so a cold build always has room. The
+      # runner takes one job at a time, so nothing in use is touched. After setup-buildx, because
+      # the plain CLI's legacy `docker builder prune` has no size limit flag.
+      - name: Make room
+        run: |
+          docker image prune --force
+          docker volume prune --all --force
+          docker buildx prune --force --max-used-space 6GB
+          docker system df
       - uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -95,4 +96,4 @@ jobs:
       # And again after, so what this build added stays bounded too.
       - name: Trim the build cache
         if: always()
-        run: docker builder prune --force --max-used-space 6GB
+        run: docker buildx prune --force --max-used-space 6GB
