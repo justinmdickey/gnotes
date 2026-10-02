@@ -109,11 +109,14 @@
     peers = [...seen.values()];
   }
 
-  /** Tapping blank space below the text puts the cursor at the end, like a sheet of paper. */
+  /**
+   * Tapping blank space below the text puts the cursor at the end, like a sheet of paper; above it,
+   * at the start. Beside the text is part of the editor itself, so it never gets here.
+   */
   function focusEnd(e: MouseEvent) {
     if (!view || !canEdit || view.contentDOM.contains(e.target as Node)) return;
-    const end = view.state.doc.length;
-    view.dispatch({ selection: EditorSelection.cursor(end), scrollIntoView: true });
+    const above = e.clientY < view.contentDOM.getBoundingClientRect().top;
+    view.dispatch({ selection: EditorSelection.cursor(above ? 0 : view.state.doc.length), scrollIntoView: true });
     view.focus();
   }
 
@@ -798,14 +801,19 @@
     content: "Transcribing…";
   }
 
+  /*
+    The editor spans the whole pane and the text is centered by padding inside it, so a click or
+    drag anywhere beside the text is still in the editor: it lands on the nearest line and selects.
+  */
   .column {
+    --measure: 712px;
+    --gutter: 24px;
     width: 100%;
-    max-width: 760px;
     transition: opacity 220ms ease;
   }
 
   .page {
-    padding: 28px 24px 40vh;
+    padding: 28px 0 40vh;
   }
 
   .page.with-chip {
@@ -814,7 +822,7 @@
 
   /* Which notebook this note lives in; tap to open it. */
   .notebook-chip {
-    margin: 20px 0 0 18px;
+    margin: 20px 0 0 max(18px, calc((100% - var(--measure)) / 2 - 6px));
     max-width: calc(100% - 36px);
   }
 
@@ -841,7 +849,7 @@
 
   .page :global(.cm-content) {
     caret-color: var(--accent);
-    padding: 0;
+    padding: 0 max(var(--gutter), calc((100% - var(--measure)) / 2));
   }
 
   .page :global(.cm-line) {
@@ -938,8 +946,12 @@
       animation: rise 180ms var(--ease-out);
     }
 
+    .column {
+      --gutter: 18px;
+    }
+
     .page {
-      padding: 20px 18px 50vh;
+      padding: 20px 0 50vh;
     }
 
     .page.with-chip {

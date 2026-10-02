@@ -273,6 +273,16 @@ try {
   await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("bread"));
   check(true, "alice's note reloads from the server");
 
+  // Beside the text is still the editor: a drag that starts out in the left margin selects from the line's start.
+  const title = await (await alice.$(".cm-line")).boundingBox();
+  await alice.mouse.move(title.x - 120, title.y + title.height / 2);
+  await alice.mouse.down();
+  await alice.mouse.move(title.x + 60, title.y + title.height / 2, { steps: 6 });
+  await alice.mouse.up();
+  const picked = await alice.evaluate(() => document.getSelection().toString());
+  check(picked.length >= 1 && "Groceries".startsWith(picked), `a drag from the margin selects from the line start ("${picked}")`);
+  await alice.mouse.click(title.x + title.width + 200, title.y + title.height / 2);
+
   // Settings: an admin resets Bob's password, and Bob's open app drops to the login screen.
   await alice.click("nav button[aria-label='Settings']");
   await alice.waitForSelector("button[aria-label='Manage Bob']");
