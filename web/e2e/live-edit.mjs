@@ -303,6 +303,7 @@ try {
   // Settings: an admin resets Bob's password, and Bob's open app drops to the login screen.
   await alice.click("nav button[aria-label='Settings']");
   await alice.waitForSelector("button[aria-label='Manage Bob']");
+  check((await alice.$eval(".version", (el) => el.textContent)) === "Gnotes dev", "Settings shows the server's version");
   await alice.click("button[aria-label='Manage Bob']");
   await alice.evaluate(() => [...document.querySelectorAll("[role=menuitem]")].find((b) => b.textContent.includes("Reset Password")).click());
   await alice.type("#reset-password input", "bobsnewpass");

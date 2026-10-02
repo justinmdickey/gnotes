@@ -18,7 +18,9 @@ RUN mkdir server/src && echo "fn main() {}" > server/src/main.rs && touch server
     && CARGO_BUILD_JOBS=$JOBS cargo build --release -p gnotes-server \
     && rm -rf server/src target/release/.fingerprint/gnotes-server-* target/release/deps/*gnotes_server*
 COPY server/ server/
-RUN CARGO_BUILD_JOBS=$JOBS cargo build --release -p gnotes-server
+# The release tag (e.g. v0.7.0), shown in Settings. After the dependency layer so it doesn't bust it.
+ARG VERSION=dev
+RUN GNOTES_VERSION="${VERSION#v}" CARGO_BUILD_JOBS=$JOBS cargo build --release -p gnotes-server
 
 FROM debian:trixie-slim
 # CA roots for outgoing HTTPS, e.g. a hosted speech-to-text service.

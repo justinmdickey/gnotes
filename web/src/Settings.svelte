@@ -319,6 +319,7 @@
           </ul>
         {/if}
       {/if}
+      {#if app.features.version}<p class="version dim">Gnotes {app.features.version}</p>{/if}
     </div>
   </div>
 </div>
@@ -353,6 +354,12 @@
 {/if}
 
 <style>
+  .version {
+    margin: 8px 0 0;
+    text-align: center;
+    font-size: var(--text-xs);
+  }
+
   .page {
     display: flex;
     flex-direction: column;

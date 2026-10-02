@@ -319,6 +319,7 @@ pub async fn features(State(state): State<AppState>, CurrentUser(_): CurrentUser
         "photo_text": state.vision.read().await.is_some(),
         "summaries": state.summary.read().await.is_some(),
         "max_upload": MAX_UPLOAD,
+        "version": crate::VERSION,
     }))
 }
 

@@ -15,6 +15,12 @@ pub mod tree;
 pub mod util;
 pub mod ws;
 
+/// The release this was built from (`GNOTES_VERSION` at build time, set from the tag in CI), or "dev".
+pub const VERSION: &str = match option_env!("GNOTES_VERSION") {
+    Some(v) => v,
+    None => "dev",
+};
+
 use std::{env, net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::Context;
@@ -141,7 +147,7 @@ pub async fn open_db(config: &Config) -> anyhow::Result<SqlitePool> {
 
 pub fn router(state: AppState) -> Router {
     let api = Router::new()
-        .route("/health", get(|| async { Json(json!({ "ok": true })) }))
+        .route("/health", get(|| async { Json(json!({ "ok": true, "version": VERSION })) }))
         .route("/auth/login", post(auth::login))
         .route("/auth/logout", post(auth::logout))
         .route("/auth/setup", get(auth::setup_needed).post(auth::setup))

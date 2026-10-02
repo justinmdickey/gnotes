@@ -39,7 +39,9 @@ jobs:
         with:
           context: .
           platforms: ${{ matrix.platform }}
-          build-args: JOBS=4
+          build-args: |
+            JOBS=4
+            VERSION=${{ github.ref_name }}
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=${{ env.ARCH }}
           cache-to: type=gha,scope=${{ env.ARCH }},mode=max

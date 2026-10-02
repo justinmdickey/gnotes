@@ -120,6 +120,8 @@ export interface Features {
   /** Notes can be summarized, on request, in their Summary tab. */
   summaries: boolean;
   max_upload: number;
+  /** The server's release, e.g. "0.7.0", or "dev". */
+  version: string;
 }
 
 /** An outside service the server calls (speech-to-text, photo reading), as Settings shows it. */
