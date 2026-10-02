@@ -272,6 +272,36 @@ try {
   });
   await alice.waitForFunction(() => [...document.querySelectorAll(".note-title")].some((t) => t.textContent.trim() === "Camping"), { timeout: 5000 });
   check(await alice.evaluate(() => document.querySelector(".hero h1")?.textContent === "Vault" && !document.querySelector(".drop-target")), "dropped Markdown imports into the open notebook");
+
+  // Pointing at a folder in the sidebar shows a + that makes a notebook or a note inside it.
+  await alice.hover("nav li:has(button[aria-label='New in Vault'])");
+  await alice.click("nav button[aria-label='New in Vault']");
+  await alice.waitForSelector(".popover [role=menuitem]");
+  if (process.env.SHOTS) await (await new Promise((r) => setTimeout(r, 300)), alice.screenshot({ path: join(process.env.SHOTS, "desktop-sidebar-add.png") }));
+  if (process.env.SHOTS) {
+    // A row without sub-notebooks, in dark: the + sits where its count was.
+    await alice.keyboard.press("Escape");
+    await alice.emulateMediaFeatures([{ name: "prefers-color-scheme", value: "dark" }]);
+    await alice.hover("nav li:has(button[aria-label='New in Trips'])");
+    await new Promise((r) => setTimeout(r, 300));
+    await alice.screenshot({ path: join(process.env.SHOTS, "desktop-sidebar-add-dark.png"), clip: { x: 0, y: 0, width: 600, height: 260 } });
+    await alice.emulateMediaFeatures([]);
+    await alice.click("nav button[aria-label='New in Vault']");
+    await alice.waitForSelector(".popover [role=menuitem]");
+  }
+  await alice.click(".popover ::-p-text(New Notebook)");
+  await alice.type("dialog input", "Packing");
+  await alice.click("dialog button[type=submit]");
+  await closed(alice);
+  await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Packing" && document.querySelector(".hero .crumbs")?.textContent.includes("Vault"));
+  check(true, "the sidebar + makes a notebook inside the folder you point at");
+  await alice.hover("nav li:has(button[aria-label='New in Packing'])");
+  await alice.click("nav button[aria-label='New in Packing']");
+  await alice.click(".popover ::-p-text(New Note)");
+  await alice.waitForSelector(".pane.editor .cm-content[contenteditable=true]");
+  await alice.keyboard.type("Socks");
+  await alice.waitForFunction(() => [...document.querySelectorAll(".note-title")].some((t) => t.textContent.trim() === "Socks"));
+  check(await alice.evaluate(() => document.querySelector(".hero h1")?.textContent === "Packing"), "the sidebar + makes a note inside the folder you point at");
   await alice.evaluate((hash) => (location.hash = hash), beforeImport);
   await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("bread"));
 

@@ -1,7 +1,9 @@
 <script lang="ts">
   import type { TreeNotebook } from "./lib/api";
   import Icon, { type IconName } from "./lib/Icon.svelte";
-  import { app, colorFor, navigate, notesFor, openSettings, type View } from "./lib/store.svelte";
+  import Menu from "./lib/Menu.svelte";
+  import NewNotebookDialog from "./NewNotebookDialog.svelte";
+  import { app, colorFor, composeNote, navigate, notesFor, openSettings, type View } from "./lib/store.svelte";
   import { scrollEdge } from "./lib/ui.svelte";
 
   /** Items directly inside, notebooks and notes alike, the same count the folder rows show. */
@@ -53,10 +55,21 @@
     return app.view.kind === view.kind && (view.kind !== "notebook" || (app.view as { id: string }).id === view.id);
   }
 
+  /** Rows you can add to: your top folder and notebooks you can edit. */
+  function addable(view: View) {
+    if (view.kind === "root") return true;
+    if (view.kind !== "notebook") return false;
+    const id = view.id;
+    return app.tree.notebooks.find((n) => n.id === id)?.role !== "viewer";
+  }
+
+  /** The notebook a New Notebook dialog is open for; `null` is the top folder. */
+  let newNotebookIn = $state<string | null | undefined>(undefined);
 </script>
 
 {#snippet row(view: View, icon: IconName, label: string, owner = "", depth = 0, fold: string | null = null, shared = false)}
-  <li class:foldable={fold}>
+  {@const canAdd = addable(view)}
+  <li class:foldable={fold} class:addable={canAdd}>
     <button class="row flat" class:selected={isSelected(view)} style:--depth={depth} onclick={() => navigate(view)}>
       <Icon name={icon} />
       <span class="label">{label}</span>
@@ -65,6 +78,21 @@
       <span class="count">{count(view)}</span>
       <span class="chevron phone-only"><Icon name="next" /></span>
     </button>
+    {#if canAdd}
+      <!-- Shows in place of the count while you point at the row. -->
+      <span class="adder">
+        <Menu
+          label="New in {label}"
+          class="flat icon circular"
+          items={[
+            { label: "New Note", icon: "compose", onselect: () => composeNote(view) },
+            { label: "New Notebook", icon: "newfolder", onselect: () => (newNotebookIn = view.kind === "notebook" ? view.id : null) },
+          ]}
+        >
+          {#snippet trigger()}<Icon name="plus" size={14} />{/snippet}
+        </Menu>
+      </span>
+    {/if}
     {#if fold}
       <button
         class="flat icon circular fold"
@@ -126,6 +154,10 @@
   </footer>
 </nav>
 
+{#if newNotebookIn !== undefined}
+  <NewNotebookDialog parent={newNotebookIn} onclose={() => (newNotebookIn = undefined)} />
+{/if}
+
 
 <style>
   nav {
@@ -164,7 +196,8 @@
     font-weight: 500;
   }
 
-  .foldable {
+  .foldable,
+  .addable {
     position: relative;
   }
 
@@ -180,6 +213,48 @@
     min-height: 26px;
     translate: 0 -50%;
     color: var(--dim-fg);
+  }
+
+  .adder {
+    position: absolute;
+    top: 50%;
+    right: 6px;
+    translate: 0 -50%;
+    opacity: 0;
+    transition: opacity var(--fast) ease;
+  }
+
+  .foldable .adder {
+    right: 34px;
+  }
+
+  .adder :global(button) {
+    min-width: 26px;
+    min-height: 26px;
+    color: var(--dim-fg);
+  }
+
+  .addable:hover .adder,
+  .addable:focus-within .adder,
+  .adder:has(:global(.open)) {
+    opacity: 1;
+  }
+
+  .addable:hover .count,
+  .addable:focus-within .count,
+  .addable:has(.adder :global(.open)) .count {
+    visibility: hidden;
+  }
+
+  /* Touch has no hover, so the folder you're in keeps its + showing. */
+  @media (hover: none) {
+    .addable:has(.row.selected) .adder {
+      opacity: 1;
+    }
+
+    .addable:has(.row.selected) .count {
+      visibility: hidden;
+    }
   }
 
   .fold :global(svg) {
@@ -343,6 +418,11 @@
     .count {
       font-size: var(--text-sm);
       font-weight: 400;
+    }
+
+    /* Phones add from the tab bar and the list's headerbar instead. */
+    .adder {
+      display: none;
     }
 
     .chevron {
