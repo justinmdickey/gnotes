@@ -269,7 +269,7 @@
     const input = e.currentTarget as HTMLInputElement;
     const files = [...(input.files ?? [])];
     input.value = "";
-    if (view && files.length) void withBusy(() => addImages(view!, noteId, files, addAtEnd));
+    if (view && files.length) void withBusy(() => addImages(view!, noteId, files, addAtEnd, app.features.photo_text));
   }
 
   /** Where the recording in progress goes, picked when it starts and shown with a marker. */
@@ -309,7 +309,7 @@
       const files = [...(e.clipboardData?.files ?? [])].filter((f) => f.type.startsWith("image/"));
       if (!files.length || !canEdit) return false;
       e.preventDefault();
-      void withBusy(() => addImages(v, noteId, files));
+      void withBusy(() => addImages(v, noteId, files, false, app.features.photo_text));
       return true;
     },
     drop(e, v) {
@@ -318,7 +318,7 @@
       e.preventDefault();
       const pos = v.posAtCoords({ x: e.clientX, y: e.clientY });
       if (pos !== null) v.dispatch({ selection: { anchor: pos } });
-      void withBusy(() => addImages(v, noteId, files));
+      void withBusy(() => addImages(v, noteId, files, false, app.features.photo_text));
       return true;
     },
   });
@@ -608,6 +608,32 @@
     border-radius: var(--radius-md);
     cursor: default;
     animation: rise 220ms var(--ease-out) both;
+  }
+
+  /* A photo whose text is being read: a line under it, where the text will go. */
+  .page :global(.cm-reading) {
+    display: none;
+  }
+
+  .page :global(.reading .cm-reading) {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 6px;
+    white-space: nowrap;
+    color: var(--dim-fg);
+    font-size: var(--text-xs);
+    font-weight: 600;
+  }
+
+  .page :global(.reading .cm-reading::before) {
+    content: "";
+    width: 10px;
+    height: 10px;
+    border: 2px solid var(--accent-bg);
+    border-right-color: transparent;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
   }
 
   .page :global(.cm-attachment.loading) {

@@ -5,24 +5,104 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::{
-    AppState, WhisperConfig,
+    AppState, VisionConfig, WhisperConfig,
     account::require_admin,
     auth::CurrentUser,
     error::{ApiResult, AppError},
 };
 
 const WHISPER_KEY: &str = "whisper";
+const VISION_KEY: &str = "vision";
 
-/// Loads the saved speech-to-text setting. `None` means nothing is saved, so the env default applies.
-pub async fn load_whisper(db: &sqlx::SqlitePool) -> anyhow::Result<Option<Option<WhisperConfig>>> {
+/// Loads a saved setting. `None` means nothing is saved, so the env default applies.
+async fn load<T: serde::de::DeserializeOwned>(db: &sqlx::SqlitePool, key: &str) -> anyhow::Result<Option<Option<T>>> {
     let raw: Option<String> = sqlx::query_scalar("SELECT value FROM settings WHERE key = ?")
-        .bind(WHISPER_KEY)
+        .bind(key)
         .fetch_optional(db)
         .await?;
     Ok(match raw {
         None => None,
         // Saved as null when an admin turned it off.
         Some(raw) => Some(serde_json::from_str(&raw)?),
+    })
+}
+
+async fn save<T: serde::Serialize>(db: &sqlx::SqlitePool, key: &str, value: &Option<T>) -> anyhow::Result<()> {
+    sqlx::query("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+        .bind(key)
+        .bind(serde_json::to_string(value)?)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
+/// Loads the saved speech-to-text setting.
+pub async fn load_whisper(db: &sqlx::SqlitePool) -> anyhow::Result<Option<Option<WhisperConfig>>> {
+    load(db, WHISPER_KEY).await
+}
+
+/// Loads the saved photo-reading setting.
+pub async fn load_vision(db: &sqlx::SqlitePool) -> anyhow::Result<Option<Option<VisionConfig>>> {
+    load(db, VISION_KEY).await
+}
+
+/// A service URL as typed: trimmed, without a trailing slash, and http(s). Empty means off.
+fn clean_url(url: &str) -> ApiResult<Option<String>> {
+    let url = url.trim().trim_end_matches('/').to_owned();
+    if url.is_empty() {
+        return Ok(None);
+    }
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err(AppError::BadRequest("The URL needs to start with http:// or https://".into()));
+    }
+    Ok(Some(url))
+}
+
+/// The key to store: the current one when none was sent, none when it was cleared.
+fn resolve_key(sent: Option<Option<String>>, current: Option<&String>) -> Option<String> {
+    match sent {
+        None => current.cloned(),
+        Some(k) => k.map(|k| k.trim().to_owned()).filter(|k| !k.is_empty()),
+    }
+}
+
+/// Asks an OpenAI-compatible service for `/models`, for Settings › Test.
+async fn check_models(state: &AppState, url: &str, key: Option<&String>, model: &str) -> (bool, String) {
+    let mut req = state.http.get(format!("{url}/models")).timeout(std::time::Duration::from_secs(10));
+    if let Some(key) = key {
+        req = req.bearer_auth(key);
+    }
+    match req.send().await {
+        Err(e) if e.is_timeout() => (false, "The service didn't answer within 10 seconds".to_owned()),
+        Err(_) => (false, "Couldn't connect. Check the URL and that the server can reach it.".to_owned()),
+        Ok(res) if res.status() == 401 || res.status() == 403 => (false, "The service refused the API key".to_owned()),
+        Ok(res) if res.status().is_success() => {
+            let models: Vec<String> = res
+                .json::<Value>()
+                .await
+                .ok()
+                .and_then(|v| v["data"].as_array().cloned())
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|m| m["id"].as_str().map(str::to_owned))
+                .collect();
+            if models.is_empty() || models.iter().any(|m| m == model) {
+                (true, "Connected".to_owned())
+            } else {
+                (true, format!("Connected, but it doesn't list “{model}”. It has: {}", models.join(", ")))
+            }
+        }
+        Ok(res) => (false, format!("The service answered with {}", res.status())),
+    }
+}
+
+fn describe_vision(v: Option<&VisionConfig>, saved: bool) -> Value {
+    json!({
+        "enabled": v.is_some(),
+        "url": v.map(|v| v.url.as_str()).unwrap_or(""),
+        "model": v.map(|v| v.model.as_str()).unwrap_or(""),
+        "has_key": v.is_some_and(|v| v.key.is_some()),
+        "from_env": !saved && v.is_some(),
     })
 }
 
@@ -42,8 +122,13 @@ fn describe(w: Option<&WhisperConfig>, saved: bool) -> Value {
 pub async fn get_settings(State(state): State<AppState>, CurrentUser(me): CurrentUser) -> ApiResult<Json<Value>> {
     require_admin(&me)?;
     let saved = load_whisper(&state.db).await?.is_some();
+    let vision_saved = load_vision(&state.db).await?.is_some();
     let whisper = state.whisper.read().await;
-    Ok(Json(json!({ "whisper": describe(whisper.as_ref(), saved) })))
+    let vision = state.vision.read().await;
+    Ok(Json(json!({
+        "whisper": describe(whisper.as_ref(), saved),
+        "vision": describe_vision(vision.as_ref(), vision_saved),
+    })))
 }
 
 #[derive(Deserialize)]
@@ -63,21 +148,12 @@ pub struct WhisperBody {
 impl WhisperBody {
     /// The config this body describes, filling in the current key when it wasn't sent.
     fn resolve(self, current: Option<&WhisperConfig>) -> ApiResult<Option<WhisperConfig>> {
-        let url = self.url.trim().trim_end_matches('/').to_owned();
-        if url.is_empty() {
-            return Ok(None);
-        }
-        if !(url.starts_with("http://") || url.starts_with("https://")) {
-            return Err(AppError::BadRequest("The URL needs to start with http:// or https://".into()));
-        }
+        let Some(url) = clean_url(&self.url)? else { return Ok(None) };
         let model = match self.model.trim() {
             "" => "whisper-1".to_owned(),
             m => m.to_owned(),
         };
-        let key = match self.key {
-            None => current.and_then(|c| c.key.clone()),
-            Some(k) => k.map(|k| k.trim().to_owned()).filter(|k| !k.is_empty()),
-        };
+        let key = resolve_key(self.key, current.and_then(|c| c.key.as_ref()));
         let realtime_url = match self.realtime_url.trim().trim_end_matches('/') {
             "" => None,
             u if u.starts_with("ws://") || u.starts_with("wss://") => Some(u.to_owned()),
@@ -96,11 +172,7 @@ pub async fn put_whisper(
     require_admin(&me)?;
     let mut whisper = state.whisper.write().await;
     let next = body.resolve(whisper.as_ref())?;
-    sqlx::query("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
-        .bind(WHISPER_KEY)
-        .bind(serde_json::to_string(&next)?)
-        .execute(&state.db)
-        .await?;
+    save(&state.db, WHISPER_KEY, &next).await?;
     *whisper = next;
     Ok(Json(json!({ "whisper": describe(whisper.as_ref(), true) })))
 }
@@ -116,32 +188,7 @@ pub async fn test_whisper(
     let Some(w) = body.resolve(current.as_ref())? else {
         return Err(AppError::BadRequest("Enter the service URL first".into()));
     };
-    let mut req = state.http.get(format!("{}/models", w.url)).timeout(std::time::Duration::from_secs(10));
-    if let Some(key) = &w.key {
-        req = req.bearer_auth(key);
-    }
-    let (ok, message) = match req.send().await {
-        Err(e) if e.is_timeout() => (false, "The service didn't answer within 10 seconds".to_owned()),
-        Err(_) => (false, "Couldn't connect. Check the URL and that the server can reach it.".to_owned()),
-        Ok(res) if res.status() == 401 || res.status() == 403 => (false, "The service refused the API key".to_owned()),
-        Ok(res) if res.status().is_success() => {
-            let models: Vec<String> = res
-                .json::<Value>()
-                .await
-                .ok()
-                .and_then(|v| v["data"].as_array().cloned())
-                .unwrap_or_default()
-                .iter()
-                .filter_map(|m| m["id"].as_str().map(str::to_owned))
-                .collect();
-            if models.is_empty() || models.iter().any(|m| m == &w.model) {
-                (true, "Connected".to_owned())
-            } else {
-                (true, format!("Connected, but it doesn't list “{}”. It has: {}", w.model, models.join(", ")))
-            }
-        }
-        Ok(res) => (false, format!("The service answered with {}", res.status())),
-    };
+    let (ok, message) = check_models(&state, &w.url, w.key.as_ref(), &w.model).await;
     let (ok, message) = match (&w.realtime_url, ok) {
         (Some(_), true) => match crate::live::check(&w).await {
             Ok(()) => (true, format!("{message} · live transcription works")),
@@ -149,5 +196,58 @@ pub async fn test_whisper(
         },
         _ => (ok, message),
     };
+    Ok(Json(json!({ "ok": ok, "message": message })))
+}
+
+#[derive(Deserialize)]
+pub struct VisionBody {
+    /// Empty turns photo reading off.
+    url: String,
+    #[serde(default)]
+    model: String,
+    /// Absent keeps the saved key, null or "" clears it.
+    #[serde(default, deserialize_with = "crate::util::double_option")]
+    key: Option<Option<String>>,
+}
+
+impl VisionBody {
+    fn resolve(self, current: Option<&VisionConfig>) -> ApiResult<Option<VisionConfig>> {
+        let Some(url) = clean_url(&self.url)? else { return Ok(None) };
+        // Local servers have no sensible default model, so it has to be named.
+        let model = self.model.trim().to_owned();
+        if model.is_empty() {
+            return Err(AppError::BadRequest("Enter the vision model's name, e.g. qwen2.5vl".into()));
+        }
+        let key = resolve_key(self.key, current.and_then(|c| c.key.as_ref()));
+        Ok(Some(VisionConfig { url, model, key }))
+    }
+}
+
+/// `PUT /admin/settings/vision`
+pub async fn put_vision(
+    State(state): State<AppState>,
+    CurrentUser(me): CurrentUser,
+    Json(body): Json<VisionBody>,
+) -> ApiResult<Json<Value>> {
+    require_admin(&me)?;
+    let mut vision = state.vision.write().await;
+    let next = body.resolve(vision.as_ref())?;
+    save(&state.db, VISION_KEY, &next).await?;
+    *vision = next;
+    Ok(Json(json!({ "vision": describe_vision(vision.as_ref(), true) })))
+}
+
+/// `POST /admin/settings/vision/test`
+pub async fn test_vision(
+    State(state): State<AppState>,
+    CurrentUser(me): CurrentUser,
+    Json(body): Json<VisionBody>,
+) -> ApiResult<Json<Value>> {
+    require_admin(&me)?;
+    let current = state.vision.read().await.clone();
+    let Some(v) = body.resolve(current.as_ref())? else {
+        return Err(AppError::BadRequest("Enter the service URL first".into()));
+    };
+    let (ok, message) = check_models(&state, &v.url, v.key.as_ref(), &v.model).await;
     Ok(Json(json!({ "ok": ok, "message": message })))
 }

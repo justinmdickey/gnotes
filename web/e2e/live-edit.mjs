@@ -15,11 +15,14 @@ const data = mkdtempSync(join(tmpdir(), "gnotes-e2e-"));
 const port = 18000 + Math.floor(Math.random() * 1000);
 const base = `http://127.0.0.1:${port}`;
 // A stand-in speech-to-text service: answers every transcription request the same way.
+// It's also the vision model: a photo always reads as a short shopping list, a moment later.
 const whisper = createServer((req, res) => {
   req.resume();
   req.on("end", () => {
     res.setHeader("content-type", "application/json");
-    res.end(JSON.stringify({ text: "remember the milk" }));
+    if (req.url.endsWith("/chat/completions")) {
+      setTimeout(() => res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: "SHOPPING LIST\nOat milk" } }] })), 800);
+    } else res.end(JSON.stringify({ text: "remember the milk" }));
   });
 }).listen(port + 1, "127.0.0.1");
 // A stand-in realtime speech-to-text service, speaking just enough websocket to stream a few words
@@ -290,6 +293,11 @@ try {
   await alice.click(".stt button[type=submit]");
   await alice.waitForFunction(() => document.body.innerText.includes("Speech-to-text saved"));
   check(true, "admin sets up speech-to-text in settings");
+  await alice.type(".vision input[type=url]", `http://127.0.0.1:${port + 1}/v1`);
+  await alice.type(".vision input[placeholder='qwen2.5vl']", "qwen2.5vl");
+  await alice.click(".vision button[type=submit]");
+  await alice.waitForFunction(() => document.body.innerText.includes("Text from photos saved"));
+  check(true, "admin sets up text from photos in settings");
   if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-settings.png") });
   await alice.click(".settings-layer .back");
   await alice.waitForFunction(() => !document.querySelector(".settings-layer"));
@@ -530,6 +538,18 @@ try {
   await chooser.accept([png]);
   await alice.waitForFunction(() => document.querySelector(".cm-attachment img")?.naturalWidth === 8, { timeout: 5000 });
   check(true, "a picked photo uploads and shows in the note");
+  // Its text is read by the vision model and written on the line under it.
+  await alice.waitForSelector(".cm-attachment.reading .cm-reading", { timeout: 5000 });
+  if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-photo-reading.png") });
+  await alice.waitForFunction(() => document.querySelector(".cm-content").innerText.includes("SHOPPING LIST"), { timeout: 5000 });
+  check(
+    await alice.evaluate(() => {
+      const lines = [...document.querySelectorAll(".cm-line")];
+      const at = lines.findIndex((l) => l.querySelector(".cm-attachment img"));
+      return lines[at + 1]?.textContent === "SHOPPING LIST" && lines[at + 2]?.textContent === "Oat milk" && !document.querySelector(".cm-attachment.reading");
+    }),
+    "a photo's text is written under it",
+  );
 
   // A voice memo records, embeds a player, and gets its transcript underneath.
   // With the cursor on the title, the memo goes on the line right under it, marked before any words come.

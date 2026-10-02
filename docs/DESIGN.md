@@ -14,6 +14,7 @@ Gnotes is a self-hosted Markdown notes app. One server holds a household's accou
 | Roles | Owner, editor, viewer. |
 | Encryption | TLS in transit. No end-to-end encryption, so the server admin can read notes. |
 | Speech-to-text | The server forwards voice memos to an external OpenAI-compatible transcription API (e.g. faster-whisper). The note keeps the recording and the transcript. |
+| Text from photos | The server sends each photo added to a note to an OpenAI-compatible chat API with a vision model (e.g. Ollama or llama.cpp on local hardware), and the text it reads goes under the photo. No text adds nothing. |
 
 **CRDT** (conflict-free replicated data type): a data structure where edits made on different devices, even offline, merge automatically without conflicts.
 
@@ -216,6 +217,7 @@ docker run -v gnotes-data:/data -p 8080:8080 gnotes
 
 - Config comes from environment variables: `GNOTES_DATA_DIR` (default `./data`), `GNOTES_BIND` (default `0.0.0.0:8080`), `GNOTES_PUBLIC_URL` (used to validate the websocket Origin header).
 - Speech-to-text is set by an admin under Settings → Speech-to-Text: an OpenAI-compatible API URL including the version (e.g. `http://whisper:8000/v1`), a model and an optional key. Once saved there, it overrides the env defaults `GNOTES_WHISPER_URL`, `GNOTES_WHISPER_MODEL` (default `whisper-1`) and `GNOTES_WHISPER_KEY`. An optional live URL (`ws://` or `wss://`, e.g. `ws://whisper:8000/v1/realtime`, env `GNOTES_WHISPER_REALTIME_URL`) turns on live transcripts. The key is never sent back to the app.
+- Text from photos is set the same way under Settings → Text from Photos: an OpenAI-compatible URL including the version (e.g. `http://ollama:11434/v1`), a vision model (required, e.g. `qwen2.5vl`) and an optional key; env defaults `GNOTES_VISION_URL`, `GNOTES_VISION_MODEL`, `GNOTES_VISION_KEY`. `POST /attachments/:id/text` sends the photo as a data URL to `/chat/completions` and asks for the text only, or `NO_TEXT`.
 - The data folder holds everything: `gnotes.db`, `blobs/` and `export/`. Backing up means copying that folder.
 
 ## Phases

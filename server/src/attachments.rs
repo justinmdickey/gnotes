@@ -9,6 +9,7 @@ use axum::{
     http::{HeaderValue, header},
     response::{IntoResponse, Response},
 };
+use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -269,12 +270,88 @@ pub async fn transcribe(
     Ok(Json(json!({ "text": text })))
 }
 
+/// What the vision model is asked. NO_TEXT keeps a photo without words from adding a stray line.
+const READ_PROMPT: &str = "Transcribe all readable text in this image exactly as written, keeping its line breaks. \
+Reply with only the text, no commentary or formatting. If there is no readable text, reply with exactly NO_TEXT.";
+
+/// A model's answer without code fences, quotes around the whole thing, or the no-text marker.
+fn clean_reading(answer: &str) -> String {
+    let mut text = answer.trim();
+    if let Some(inner) = text.strip_prefix("```") {
+        // Drop the fence line (which may name a language) and the closing fence.
+        text = inner.split_once('\n').map_or("", |(_, rest)| rest).trim_end().trim_end_matches("```").trim();
+    }
+    if text.eq_ignore_ascii_case("NO_TEXT") || text.trim_matches(['.', ' ']).eq_ignore_ascii_case("NO_TEXT") {
+        return String::new();
+    }
+    text.to_owned()
+}
+
+/// `POST /attachments/:id/text`: sends a photo to the configured vision model and returns the text it reads.
+pub async fn photo_text(
+    State(state): State<AppState>,
+    CurrentUser(me): CurrentUser,
+    UrlPath(id): UrlPath<String>,
+) -> ApiResult<Json<Value>> {
+    let att = find(&state, &me.id, &id, Role::Editor).await?;
+    let Some(vision) = state.vision.read().await.clone() else {
+        return Err(AppError::Conflict("Reading text from photos isn't set up on this server".into()));
+    };
+    if !att.mime.starts_with("image/") {
+        return Err(AppError::BadRequest("Only photos can be read".into()));
+    }
+    let bytes = tokio::fs::read(blob_path(&state.config.data_dir, &att.sha256)).await?;
+    let image = format!("data:{};base64,{}", att.mime, STANDARD.encode(&bytes));
+    let body = json!({
+        "model": vision.model,
+        "temperature": 0,
+        "messages": [{
+            "role": "user",
+            "content": [
+                { "type": "text", "text": READ_PROMPT },
+                { "type": "image_url", "image_url": { "url": image } },
+            ],
+        }],
+    });
+    let mut req = state.http.post(format!("{}/chat/completions", vision.url)).json(&body);
+    if let Some(key) = &vision.key {
+        req = req.bearer_auth(key);
+    }
+    let res = req.send().await.map_err(|e| {
+        tracing::warn!("photo reading request failed: {e:#}");
+        AppError::Conflict("Couldn't reach the photo reading service".into())
+    })?;
+    if !res.status().is_success() {
+        let status = res.status();
+        let body = res.text().await.unwrap_or_default();
+        tracing::warn!("photo reading failed with {status}: {body}");
+        return Err(AppError::Conflict("The photo reading service returned an error".into()));
+    }
+    let answer: Value = res.json().await?;
+    let text = clean_reading(answer["choices"][0]["message"]["content"].as_str().unwrap_or_default());
+    Ok(Json(json!({ "text": text })))
+}
+
 /// `GET /features`: what this server can do beyond the basics.
 pub async fn features(State(state): State<AppState>, CurrentUser(_): CurrentUser) -> Json<Value> {
     let whisper = state.whisper.read().await;
     Json(json!({
         "transcription": whisper.is_some(),
         "live_transcription": whisper.as_ref().is_some_and(|w| w.realtime_url.is_some()),
+        "photo_text": state.vision.read().await.is_some(),
         "max_upload": MAX_UPLOAD,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::clean_reading;
+
+    #[test]
+    fn readings_lose_fences_and_the_no_text_marker() {
+        assert_eq!(clean_reading("  Milk\nEggs \n"), "Milk\nEggs");
+        assert_eq!(clean_reading("```text\nMilk\nEggs\n```"), "Milk\nEggs");
+        assert_eq!(clean_reading("NO_TEXT"), "");
+        assert_eq!(clean_reading("no_text."), "");
+    }
 }

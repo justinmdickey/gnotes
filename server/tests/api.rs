@@ -22,6 +22,7 @@ async fn start(dir: &TempDir) -> Server {
 
 async fn start_with(dir: &TempDir, whisper: Option<WhisperConfig>) -> Server {
     let config = Config {
+        vision: None,
         data_dir: dir.path().to_path_buf(),
         bind: "127.0.0.1:0".parse().unwrap(),
         web_dir: dir.path().join("web"),
@@ -840,4 +841,59 @@ async fn live_transcription_relays_audio_and_text() {
     let root = login(&server.base, "root").await;
     let body = json!({ "url": "http://127.0.0.1:9/v1", "realtime_url": "http://nope" });
     assert_eq!(root.send(reqwest::Method::PUT, "/admin/settings/whisper", body).await.status(), 400);
+}
+
+/// A stand-in vision model: "reads" a photo as its byte count, or reports no text for a 1-byte image.
+async fn fake_vision() -> String {
+    let fake = axum::Router::new()
+        .route(
+            "/v1/chat/completions",
+            axum::routing::post(|axum::Json(body): axum::Json<Value>| async move {
+                assert_eq!(body["model"], "qwen2.5vl");
+                let url = body["messages"][0]["content"][1]["image_url"]["url"].as_str().unwrap().to_owned();
+                let (head, data) = url.split_once(";base64,").unwrap();
+                assert_eq!(head, "data:image/png");
+                let n = STANDARD.decode(data).unwrap().len();
+                let content = if n == 1 { "NO_TEXT".to_owned() } else { format!("```\nMilk\n{n} eggs\n```") };
+                axum::Json(json!({ "choices": [{ "message": { "role": "assistant", "content": content } }] }))
+            }),
+        )
+        .route("/v1/models", axum::routing::get(|| async { axum::Json(json!({ "data": [{ "id": "qwen2.5vl" }] })) }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/v1", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, fake).await });
+    url
+}
+
+#[tokio::test]
+async fn photos_are_read_by_the_configured_vision_model() {
+    let fake_url = fake_vision().await;
+    let dir = TempDir::new().unwrap();
+    let server = start(&dir).await;
+    auth::create_user(&server.state.db, "root", "", "password123", true).await.unwrap();
+    let root = login(&server.base, "root").await;
+    let alice = user(&server, "alice").await;
+    assert_eq!(alice.get("/features").await["photo_text"], false);
+
+    // An admin sets it up from Settings; the model has to be named.
+    let res = root.send(reqwest::Method::PUT, "/admin/settings/vision", json!({ "url": fake_url })).await;
+    assert_eq!(res.status(), 400);
+    let tested = root.post("/admin/settings/vision/test", json!({ "url": fake_url, "model": "qwen2.5vl" })).await;
+    assert_eq!(tested["message"], "Connected");
+    let saved = root.send(reqwest::Method::PUT, "/admin/settings/vision", json!({ "url": fake_url, "model": "qwen2.5vl" })).await;
+    assert!(saved.status().is_success());
+    assert_eq!(root.get("/admin/settings").await["vision"]["model"], "qwen2.5vl");
+    assert_eq!(alice.get("/features").await["photo_text"], true);
+
+    let note = alice.post("/notes", json!({})).await["id"].as_str().unwrap().to_owned();
+    let photo: Value = upload(&alice, &note, "board.png", "image/png", vec![1; 42]).await.json().await.unwrap();
+    let out = alice.post(&format!("/attachments/{}/text", photo["id"].as_str().unwrap()), json!({})).await;
+    assert_eq!(out["text"], "Milk\n42 eggs");
+
+    // A photo without words reads as nothing, and recordings aren't sent.
+    let blank: Value = upload(&alice, &note, "dot.png", "image/png", vec![1]).await.json().await.unwrap();
+    assert_eq!(alice.post(&format!("/attachments/{}/text", blank["id"].as_str().unwrap()), json!({})).await["text"], "");
+    let memo: Value = upload(&alice, &note, "m.webm", "audio/webm", vec![7; 10]).await.json().await.unwrap();
+    let res = alice.send(reqwest::Method::POST, &format!("/attachments/{}/text", memo["id"].as_str().unwrap()), json!({})).await;
+    assert_eq!(res.status(), 400);
 }

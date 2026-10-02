@@ -23,7 +23,7 @@ export function attachmentMeta(id: string): Promise<AttachmentMeta> {
   return m;
 }
 
-/** Recordings being transcribed right now; their players show a spinner. */
+/** Recordings being transcribed and photos being read right now; they show a spinner. */
 const transcribing = new Set<string>();
 const listeners = new Set<() => void>();
 
@@ -97,10 +97,45 @@ export function insertEmbed(view: EditorView, id: string, label: string, atEnd =
   });
 }
 
-export async function addImages(view: EditorView, noteId: string, files: File[], atEnd = false) {
+/**
+ * Uploads photos and embeds them. When the server can read photos, each one's text then goes on the
+ * line under it; that runs in the background with a badge on the photo, so the next upload needn't wait.
+ */
+export async function addImages(view: EditorView, noteId: string, files: File[], atEnd = false, read = false) {
   for (const file of files) {
     const att = await api.upload(noteId, await prepareImage(file));
     insertEmbed(view, att.id, "Photo", atEnd);
+    if (read) void readPhoto(view, att.id);
+  }
+}
+
+async function readPhoto(view: EditorView, id: string) {
+  setTranscribing(id, true);
+  try {
+    const { text } = await api.photoText(id);
+    if (text) writeUnder(view, id, text);
+  } catch {
+    // The photo is still there; reading is a bonus.
+  } finally {
+    setTranscribing(id, false);
+  }
+}
+
+/**
+ * Puts text on the line under an embed: onto the empty line left there, or a new one. The embed is
+ * found again by its id, since the note may have changed meanwhile.
+ */
+function writeUnder(view: EditorView, id: string, text: string) {
+  // The note was closed meanwhile; the attachment is still there.
+  if (!view.dom.isConnected) return;
+  const { doc } = view.state;
+  for (let n = 1; n <= doc.lines; n++) {
+    const line = doc.line(n);
+    if (!line.text.includes(`att:${id}`)) continue;
+    const next = n < doc.lines ? doc.line(n + 1) : null;
+    if (next && next.text.trim() === "") view.dispatch({ changes: { from: next.from, insert: text } });
+    else view.dispatch({ changes: { from: line.to, insert: `\n${text}` } });
+    return;
   }
 }
 
@@ -268,18 +303,7 @@ export async function addRecording(view: EditorView, noteId: string, audio: File
   setTranscribing(att.id, true);
   try {
     const { text } = await api.transcribe(att.id);
-    // The note was closed meanwhile; the recording is still there to transcribe later.
-    if (!text || !view.dom.isConnected) return;
-    const { doc } = view.state;
-    for (let n = 1; n <= doc.lines; n++) {
-      const line = doc.line(n);
-      if (!line.text.includes(`att:${att.id}`)) continue;
-      const next = n < doc.lines ? doc.line(n + 1) : null;
-      // Onto the empty line left under the player, or a new one.
-      if (next && next.text.trim() === "") view.dispatch({ changes: { from: next.from, insert: text } });
-      else view.dispatch({ changes: { from: line.to, insert: `\n${text}` } });
-      break;
-    }
+    if (text) writeUnder(view, att.id, text);
   } finally {
     setTranscribing(att.id, false);
   }

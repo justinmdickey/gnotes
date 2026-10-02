@@ -39,6 +39,18 @@ pub struct Config {
     pub public_url: Option<String>,
     /// Default speech-to-text for voice notes, from env. An admin's saved setting overrides it.
     pub whisper: Option<WhisperConfig>,
+    /// Default photo reading, from env. An admin's saved setting overrides it.
+    pub vision: Option<VisionConfig>,
+}
+
+/// An OpenAI-compatible chat API with a vision model, for reading the text in photos, e.g. Ollama,
+/// llama.cpp or vLLM on local hardware, or a hosted one.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct VisionConfig {
+    /// Base URL including the version, e.g. `http://ollama:11434/v1`. `/chat/completions` is appended.
+    pub url: String,
+    pub model: String,
+    pub key: Option<String>,
 }
 
 /// An OpenAI-compatible transcription API, e.g. faster-whisper-server or OpenAI itself.
@@ -69,6 +81,11 @@ impl Config {
                 key: env::var("GNOTES_WHISPER_KEY").ok().filter(|s| !s.is_empty()),
                 realtime_url: env::var("GNOTES_WHISPER_REALTIME_URL").ok().filter(|s| !s.is_empty()),
             }),
+            vision: env::var("GNOTES_VISION_URL").ok().filter(|s| !s.is_empty()).map(|url| VisionConfig {
+                url,
+                model: env::var("GNOTES_VISION_MODEL").unwrap_or_default(),
+                key: env::var("GNOTES_VISION_KEY").ok().filter(|s| !s.is_empty()),
+            }),
         })
     }
 
@@ -87,6 +104,8 @@ pub struct AppState {
     pub http: reqwest::Client,
     /// The speech-to-text service in use right now. Admins can change it while running.
     pub whisper: Arc<tokio::sync::RwLock<Option<WhisperConfig>>>,
+    /// The photo-reading service in use right now.
+    pub vision: Arc<tokio::sync::RwLock<Option<VisionConfig>>>,
 }
 
 impl AppState {
@@ -150,6 +169,9 @@ pub fn router(state: AppState) -> Router {
         .route("/admin/settings", get(settings::get_settings))
         .route("/admin/settings/whisper", axum::routing::put(settings::put_whisper))
         .route("/admin/settings/whisper/test", post(settings::test_whisper))
+        .route("/admin/settings/vision", axum::routing::put(settings::put_vision))
+        .route("/admin/settings/vision/test", post(settings::test_vision))
+        .route("/attachments/{id}/text", post(attachments::photo_text))
         .route("/ws", get(ws::handler))
         .fallback(|| async { error::AppError::NotFound });
 
@@ -170,8 +192,13 @@ pub async fn build(config: Config) -> anyhow::Result<AppState> {
         Some(saved) => saved,
         None => config.whisper.clone(),
     };
+    let vision = match settings::load_vision(&db).await? {
+        Some(saved) => saved,
+        None => config.vision.clone(),
+    };
     Ok(AppState {
         whisper: Arc::new(tokio::sync::RwLock::new(whisper)),
+        vision: Arc::new(tokio::sync::RwLock::new(vision)),
         db,
         config: Arc::new(config),
         rooms: Default::default(),

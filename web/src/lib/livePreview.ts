@@ -155,6 +155,14 @@ class AttachmentWidget extends WidgetType {
           img.addEventListener("load", () => view.requestMeasure());
           img.addEventListener("click", () => openLightbox(src, img));
           box.append(img);
+          // While the server reads the text in it, a badge says so.
+          const badge = document.createElement("span");
+          badge.className = "cm-reading";
+          badge.textContent = "Reading text…";
+          box.append(badge);
+          const update = () => box.classList.toggle("reading", isTranscribing(this.id));
+          update();
+          this.off = onTranscribingChange(update);
         }
         view.requestMeasure();
       },

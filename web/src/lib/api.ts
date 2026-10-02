@@ -107,24 +107,28 @@ export interface Features {
   transcription: boolean;
   /** Text appears in the note while a voice memo is being recorded. */
   live_transcription: boolean;
+  /** Photos added to a note get the text in them written underneath. */
+  photo_text: boolean;
   max_upload: number;
 }
 
-export interface WhisperSettings {
+/** An outside service the server calls (speech-to-text, photo reading), as Settings shows it. */
+export interface ServiceSettings {
   enabled: boolean;
   url: string;
   model: string;
   has_key: boolean;
   from_env: boolean;
-  realtime_url: string;
+  /** Speech-to-text only: the live (websocket) endpoint. */
+  realtime_url?: string;
 }
 
 /** `key` absent keeps the saved one; null clears it. */
-export interface WhisperInput {
+export interface ServiceInput {
   url: string;
   model: string;
-  realtime_url: string;
   key?: string | null;
+  realtime_url?: string;
 }
 
 export class ApiError extends Error {
@@ -172,9 +176,12 @@ export const api = {
 
   createNote: (notebook_id: string | null) => request<{ id: string }>("POST", "/notes", { notebook_id }),
   deleteNote: (id: string) => request("DELETE", `/notes/${id}`),
-  adminSettings: () => request<{ whisper: WhisperSettings }>("GET", "/admin/settings"),
-  saveWhisper: (body: WhisperInput) => request<{ whisper: WhisperSettings }>("PUT", "/admin/settings/whisper", body),
-  testWhisper: (body: WhisperInput) => request<{ ok: boolean; message: string }>("POST", "/admin/settings/whisper/test", body),
+  adminSettings: () => request<{ whisper: ServiceSettings; vision: ServiceSettings }>("GET", "/admin/settings"),
+  saveWhisper: (body: ServiceInput) => request<{ whisper: ServiceSettings }>("PUT", "/admin/settings/whisper", body),
+  testWhisper: (body: ServiceInput) => request<{ ok: boolean; message: string }>("POST", "/admin/settings/whisper/test", body),
+  saveVision: (body: ServiceInput) => request<{ vision: ServiceSettings }>("PUT", "/admin/settings/vision", body),
+  testVision: (body: ServiceInput) => request<{ ok: boolean; message: string }>("POST", "/admin/settings/vision/test", body),
+  photoText: (id: string) => request<{ text: string }>("POST", `/attachments/${id}/text`, {}),
   features: () => request<Features>("GET", "/features"),
   attachmentMeta: (id: string) => request<AttachmentMeta>("GET", `/attachments/${id}/meta`),
   transcribe: (id: string) => request<{ text: string }>("POST", `/attachments/${id}/transcribe`, {}),

@@ -1,8 +1,9 @@
 <script lang="ts">
-  import { api, ApiError, inviteUrl, type AdminUser, type PendingInvite, type WhisperInput, type WhisperSettings } from "./lib/api";
+  import { api, ApiError, inviteUrl, type AdminUser, type PendingInvite, type ServiceSettings } from "./lib/api";
   import Dialog from "./lib/Dialog.svelte";
   import Icon from "./lib/Icon.svelte";
   import Menu from "./lib/Menu.svelte";
+  import ServiceForm from "./ServiceForm.svelte";
   import { app, colorFor, endSession, goBack, importable, importNotes } from "./lib/store.svelte";
   import { ask, scrollEdge, toast } from "./lib/ui.svelte";
 
@@ -32,51 +33,12 @@
     let settings;
     [users, invites, settings] = await Promise.all([api.adminUsers(), api.invites(), api.adminSettings()]);
     whisper = settings.whisper;
-    whisperUrl = whisper.url;
-    whisperModel = whisper.model;
-    whisperLive = whisper.realtime_url;
+    vision = settings.vision;
   }
 
-  let whisper = $state<WhisperSettings | null>(null);
-  let whisperUrl = $state("");
-  let whisperModel = $state("");
-  let whisperLive = $state("");
-  /** What's typed in the key field; empty means "keep the saved key". */
-  let whisperKey = $state("");
-  let clearKey = $state(false);
-  let testing = $state(false);
-  let testResult = $state<{ ok: boolean; message: string } | null>(null);
-  const whisperDirty = $derived(
-    whisper !== null && (whisperUrl.trim() !== whisper.url || whisperModel.trim() !== whisper.model || whisperLive.trim() !== whisper.realtime_url || whisperKey !== "" || clearKey),
-  );
+  let whisper = $state<ServiceSettings | null>(null);
+  let vision = $state<ServiceSettings | null>(null);
 
-  function whisperInput(): WhisperInput {
-    const body: WhisperInput = { url: whisperUrl, model: whisperModel, realtime_url: whisperLive };
-    if (whisperKey) body.key = whisperKey;
-    else if (clearKey) body.key = null;
-    return body;
-  }
-
-  async function testService() {
-    testing = true;
-    testResult = null;
-    await run(async () => (testResult = await api.testWhisper(whisperInput())));
-    testing = false;
-  }
-
-  async function saveWhisper(e: SubmitEvent) {
-    e.preventDefault();
-    const turningOff = !whisperUrl.trim();
-    await run(async () => {
-      whisper = (await api.saveWhisper(whisperInput())).whisper;
-      whisperUrl = whisper.url;
-      whisperModel = whisper.model;
-      whisperLive = whisper.realtime_url;
-      whisperKey = "";
-      clearKey = false;
-      app.features = { ...app.features, transcription: whisper.enabled, live_transcription: whisper.enabled && !!whisper.realtime_url };
-    }, turningOff ? "Transcription turned off" : "Speech-to-text saved");
-  }
   loadAdmin();
 
   /** Runs an action, showing its error or an optional success notice. */
@@ -287,52 +249,41 @@
 
         {#if whisper}
           <h2 class="group-title">Speech-to-Text</h2>
-          <form class="boxed stt" onsubmit={saveWhisper}>
-            <p class="dim explain">
-              Voice memos are sent here to be transcribed. Any OpenAI-compatible service works, such as faster-whisper-server
-              or OpenAI. Leave the URL empty to turn it off. Add a live URL to see words in the note while you record.
-            </p>
-            <label class="field">
-              <span>Service URL</span>
-              <input type="url" placeholder="http://whisper:8000/v1" autocapitalize="none" spellcheck="false" bind:value={whisperUrl} />
-            </label>
-            <label class="field">
-              <span>Model</span>
-              <input placeholder="whisper-1" autocapitalize="none" spellcheck="false" bind:value={whisperModel} />
-            </label>
-            <label class="field">
-              <span>Live URL</span>
-              <input type="url" placeholder="Optional, e.g. ws://whisper:8000/v1/realtime" autocapitalize="none" spellcheck="false" bind:value={whisperLive} />
-            </label>
-            <label class="field">
-              <span>API key</span>
-              <input
-                type="password"
-                autocomplete="off"
-                placeholder={whisper.has_key && !clearKey ? "Saved – type to replace" : "Optional"}
-                bind:value={whisperKey}
-                oninput={() => (clearKey = false)}
-              />
-              {#if whisper.has_key && !clearKey && !whisperKey}
-                <button type="button" class="flat destructive clear" onclick={() => (clearKey = true)}>Remove</button>
-              {/if}
-            </label>
-            <div class="stt-foot">
-              <span class="status" class:ok={testResult?.ok} class:bad={testResult && !testResult.ok}>
-                {#if testing}
-                  <span class="spinner"></span> Testing…
-                {:else if testResult}
-                  <Icon name={testResult.ok ? "check" : "close"} /> {testResult.message}
-                {:else if whisper.enabled}
-                  <span class="dot on"></span> On{whisper.from_env ? " (from the server's environment)" : ""}
-                {:else}
-                  <span class="dot"></span> Off
-                {/if}
-              </span>
-              <button type="button" disabled={!whisperUrl.trim() || testing} onclick={testService}>Test</button>
-              <button type="submit" class="suggested" disabled={!whisperDirty}>Save</button>
-            </div>
-          </form>
+          <ServiceForm
+            name="stt"
+            explain="Voice memos are sent here to be transcribed. Any OpenAI-compatible service works, such as faster-whisper-server or OpenAI. Leave the URL empty to turn it off. Add a live URL to see words in the note while you record."
+            urlPlaceholder="http://whisper:8000/v1"
+            modelPlaceholder="whisper-1"
+            live
+            bind:settings={whisper}
+            test={api.testWhisper}
+            save={async (body) => {
+              const saved = (await api.saveWhisper(body)).whisper;
+              app.features = { ...app.features, transcription: saved.enabled, live_transcription: saved.enabled && !!saved.realtime_url };
+              return saved;
+            }}
+            saved="Speech-to-text saved"
+            off="Transcription turned off"
+          />
+        {/if}
+
+        {#if vision}
+          <h2 class="group-title">Text from Photos</h2>
+          <ServiceForm
+            name="vision"
+            explain="Photos added to a note are sent here, and the text in them is written under the photo. Any OpenAI-compatible service with a vision model works, such as Ollama, llama.cpp or vLLM on your own hardware. Leave the URL empty to turn it off."
+            urlPlaceholder="http://ollama:11434/v1"
+            modelPlaceholder="qwen2.5vl"
+            bind:settings={vision}
+            test={api.testVision}
+            save={async (body) => {
+              const saved = (await api.saveVision(body)).vision;
+              app.features = { ...app.features, photo_text: saved.enabled };
+              return saved;
+            }}
+            saved="Text from photos saved"
+            off="Text from photos turned off"
+          />
         {/if}
 
         {#if invites.length}
@@ -501,103 +452,6 @@
   .value {
     overflow: hidden;
     text-overflow: ellipsis;
-  }
-
-  .stt {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    padding: 12px;
-  }
-
-  .explain {
-    margin: 0 4px 8px;
-    font-size: var(--text-sm);
-    line-height: 1.45;
-  }
-
-  .field {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    min-height: 46px;
-    padding: 0 4px;
-  }
-
-  .field + .field {
-    border-top: 1px solid var(--border);
-  }
-
-  .field span {
-    flex: none;
-    width: 92px;
-  }
-
-  .field input {
-    flex: 1;
-    min-width: 0;
-  }
-
-  .clear {
-    min-height: 32px;
-    padding: 0 10px;
-  }
-
-  .stt-foot {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-top: 10px;
-    padding: 0 4px;
-  }
-
-  .status {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: var(--text-sm);
-    color: var(--dim-fg);
-  }
-
-  .status.ok {
-    color: var(--success);
-  }
-
-  .status.bad {
-    color: var(--destructive);
-  }
-
-  .status .spinner {
-    width: 14px;
-    height: 14px;
-  }
-
-  .status .dot {
-    flex: none;
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: var(--dim-fg);
-  }
-
-  .status .dot.on {
-    background: var(--success);
-  }
-
-  @media (max-width: 700px) {
-    .field {
-      flex-wrap: wrap;
-      gap: 4px 12px;
-      padding: 8px 4px;
-    }
-
-    .field span {
-      width: 100%;
-      font-size: var(--text-sm);
-      color: var(--dim-fg);
-    }
   }
 
   .row-form {
