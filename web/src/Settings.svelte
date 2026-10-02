@@ -271,7 +271,7 @@
           <h2 class="group-title">Text from Photos</h2>
           <ServiceForm
             name="vision"
-            explain="Photos added to a note are sent here, and the text in them is written under the photo. Any OpenAI-compatible service with a vision model works, such as Ollama, llama.cpp or vLLM on your own hardware. Leave the URL empty to turn it off."
+            explain="Get Text on a photo sends it here, and the text in it is written under the photo. Any OpenAI-compatible service with a vision model works, such as Ollama, llama.cpp or vLLM on your own hardware. Leave the URL empty to turn it off."
             urlPlaceholder="http://ollama:11434/v1"
             modelPlaceholder="qwen2.5vl"
             bind:settings={vision}

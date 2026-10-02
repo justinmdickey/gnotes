@@ -532,13 +532,32 @@ try {
   await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("Pantry"));
 
   // A photo picked from the format bar uploads and shows inline.
-  const png = join(data, "dot.png");
-  writeFileSync(png, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEklEQVR4nGP4z8CAFWEXHbQSACj/P8Fu7N9hAAAAAElFTkSuQmCC", "base64"));
+  // A photo-sized picture of a shopping list, drawn in the page.
+  const png = join(data, "list.png");
+  const listPng = await alice.evaluate(() => {
+    const c = Object.assign(document.createElement("canvas"), { width: 320, height: 200 });
+    const g = c.getContext("2d");
+    g.fillStyle = "#f6f1e3";
+    g.fillRect(0, 0, 320, 200);
+    g.fillStyle = "#333";
+    g.font = "bold 26px sans-serif";
+    g.fillText("SHOPPING LIST", 24, 70);
+    g.font = "22px sans-serif";
+    g.fillText("Oat milk", 24, 120);
+    return c.toDataURL("image/png").split(",")[1];
+  });
+  writeFileSync(png, Buffer.from(listPng, "base64"));
   const [chooser] = await Promise.all([alice.waitForFileChooser(), alice.click("button[aria-label='Add photo']")]);
   await chooser.accept([png]);
-  await alice.waitForFunction(() => document.querySelector(".cm-attachment img")?.naturalWidth === 8, { timeout: 5000 });
+  await alice.waitForFunction(() => document.querySelector(".cm-attachment img")?.naturalWidth === 320, { timeout: 5000 });
   check(true, "a picked photo uploads and shows in the note");
-  // Its text is read by the vision model and written on the line under it.
+  // Reading its text is on demand: nothing happens until Get Text, shown while pointing at the photo.
+  await new Promise((r) => setTimeout(r, 1200));
+  check(await alice.evaluate(() => !document.querySelector(".cm-content").innerText.includes("SHOPPING LIST") && !document.querySelector(".cm-attachment.reading")), "a photo isn't read until asked");
+  await alice.hover(".cm-attachment img");
+  await alice.waitForFunction(() => getComputedStyle(document.querySelector(".cm-photo-action")).opacity === "1");
+  if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-photo-get-text.png") });
+  await alice.click(".cm-photo-action");
   await alice.waitForSelector(".cm-attachment.reading .cm-reading", { timeout: 5000 });
   if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-photo-reading.png") });
   await alice.waitForFunction(() => document.querySelector(".cm-content").innerText.includes("SHOPPING LIST"), { timeout: 5000 });
@@ -548,7 +567,7 @@ try {
       const at = lines.findIndex((l) => l.querySelector(".cm-attachment img"));
       return lines[at + 1]?.textContent === "SHOPPING LIST" && lines[at + 2]?.textContent === "Oat milk" && !document.querySelector(".cm-attachment.reading");
     }),
-    "a photo's text is written under it",
+    "Get Text writes the photo's text under it",
   );
 
   // A voice memo records, embeds a player, and gets its transcript underneath.

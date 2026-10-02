@@ -269,7 +269,7 @@
     const input = e.currentTarget as HTMLInputElement;
     const files = [...(input.files ?? [])];
     input.value = "";
-    if (view && files.length) void withBusy(() => addImages(view!, noteId, files, addAtEnd, app.features.photo_text));
+    if (view && files.length) void withBusy(() => addImages(view!, noteId, files, addAtEnd));
   }
 
   /** Where the recording in progress goes, picked when it starts and shown with a marker. */
@@ -309,7 +309,7 @@
       const files = [...(e.clipboardData?.files ?? [])].filter((f) => f.type.startsWith("image/"));
       if (!files.length || !canEdit) return false;
       e.preventDefault();
-      void withBusy(() => addImages(v, noteId, files, false, app.features.photo_text));
+      void withBusy(() => addImages(v, noteId, files));
       return true;
     },
     drop(e, v) {
@@ -318,7 +318,7 @@
       e.preventDefault();
       const pos = v.posAtCoords({ x: e.clientX, y: e.clientY });
       if (pos !== null) v.dispatch({ selection: { anchor: pos } });
-      void withBusy(() => addImages(v, noteId, files, false, app.features.photo_text));
+      void withBusy(() => addImages(v, noteId, files));
       return true;
     },
   });
@@ -397,7 +397,7 @@
           <Icon name={place.icon} size={14} /><span>{place.label}</span><Icon name="next" size={12} />
         </button>
       {/if}
-      <div class="page" class:with-chip={place} bind:this={parent}></div>
+      <div class="page" class:with-chip={place} class:can-read={canEdit && app.features.photo_text} bind:this={parent}></div>
     </div>
   </div>
   {#if recording}
@@ -608,6 +608,49 @@
     border-radius: var(--radius-md);
     cursor: default;
     animation: rise 220ms var(--ease-out) both;
+  }
+
+  .page :global(.cm-attachment.is-image) {
+    position: relative;
+  }
+
+  /* Get Text on a photo: in its corner while you point at it, and always on touch screens. */
+  .page :global(.cm-photo-action) {
+    display: none;
+  }
+
+  .page.can-read :global(.cm-photo-action) {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    display: inline-flex;
+    gap: 6px;
+    min-height: 30px;
+    padding: 0 12px;
+    border-radius: var(--radius-pill);
+    background: var(--popover-bg);
+    color: var(--fg);
+    box-shadow: var(--shadow-md);
+    font-size: var(--text-xs);
+    font-weight: 700;
+    white-space: nowrap;
+    opacity: 0;
+    transition: opacity var(--fast) ease;
+  }
+
+  .page.can-read :global(.cm-attachment:hover .cm-photo-action),
+  .page.can-read :global(.cm-photo-action:focus-visible) {
+    opacity: 1;
+  }
+
+  @media (hover: none) {
+    .page.can-read :global(.cm-photo-action) {
+      opacity: 1;
+    }
+  }
+
+  .page.can-read :global(.reading .cm-photo-action) {
+    display: none;
   }
 
   /* A photo whose text is being read: a line under it, where the text will go. */

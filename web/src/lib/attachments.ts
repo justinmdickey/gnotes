@@ -1,7 +1,8 @@
 // Photos and voice memos in notes. A note embeds them as `![label](att:<id>)` on a line of its own.
 import { StateEffect, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, type ViewUpdate, WidgetType } from "@codemirror/view";
-import { api, type AttachmentMeta } from "./api";
+import { api, ApiError, type AttachmentMeta } from "./api";
+import { toast } from "./ui.svelte";
 
 /**
  * An embed line. It may carry a block mark (heading, quote, list) that a text style put
@@ -97,25 +98,23 @@ export function insertEmbed(view: EditorView, id: string, label: string, atEnd =
   });
 }
 
-/**
- * Uploads photos and embeds them. When the server can read photos, each one's text then goes on the
- * line under it; that runs in the background with a badge on the photo, so the next upload needn't wait.
- */
-export async function addImages(view: EditorView, noteId: string, files: File[], atEnd = false, read = false) {
+export async function addImages(view: EditorView, noteId: string, files: File[], atEnd = false) {
   for (const file of files) {
     const att = await api.upload(noteId, await prepareImage(file));
     insertEmbed(view, att.id, "Photo", atEnd);
-    if (read) void readPhoto(view, att.id);
   }
 }
 
-async function readPhoto(view: EditorView, id: string) {
+/** Get Text on a photo: the server's vision model reads it, and the text goes on the line under it. */
+export async function readPhoto(view: EditorView, id: string) {
+  if (transcribing.has(id)) return;
   setTranscribing(id, true);
   try {
     const { text } = await api.photoText(id);
     if (text) writeUnder(view, id, text);
-  } catch {
-    // The photo is still there; reading is a bonus.
+    else toast("No text found in this photo");
+  } catch (err) {
+    toast(err instanceof ApiError ? err.message : "Couldn't read the photo");
   } finally {
     setTranscribing(id, false);
   }

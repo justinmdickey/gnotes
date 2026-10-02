@@ -4,7 +4,7 @@ import { syntaxTree } from "@codemirror/language";
 import type { EditorState, Range } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate, WidgetType } from "@codemirror/view";
 import { iconSvg } from "./icons";
-import { EMBED, attachmentMeta, attachmentUrl, isTranscribing, onTranscribingChange } from "./attachments";
+import { EMBED, attachmentMeta, attachmentUrl, isTranscribing, onTranscribingChange, readPhoto } from "./attachments";
 
 /** Full-screen photo viewer that zooms out of the tapped image. */
 function openLightbox(src: string, from: HTMLElement) {
@@ -155,7 +155,18 @@ class AttachmentWidget extends WidgetType {
           img.addEventListener("load", () => view.requestMeasure());
           img.addEventListener("click", () => openLightbox(src, img));
           box.append(img);
-          // While the server reads the text in it, a badge says so.
+          // Get Text, shown on hover (always on touch) when the note's page allows it (.can-read).
+          const read = document.createElement("button");
+          read.className = "cm-photo-action";
+          read.title = "Get the text in this photo";
+          read.setAttribute("aria-label", "Get text from photo");
+          read.append(iconSvg("textformat", 14), "Get Text");
+          read.addEventListener("click", (e) => {
+            e.stopPropagation();
+            void readPhoto(view, this.id);
+          });
+          box.append(read);
+          // While the server reads the text in it, a line under it says so.
           const badge = document.createElement("span");
           badge.className = "cm-reading";
           badge.textContent = "Reading text…";
