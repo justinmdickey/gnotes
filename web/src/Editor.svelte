@@ -400,7 +400,10 @@
           <Icon name={place.icon} size={14} /><span>{place.label}</span><Icon name="next" size={12} />
         </button>
       {/if}
-      <div class="page" class:with-chip={place} class:can-read={canEdit && app.features.photo_text} bind:this={parent}></div>
+      <div class="page" class:with-chip={place} class:can-edit={canEdit}
+        class:can-read={canEdit && app.features.photo_text}
+        class:can-transcribe={canEdit && app.features.transcription}
+        bind:this={parent}></div>
     </div>
   </div>
   {#if recording}
@@ -613,47 +616,96 @@
     animation: rise 220ms var(--ease-out) both;
   }
 
-  .page :global(.cm-attachment.is-image) {
+  .page :global(.cm-attachment.is-image),
+  .page :global(.cm-attachment.is-audio) {
     position: relative;
   }
 
-  /* Get Text on a photo: in its corner while you point at it, and always on touch screens. */
-  .page :global(.cm-photo-action) {
-    display: none;
-  }
-
-  .page.can-read :global(.cm-photo-action) {
+  /* A photo's or memo's tools: a pill in its corner while you point at it, always on touch screens. */
+  .page :global(.cm-att-tools) {
     position: absolute;
     top: 8px;
     right: 8px;
-    display: inline-flex;
-    gap: 6px;
-    min-height: 30px;
-    padding: 0 12px;
+    z-index: 1;
+    display: flex;
+    gap: 2px;
+    padding: 3px;
     border-radius: var(--radius-pill);
     background: var(--popover-bg);
-    color: var(--fg);
     box-shadow: var(--shadow-md);
-    font-size: var(--text-xs);
-    font-weight: 700;
-    white-space: nowrap;
     opacity: 0;
     transition: opacity var(--fast) ease;
   }
 
-  .page.can-read :global(.cm-attachment:hover .cm-photo-action),
-  .page.can-read :global(.cm-photo-action:focus-visible) {
+  /* On a memo it sits on the card's top edge, clear of the player's controls. */
+  .page :global(.is-audio .cm-att-tools) {
+    top: -14px;
+  }
+
+  .page :global(.cm-attachment:hover .cm-att-tools),
+  .page :global(.cm-att-tools:has(:focus-visible)) {
     opacity: 1;
   }
 
   @media (hover: none) {
-    .page.can-read :global(.cm-photo-action) {
+    .page :global(.cm-att-tools) {
       opacity: 1;
     }
   }
 
-  .page.can-read :global(.reading .cm-photo-action) {
+  .page :global(.cm-att-tools > *) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-width: 28px;
+    min-height: 28px;
+    padding: 0 8px;
+    border-radius: var(--radius-pill);
+    background: transparent;
+    color: var(--fg);
+    font-size: var(--text-xs);
+    font-weight: 700;
+    white-space: nowrap;
+    text-decoration: none;
+  }
+
+  .page :global(.cm-att-tools > *:hover) {
+    background: var(--hover);
+  }
+
+  .page :global(.cm-att-tools .tool-delete) {
+    color: var(--destructive);
+  }
+
+  .page :global(.cm-att-tools .tool-read),
+  .page :global(.cm-att-tools .tool-transcribe),
+  .page :global(.cm-att-tools .tool-delete) {
     display: none;
+  }
+
+  .page.can-read :global(.cm-att-tools .tool-read),
+  .page.can-transcribe :global(.cm-att-tools .tool-transcribe),
+  .page.can-edit :global(.cm-att-tools .tool-delete) {
+    display: inline-flex;
+  }
+
+  .page :global(.reading .cm-att-tools),
+  .page :global(.transcribing .cm-att-tools) {
+    display: none;
+  }
+
+  /* Playback speed, inside the player next to the time. */
+  .page :global(.cm-audio-speed) {
+    min-width: 34px;
+    min-height: 24px;
+    padding: 0 6px;
+    border-radius: var(--radius-pill);
+    background: var(--button-bg);
+    color: var(--dim-fg);
+    font-size: var(--text-xs);
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
   }
 
   /* A photo whose text is being read: a line under it, where the text will go. */

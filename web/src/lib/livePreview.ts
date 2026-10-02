@@ -4,7 +4,8 @@ import { syntaxTree } from "@codemirror/language";
 import type { EditorState, Range } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate, WidgetType } from "@codemirror/view";
 import { iconSvg } from "./icons";
-import { EMBED, attachmentMeta, attachmentUrl, isTranscribing, onTranscribingChange, readPhoto } from "./attachments";
+import { EMBED, attachmentMeta, attachmentUrl, isTranscribing, onTranscribingChange, readPhoto, removeEmbed, transcribeMemo } from "./attachments";
+import type { IconName } from "./icons";
 
 /** Full-screen photo viewer that zooms out of the tapped image. */
 function openLightbox(src: string, from: HTMLElement) {
@@ -63,8 +64,20 @@ function audioPlayer(src: string, label: string): HTMLElement {
   time.textContent = "0:00";
   const status = document.createElement("span");
   status.className = "cm-audio-status";
+  // Playback speed, for long memos and meetings: 1×, 1.5×, 2×, and round again.
+  const speed = document.createElement("button");
+  speed.className = "cm-audio-speed";
+  speed.textContent = "1×";
+  speed.title = "Playback speed";
+  speed.setAttribute("aria-label", "Playback speed 1×");
+  speed.addEventListener("click", () => {
+    const next = { 1: 1.5, 1.5: 2, 2: 1 }[audio.playbackRate] ?? 1;
+    audio.playbackRate = next;
+    speed.textContent = `${next}×`;
+    speed.setAttribute("aria-label", `Playback speed ${next}×`);
+  });
   body.append(title, bar);
-  wrap.append(play, body, time, status);
+  wrap.append(play, body, speed, time, status);
 
   const playIcon = iconSvg("play");
   const pauseIcon = iconSvg("pause");
@@ -118,6 +131,39 @@ class TitleHint extends WidgetType {
   }
 }
 
+/**
+ * The tools on a photo or memo, shown while you point at it (always on touch screens). Which ones
+ * show is up to the note's page classes: .can-edit (Delete), .can-read (Get Text), .can-transcribe.
+ */
+function tools(items: { cls: string; icon: IconName; label: string; text?: string; run: () => void }[], download: { href: string; name: string }) {
+  const bar = document.createElement("div");
+  bar.className = "cm-att-tools";
+  for (const it of items) {
+    const b = document.createElement("button");
+    b.className = it.cls;
+    b.title = it.label;
+    b.setAttribute("aria-label", it.label);
+    b.append(iconSvg(it.icon, 14));
+    if (it.text) b.append(it.text);
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      it.run();
+    });
+    bar.append(b);
+  }
+  const a = document.createElement("a");
+  a.className = "tool-download";
+  a.href = download.href;
+  a.download = download.name;
+  a.title = "Download";
+  a.setAttribute("aria-label", "Download");
+  a.append(iconSvg("download", 14));
+  a.addEventListener("click", (e) => e.stopPropagation());
+  // Download sits before Delete, which stays last.
+  bar.insertBefore(a, bar.querySelector(".tool-delete"));
+  return bar;
+}
+
 /** A photo or voice memo, drawn in place of its `![label](att:id)` line. */
 class AttachmentWidget extends WidgetType {
   private off?: () => void;
@@ -143,6 +189,15 @@ class AttachmentWidget extends WidgetType {
         if (meta.mime.startsWith("audio/")) {
           box.classList.add("is-audio");
           box.append(audioPlayer(src, this.label || "Voice memo"));
+          box.append(
+            tools(
+              [
+                { cls: "tool-transcribe", icon: "textformat", label: "Transcribe this recording", text: "Transcribe", run: () => void transcribeMemo(view, this.id) },
+                { cls: "tool-delete", icon: "trash", label: "Remove from note", run: () => removeEmbed(view, this.id, "Voice memo") },
+              ],
+              { href: src, name: meta.filename },
+            ),
+          );
           const update = () => box.classList.toggle("transcribing", isTranscribing(this.id));
           update();
           this.off = onTranscribingChange(update);
@@ -155,17 +210,15 @@ class AttachmentWidget extends WidgetType {
           img.addEventListener("load", () => view.requestMeasure());
           img.addEventListener("click", () => openLightbox(src, img));
           box.append(img);
-          // Get Text, shown on hover (always on touch) when the note's page allows it (.can-read).
-          const read = document.createElement("button");
-          read.className = "cm-photo-action";
-          read.title = "Get the text in this photo";
-          read.setAttribute("aria-label", "Get text from photo");
-          read.append(iconSvg("textformat", 14), "Get Text");
-          read.addEventListener("click", (e) => {
-            e.stopPropagation();
-            void readPhoto(view, this.id);
-          });
-          box.append(read);
+          box.append(
+            tools(
+              [
+                { cls: "tool-read", icon: "textformat", label: "Get the text in this photo", text: "Get Text", run: () => void readPhoto(view, this.id) },
+                { cls: "tool-delete", icon: "trash", label: "Remove from note", run: () => removeEmbed(view, this.id, "Photo") },
+              ],
+              { href: src, name: meta.filename },
+            ),
+          );
           // While the server reads the text in it, a line under it says so.
           const badge = document.createElement("span");
           badge.className = "cm-reading";

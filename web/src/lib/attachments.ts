@@ -120,6 +120,47 @@ export async function readPhoto(view: EditorView, id: string) {
   }
 }
 
+/** Transcribe on a voice memo: the whole recording is transcribed again, onto the line under it. */
+export async function transcribeMemo(view: EditorView, id: string) {
+  if (transcribing.has(id)) return;
+  setTranscribing(id, true);
+  try {
+    const { text } = await api.transcribe(id);
+    if (text) writeUnder(view, id, text);
+    else toast("No speech found in this recording");
+  } catch (err) {
+    toast(err instanceof ApiError ? err.message : "Couldn't transcribe the recording");
+  } finally {
+    setTranscribing(id, false);
+  }
+}
+
+/**
+ * Delete on a photo or memo: takes its line out of the note, with Undo. The file stays on the server
+ * (other copies of the note may still use it), and text under it, like a transcript, stays too.
+ */
+export function removeEmbed(view: EditorView, id: string, what: string) {
+  const { doc } = view.state;
+  for (let n = 1; n <= doc.lines; n++) {
+    const line = doc.line(n);
+    if (!line.text.includes(`att:${id}`)) continue;
+    // The line and the line break after it (or before it, on the last line).
+    const from = n < doc.lines ? line.from : Math.max(0, line.from - 1);
+    const to = n < doc.lines ? line.to + 1 : line.to;
+    const removed = doc.sliceString(from, to);
+    view.dispatch({ changes: { from, to }, userEvent: "delete" });
+    toast(`${what} removed`, {
+      label: "Undo",
+      run: () => {
+        if (!view.dom.isConnected) return;
+        const at = Math.min(from, view.state.doc.length);
+        view.dispatch({ changes: { from: at, insert: removed } });
+      },
+    });
+    return;
+  }
+}
+
 /**
  * Puts text on the line under an embed: onto the empty line left there, or a new one. The embed is
  * found again by its id, since the note may have changed meanwhile.

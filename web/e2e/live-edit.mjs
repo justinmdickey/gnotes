@@ -565,9 +565,16 @@ try {
   await new Promise((r) => setTimeout(r, 1200));
   check(await alice.evaluate(() => !document.querySelector(".cm-content").innerText.includes("SHOPPING LIST") && !document.querySelector(".cm-attachment.reading")), "a photo isn't read until asked");
   await alice.hover(".cm-attachment img");
-  await alice.waitForFunction(() => getComputedStyle(document.querySelector(".cm-photo-action")).opacity === "1");
+  await alice.waitForFunction(() => getComputedStyle(document.querySelector(".is-image .cm-att-tools")).opacity === "1");
   if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-photo-get-text.png") });
-  await alice.click(".cm-photo-action");
+  check(
+    await alice.evaluate(() => {
+      const a = document.querySelector(".is-image .cm-att-tools .tool-download");
+      return a?.getAttribute("href")?.startsWith("/api/attachments/") && a.getAttribute("download") === "list.png";
+    }),
+    "a photo's tools offer a download of the original file",
+  );
+  await alice.click(".is-image .cm-att-tools .tool-read");
   await alice.waitForSelector(".cm-attachment.reading .cm-reading", { timeout: 5000 });
   if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-photo-reading.png") });
   await alice.waitForFunction(() => document.querySelector(".cm-content").innerText.includes("SHOPPING LIST"), { timeout: 5000 });
@@ -579,6 +586,14 @@ try {
     }),
     "Get Text writes the photo's text under it",
   );
+  // Delete takes the photo out of the note, keeping the text under it, and Undo puts it back.
+  await alice.hover(".cm-attachment img");
+  await alice.click(".is-image .cm-att-tools .tool-delete");
+  await alice.waitForFunction(() => !document.querySelector(".cm-attachment.is-image") && document.querySelector(".toast")?.innerText.includes("Photo removed"));
+  check(await alice.evaluate(() => document.querySelector(".cm-content").innerText.includes("SHOPPING LIST")), "deleting a photo removes it and keeps its text");
+  await alice.click(".toast ::-p-text(Undo)");
+  await alice.waitForFunction(() => document.querySelector(".cm-attachment.is-image img")?.naturalWidth === 320);
+  check(true, "Undo brings the photo back");
 
   // A voice memo records, embeds a player, and gets its transcript underneath.
   // With the cursor on the title, the memo goes on the line right under it, marked before any words come.
@@ -634,6 +649,23 @@ try {
     "the memo lands where the cursor was: player under the title, transcript under it",
   );
   check(true, "a voice memo embeds a player with its transcript");
+  // A memo's player has a speed button, and its tools can transcribe the whole recording again.
+  await alice.click(".cm-audio-speed");
+  check(await alice.evaluate(() => document.querySelector(".cm-audio-speed").textContent === "1.5×"), "the memo's speed button steps to 1.5×");
+  await alice.click(".cm-audio-speed");
+  await alice.click(".cm-audio-speed");
+  await alice.hover(".cm-audio");
+  if (process.env.SHOTS) await (await new Promise((r) => setTimeout(r, 250)), alice.screenshot({ path: join(process.env.SHOTS, "desktop-memo-tools.png") }));
+  await alice.click(".is-audio .cm-att-tools .tool-transcribe");
+  await alice.waitForFunction(() => document.querySelector(".cm-content").innerText.includes("remember the milk"), { timeout: 5000 });
+  check(
+    await alice.evaluate(() => {
+      const lines = [...document.querySelectorAll(".cm-line")];
+      const at = lines.findIndex((l) => l.querySelector(".cm-audio"));
+      return lines[at + 1]?.textContent === "remember the milk";
+    }),
+    "Transcribe adds the recording's transcript under the player",
+  );
   if (process.env.SHOTS) {
     await closed(alice);
     await alice.click(".cm-audio-play");
@@ -760,6 +792,14 @@ try {
     await alice.tap(".recorder button[aria-label='Discard recording']");
     await alice.waitForFunction(() => !document.querySelector(".recorder"));
     check(await alice.evaluate(() => !document.querySelector(".cm-listening") && !document.querySelector(".cm-content").innerText.includes("remember")), "discarding takes back the marker and any live text");
+    // A note with a photo and a memo: on a touch screen their tools are always there.
+    await alice.evaluate(async () => {
+      const tree = await fetch("/api/tree").then((r) => r.json());
+      location.hash = `#/all/note/${tree.notes.find((n) => n.title === "Pantry").id}`;
+    });
+    await alice.waitForSelector(".cm-attachment.is-image img");
+    await alice.evaluate(() => document.activeElement?.blur());
+    await shot("phone-attachments-dark");
     // Account is a tab like the others: the tab bar stays and there's no Back.
     await alice.evaluate(() => [...document.querySelectorAll(".tabbar button")].find((b) => b.textContent.includes("Account")).click());
     await alice.waitForFunction(() => document.querySelector(".tab-page h1")?.textContent === "Account");
