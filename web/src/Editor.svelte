@@ -19,7 +19,7 @@
   import { bloom, media, scrollEdge } from "./lib/ui.svelte";
   import FormatBar from "./FormatBar.svelte";
   import Recorder from "./Recorder.svelte";
-  import { addImages, addLiveRecording, addRecording, LiveTranscript } from "./lib/attachments";
+  import { addImages, addRecording, recordingMarker, RecordingSpot } from "./lib/attachments";
   import type { LiveHandlers } from "./lib/live";
   import { toast } from "./lib/ui.svelte";
   import { ApiError } from "./lib/api";
@@ -127,6 +127,7 @@
           markdown({ base: markdownLanguage }),
           syntaxHighlighting(markdownStyle),
           livePreview,
+          recordingMarker,
           dropImages,
           EditorView.lineWrapping,
           keymap.of([...formatKeymap, ...defaultKeymap]),
@@ -271,43 +272,35 @@
     if (view && files.length) void withBusy(() => addImages(view!, noteId, files, addAtEnd));
   }
 
-  /** The live transcript being written for the recording in progress, made when the first words arrive. */
-  let liveText: LiveTranscript | null = null;
+  /** Where the recording in progress goes, picked when it starts and shown with a marker. */
+  let spot: RecordingSpot | null = null;
   const liveHandlers: LiveHandlers = {
-    ondelta: (text) => transcript()?.delta(text),
-    onfinal: (text) => transcript()?.final(text),
+    ondelta: (text) => spot?.delta(text),
+    onfinal: (text) => spot?.final(text),
     onerror: (message) => toast(message),
   };
-  function transcript() {
-    if (!liveText && view) liveText = new LiveTranscript(view, addAtEnd);
-    return liveText;
-  }
 
   function startRecording() {
-    addAtEnd = !view?.hasFocus;
-    view?.contentDOM.blur();
-    liveText = null;
+    if (!view || recording) return;
+    // The cursor's line when you were typing, else the end of the note.
+    spot = new RecordingSpot(view, !view.hasFocus, app.features.live_transcription ? "Listening…" : "Recording…");
+    view.contentDOM.blur();
     recording = true;
   }
 
   function saveRecording(audio: File) {
     recording = false;
-    const live = liveText;
-    liveText = null;
-    if (!view) return;
+    const s = spot;
+    spot = null;
+    if (!view || !s) return;
     const v = view;
-    void withBusy(async () => {
-      if (live?.hasText) return addLiveRecording(v, noteId, audio, live);
-      // Nothing came through live (no words, or it failed): transcribe the whole recording instead.
-      live?.remove();
-      await addRecording(v, noteId, audio, app.features.transcription, addAtEnd);
-    });
+    void withBusy(() => addRecording(v, noteId, audio, s, app.features.transcription));
   }
 
   function discardRecording() {
     recording = false;
-    liveText?.remove();
-    liveText = null;
+    spot?.remove();
+    spot = null;
   }
 
   /** Pasted or dropped images upload straight into the note. */
@@ -571,6 +564,37 @@
   }
 
   /* Photos and voice memos embedded in the text. */
+  /* Where a recording's text is going: a red dot and "Listening…" after the last word. */
+  .page :global(.cm-listening) {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: 6px;
+    padding: 1px 9px;
+    border-radius: var(--radius-pill);
+    background: var(--button-bg);
+    color: var(--dim-fg);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    vertical-align: 1px;
+    user-select: none;
+  }
+
+  .page :global(.cm-listening::before) {
+    content: "";
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--destructive-bg);
+    animation: listening 1.2s ease-in-out infinite;
+  }
+
+  @keyframes listening {
+    50% {
+      opacity: 0.25;
+    }
+  }
+
   .page :global(.cm-embed-line) {
     padding: 6px 0 !important;
     font-size: var(--text-md) !important;

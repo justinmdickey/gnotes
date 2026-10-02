@@ -1,6 +1,6 @@
 // Photos and voice memos in notes. A note embeds them as `![label](att:<id>)` on a line of its own.
-import { StateEffect } from "@codemirror/state";
-import { EditorView, type ViewUpdate } from "@codemirror/view";
+import { StateEffect, StateField } from "@codemirror/state";
+import { Decoration, type DecorationSet, EditorView, type ViewUpdate, WidgetType } from "@codemirror/view";
 import { api, type AttachmentMeta } from "./api";
 
 /**
@@ -104,69 +104,100 @@ export async function addImages(view: EditorView, noteId: string, files: File[],
   }
 }
 
-/**
- * Uploads a recording, embeds it, then (when the server has speech-to-text) puts the
- * transcript on the line under it. The embed is found again by id, since other people
- * may have edited the note in the meantime.
- */
-export async function addRecording(view: EditorView, noteId: string, audio: File, transcribe: boolean, atEnd = false) {
-  const att = await api.upload(noteId, audio);
-  insertEmbed(view, att.id, "Voice memo", atEnd);
-  if (!transcribe) return;
-  setTranscribing(att.id, true);
-  try {
-    const { text } = await api.transcribe(att.id);
-    // The note was closed meanwhile; the recording is still there to transcribe later.
-    if (!text || !view.dom.isConnected) return;
-    const { doc } = view.state;
-    for (let n = 1; n <= doc.lines; n++) {
-      const line = doc.line(n);
-      if (!line.text.includes(`att:${att.id}`)) continue;
-      view.dispatch({ changes: { from: line.to, insert: `\n${text}` } });
-      break;
-    }
-  } finally {
-    setTranscribing(att.id, false);
+/** Shows where a recording's text will go: a "Listening…" marker that follows edits. */
+const setMarker = StateEffect.define<{ pos: number; label: string } | null>();
+
+class MarkerWidget extends WidgetType {
+  constructor(private label: string) {
+    super();
+  }
+  eq(other: MarkerWidget) {
+    return other.label === this.label;
+  }
+  toDOM() {
+    const el = document.createElement("span");
+    el.className = "cm-listening";
+    el.setAttribute("aria-hidden", "true");
+    el.textContent = this.label;
+    return el;
+  }
+  ignoreEvent() {
+    return true;
   }
 }
 
+export const recordingMarker = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(marks, tr) {
+    marks = marks.map(tr.changes);
+    for (const e of tr.effects) {
+      if (!e.is(setMarker)) continue;
+      marks = e.value
+        ? Decoration.set([Decoration.widget({ widget: new MarkerWidget(e.value.label), side: 1 }).range(e.value.pos)])
+        : Decoration.none;
+    }
+    return marks;
+  },
+  provide: (f) => EditorView.decorations.from(f),
+});
+
 /**
- * Writes a live transcript into the note while recording, on a line of its own under the cursor (or
- * at the end). Its place is mapped through every change, so other people can keep editing the note.
- * Deltas are appended as they come; each final replaces the stretch of deltas it covers.
+ * Where a voice memo goes, chosen when recording starts: on a line of its own under the cursor, or at
+ * the end when nobody was typing. Its place is mapped through every change, so other people (or you,
+ * elsewhere in the note) can keep editing. A live transcript is written there as it's heard: deltas
+ * are appended, and each final replaces the stretch of deltas it covers. The player goes above it.
  */
-export class LiveTranscript {
-  /** Where the transcript starts, ends, and where the stretch still being heard starts. */
-  private from: number;
-  private to: number;
-  private stretch: number;
+export class RecordingSpot {
+  /** Where the spot was picked; the transcript's own line is made there when the first words arrive. */
+  private anchor: number;
+  /** The transcript's start and end, and where the stretch still being heard starts, once it has a line. */
+  private from = -1;
+  private to = -1;
+  private stretch = -1;
   private done = false;
 
   constructor(
     private view: EditorView,
     atEnd: boolean,
+    private label: string,
   ) {
     const { state } = view;
-    const line = atEnd ? state.doc.line(state.doc.lines) : state.doc.lineAt(state.selection.main.head);
-    // Like an embed: an empty line is used as it is, except the title line.
-    const empty = line.text.trim() === "" && line.number > 1;
-    const at = empty ? line.from : line.to;
-    const insert = empty ? "" : "\n";
-    view.dispatch({ changes: { from: at, insert } });
-    this.from = this.to = this.stretch = at + insert.length;
-    view.dispatch({ effects: StateEffect.appendConfig.of(EditorView.updateListener.of((u) => this.map(u))) });
+    this.anchor = atEnd ? state.doc.length : state.doc.lineAt(state.selection.main.head).to;
+    view.dispatch({
+      effects: [
+        StateEffect.appendConfig.of(EditorView.updateListener.of((u) => this.map(u))),
+        setMarker.of({ pos: this.anchor, label }),
+      ],
+    });
   }
 
   private map(u: ViewUpdate) {
     if (this.done || !u.docChanged) return;
+    this.anchor = u.changes.mapPos(this.anchor, 1);
+    if (this.from < 0) return;
     this.from = u.changes.mapPos(this.from, -1);
     this.stretch = u.changes.mapPos(this.stretch, -1);
     // Text written right at the end belongs to the transcript.
     this.to = u.changes.mapPos(this.to, 1);
   }
 
+  private get alive() {
+    return !this.done && this.view.dom.isConnected;
+  }
+
   get hasText() {
-    return this.to > this.from;
+    return this.from >= 0 && this.to > this.from;
+  }
+
+  /** Makes the transcript's line: an empty line is used as it is (except the title), else a new one after it. */
+  private open() {
+    if (this.from >= 0) return;
+    const line = this.view.state.doc.lineAt(this.anchor);
+    const empty = line.text.trim() === "" && line.number > 1;
+    const at = empty ? line.from : line.to;
+    const insert = empty ? "" : "\n";
+    if (insert) this.view.dispatch({ changes: { from: at, insert } });
+    this.from = this.to = this.stretch = at + insert.length;
   }
 
   /** The text before `at` ends in a space or the transcript's start, so words don't run together. */
@@ -176,39 +207,80 @@ export class LiveTranscript {
   }
 
   delta(text: string) {
-    if (this.done || !this.view.dom.isConnected) return;
-    this.view.dispatch({ changes: { from: this.to, insert: this.spaced(this.to, text) } });
+    if (!this.alive) return;
+    this.open();
+    this.view.dispatch({
+      changes: { from: this.to, insert: this.spaced(this.to, text) },
+      effects: setMarker.of({ pos: this.to + this.spaced(this.to, text).length, label: this.label }),
+    });
   }
 
   final(text: string) {
-    if (this.done || !this.view.dom.isConnected) return;
+    if (!this.alive) return;
+    this.open();
     const clean = text.trim();
-    this.view.dispatch({ changes: { from: this.stretch, to: this.to, insert: clean ? this.spaced(this.stretch, clean) : "" } });
+    const insert = clean ? this.spaced(this.stretch, clean) : "";
+    this.view.dispatch({
+      changes: { from: this.stretch, to: this.to, insert },
+      effects: setMarker.of({ pos: this.stretch + insert.length, label: this.label }),
+    });
     this.stretch = this.to;
   }
 
-  /** Puts the recording's player on the line above the transcript. */
-  embed(id: string) {
-    this.done = true;
-    if (!this.view.dom.isConnected) return;
-    const label = "Voice memo";
-    this.view.dispatch({ changes: { from: this.from, insert: `![${label}](att:${id})\n` } });
+  /** Recording stopped: the marker goes while the recording uploads. */
+  stopped() {
+    if (this.view.dom.isConnected) this.view.dispatch({ effects: setMarker.of(null) });
   }
 
-  /** Takes back the transcript and its line, for a discarded recording or one with no words. */
+  /** Puts the recording's player at the spot, above the transcript. */
+  embed(id: string) {
+    if (!this.alive) return;
+    this.open();
+    this.done = true;
+    // Above the transcript; with none, its empty line stays under the player to type on.
+    this.view.dispatch({ changes: { from: this.from, insert: `![Voice memo](att:${id})\n` }, effects: setMarker.of(null) });
+  }
+
+  /** Takes back the transcript and its line, for a discarded recording. */
   remove() {
     this.done = true;
     if (!this.view.dom.isConnected) return;
+    if (this.from < 0) return void this.view.dispatch({ effects: setMarker.of(null) });
     const { doc } = this.view.state;
     const line = doc.lineAt(this.from);
     // The line it was given, joined back to the one above.
     const from = line.from === this.from && line.number > 1 ? line.from - 1 : this.from;
-    this.view.dispatch({ changes: { from, to: Math.min(doc.length, this.to) } });
+    this.view.dispatch({ changes: { from, to: Math.min(doc.length, this.to) }, effects: setMarker.of(null) });
   }
 }
 
-/** Uploads a recording that was transcribed live and puts its player above the transcript. */
-export async function addLiveRecording(view: EditorView, noteId: string, audio: File, live: LiveTranscript) {
+/**
+ * Uploads a recording and puts its player at the spot it was started from. Without a live transcript
+ * (and when the server has speech-to-text), the whole recording is transcribed onto the line under it.
+ * That line is found again by the attachment id, since the note may have changed meanwhile.
+ */
+export async function addRecording(view: EditorView, noteId: string, audio: File, spot: RecordingSpot, transcribe: boolean) {
+  spot.stopped();
+  const live = spot.hasText;
   const att = await api.upload(noteId, audio);
-  live.embed(att.id);
+  spot.embed(att.id);
+  if (live || !transcribe) return;
+  setTranscribing(att.id, true);
+  try {
+    const { text } = await api.transcribe(att.id);
+    // The note was closed meanwhile; the recording is still there to transcribe later.
+    if (!text || !view.dom.isConnected) return;
+    const { doc } = view.state;
+    for (let n = 1; n <= doc.lines; n++) {
+      const line = doc.line(n);
+      if (!line.text.includes(`att:${att.id}`)) continue;
+      const next = n < doc.lines ? doc.line(n + 1) : null;
+      // Onto the empty line left under the player, or a new one.
+      if (next && next.text.trim() === "") view.dispatch({ changes: { from: next.from, insert: text } });
+      else view.dispatch({ changes: { from: line.to, insert: `\n${text}` } });
+      break;
+    }
+  } finally {
+    setTranscribing(att.id, false);
+  }
 }

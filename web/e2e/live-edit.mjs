@@ -532,10 +532,18 @@ try {
   check(true, "a picked photo uploads and shows in the note");
 
   // A voice memo records, embeds a player, and gets its transcript underneath.
+  // With the cursor on the title, the memo goes on the line right under it, marked before any words come.
   await alice.click(".cm-content");
+  await alice.keyboard.down("Control");
+  await alice.keyboard.press("Home");
+  await alice.keyboard.up("Control");
   await alice.click("button[aria-label='Record voice memo']");
   await alice.waitForSelector(".recorder .stop:not([disabled])");
   check(await alice.evaluate(() => !document.querySelector("dialog")), "recording shows a small bar, not a dialog over the note");
+  check(
+    await alice.evaluate(() => !!document.querySelector(".cm-line:first-child .cm-listening") && !document.querySelector(".cm-content").innerText.includes("remember")),
+    "a marker shows where the memo will go before any words arrive",
+  );
   // With a live URL set, words land in the note while still recording.
   await alice.waitForFunction(() => document.querySelector(".cm-content").innerText.includes("remember the"), { timeout: 8000 });
   check(await alice.evaluate(() => document.querySelector(".recorder .tag.on")?.textContent.trim() === "Live"), "the live transcript writes into the note while recording");
@@ -549,6 +557,13 @@ try {
       return !text.includes("remember the milk") && text.split("Remember the milk").length === 2;
     }),
     "stopping swaps in the final transcript under the recording",
+  );
+  check(
+    await alice.evaluate(() => {
+      const lines = [...document.querySelectorAll(".cm-line")];
+      return !!lines[1]?.querySelector(".cm-audio") && lines[2]?.textContent.trim() === "Remember the milk and the eggs." && !document.querySelector(".cm-listening");
+    }),
+    "the memo lands where the cursor was: player under the title, transcript under it",
   );
   check(true, "a voice memo embeds a player with its transcript");
   if (process.env.SHOTS) {
@@ -676,6 +691,7 @@ try {
     await shot("phone-recording-dark");
     await alice.tap(".recorder button[aria-label='Discard recording']");
     await alice.waitForFunction(() => !document.querySelector(".recorder"));
+    check(await alice.evaluate(() => !document.querySelector(".cm-listening") && !document.querySelector(".cm-content").innerText.includes("remember")), "discarding takes back the marker and any live text");
     // Account is a tab like the others: the tab bar stays and there's no Back.
     await alice.evaluate(() => [...document.querySelectorAll(".tabbar button")].find((b) => b.textContent.includes("Account")).click());
     await alice.waitForFunction(() => document.querySelector(".tab-page h1")?.textContent === "Account");
