@@ -148,6 +148,55 @@
     else toast("Drop .md files or a .zip of them to import");
   }
 
+  // Wide screens: the sidebar's right edge drags to resize it. The width is remembered per browser.
+  const SIDEBAR_MIN = 200;
+  const SIDEBAR_MAX = 480;
+  const SIDEBAR_START = 260;
+  let sidebarWidth = $state(loadSidebarWidth());
+  let resizing = $state(false);
+  function loadSidebarWidth() {
+    try {
+      const w = Number(localStorage.getItem("gnotes.sidebar"));
+      return w >= SIDEBAR_MIN && w <= SIDEBAR_MAX ? w : SIDEBAR_START;
+    } catch {
+      return SIDEBAR_START;
+    }
+  }
+  function setSidebarWidth(w: number) {
+    sidebarWidth = Math.round(Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, w)));
+    try {
+      localStorage.setItem("gnotes.sidebar", String(sidebarWidth));
+    } catch {}
+  }
+  function resizeStart(e: PointerEvent) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const handle = e.currentTarget as HTMLElement;
+    handle.setPointerCapture(e.pointerId);
+    const x0 = e.clientX;
+    const w0 = sidebarWidth;
+    resizing = true;
+    const move = (ev: PointerEvent) => setSidebarWidth(w0 + ev.clientX - x0);
+    const end = () => {
+      resizing = false;
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", end);
+      handle.removeEventListener("pointercancel", end);
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", end);
+    handle.addEventListener("pointercancel", end);
+  }
+  function resizeKey(e: KeyboardEvent) {
+    const step = e.shiftKey ? 40 : 10;
+    if (e.key === "ArrowLeft") setSidebarWidth(sidebarWidth - step);
+    else if (e.key === "ArrowRight") setSidebarWidth(sidebarWidth + step);
+    else if (e.key === "Home") setSidebarWidth(SIDEBAR_MIN);
+    else if (e.key === "End") setSidebarWidth(SIDEBAR_MAX);
+    else return;
+    e.preventDefault();
+  }
+
   function onkey(e: KeyboardEvent) {
     if (e.key === "Escape" && drawerOpen && !media.phone && app.drawer) closeDrawer();
   }
@@ -174,7 +223,7 @@
 {:else}
   <div class="app-frame">
   <div class="main">
-  <div class="shell" class:dragging={drag !== null} class:drawer-open={drawerOpen} class:two-pane={twoPane()} class:reading={!!app.noteId} bind:this={shell}>
+  <div class="shell" class:dragging={drag !== null} class:drawer-open={drawerOpen} class:two-pane={twoPane()} class:reading={!!app.noteId} class:resizing style:--sidebar-w="{sidebarWidth}px" bind:this={shell}>
     {#each order as p (p)}
       <div
         class="pane {p}"
@@ -202,6 +251,21 @@
     {/each}
     <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
     <div class="drawer-scrim" onclick={closeDrawer}></div>
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+    <div
+      class="resize"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize sidebar"
+      aria-valuenow={sidebarWidth}
+      aria-valuemin={SIDEBAR_MIN}
+      aria-valuemax={SIDEBAR_MAX}
+      tabindex="0"
+      title="Drag to resize · double-click to reset"
+      onpointerdown={resizeStart}
+      ondblclick={() => setSidebarWidth(SIDEBAR_START)}
+      onkeydown={resizeKey}
+    ></div>
   </div>
   {#if app.settings && media.phone}
     <!-- On phones Account is a tab like the others: it fills the page area and the tab bar stays. -->
@@ -265,7 +329,7 @@
     min-width: 0;
     min-height: 0;
     display: grid;
-    grid-template-columns: 260px 340px 1fr;
+    grid-template-columns: var(--sidebar-w, 260px) 340px 1fr;
     overflow: hidden;
     background: var(--view-bg);
   }
@@ -286,6 +350,48 @@
 
   .drawer-scrim {
     display: none;
+  }
+
+  /* An 8px grab strip over the sidebar's edge; a line shows while you point at it or drag. */
+  .resize {
+    display: none;
+  }
+
+  @media (min-width: 1001px) {
+    .resize {
+      display: block;
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: calc(var(--sidebar-w, 260px) - 4px);
+      z-index: 5;
+      width: 8px;
+      cursor: col-resize;
+      touch-action: none;
+    }
+
+    .resize::after {
+      content: "";
+      position: absolute;
+      inset: 0 3px;
+      background: transparent;
+      transition: background var(--fast) ease;
+    }
+
+    .resize:hover::after,
+    .resize:focus-visible::after,
+    .resizing .resize::after {
+      background: var(--button-active);
+    }
+
+    .resize:focus-visible {
+      outline: none;
+    }
+
+    .resizing {
+      cursor: col-resize;
+      user-select: none;
+    }
   }
 
 
@@ -435,7 +541,7 @@
   /* Wide, in a folder: the tree and one main pane, showing the folder's page or the open note. */
   @media (min-width: 1001px) {
     .shell.two-pane {
-      grid-template-columns: 260px 1fr;
+      grid-template-columns: var(--sidebar-w, 260px) 1fr;
     }
 
     .shell.two-pane:not(.reading) .editor,

@@ -295,9 +295,30 @@ try {
   // The sidebar lists a folder's notebooks first, then its notes A–Z, and a note row opens the note.
   const sidebar = () => alice.evaluate(() => [...document.querySelectorAll("nav .row .label")].map((l) => l.textContent));
   await alice.waitForFunction(() => [...document.querySelectorAll("nav .note-row .label")].some((l) => l.textContent === "Camping"));
+  const nbIdOf = (name) => alice.evaluate((name) => fetch("/api/tree").then((r) => r.json()).then((t) => t.notebooks.find((n) => n.name === name).id), name);
+  // Folders start folded; going to Vault unfolded it, but Trips inside stays folded.
   const rows = await sidebar();
   const at = (name) => rows.indexOf(name);
-  check(at("Vault") < at("Trips") && at("Trips") < at("Lisbon") && at("Lisbon") < at("Camping") && at("Camping") < at("Ideas"), `sidebar shows folders, then notes (${rows})`);
+  check(at("Vault") < at("Trips") && at("Trips") < at("Camping") && at("Camping") < at("Ideas") && at("Lisbon") === -1, `sidebar shows folders, then notes, with sub-folders folded (${rows})`);
+  await alice.click("nav button[aria-label=\"Show what's in Trips\"]");
+  await alice.waitForFunction(() => [...document.querySelectorAll("nav .note-row .label")].some((l) => l.textContent === "Lisbon"));
+  check(true, "unfolding a notebook shows its notes");
+  const saved = await alice.evaluate(() => JSON.parse(localStorage.getItem("gnotes.folds")));
+  check(JSON.stringify(saved) === JSON.stringify([await nbIdOf("Trips")]), "only folders unfolded by hand are remembered");
+
+  // The sidebar's edge drags wider, and the width comes back after a reload.
+  const edge = await (await alice.$(".resize")).boundingBox();
+  await alice.mouse.move(edge.x + 4, 300);
+  await alice.mouse.down();
+  await alice.mouse.move(edge.x + 84, 300, { steps: 5 });
+  await alice.mouse.up();
+  const wide = await alice.evaluate(() => document.querySelector(".pane.sidebar").getBoundingClientRect().width);
+  check(Math.abs(wide - 340) <= 2, `the sidebar drags wider (${wide}px)`);
+  await alice.reload();
+  await alice.waitForSelector("nav .row");
+  check(Math.abs((await alice.evaluate(() => document.querySelector(".pane.sidebar").getBoundingClientRect().width)) - 340) <= 2, "the sidebar keeps its width after a reload");
+  await alice.click(".resize", { count: 2 });
+  await alice.waitForFunction(() => Math.abs(document.querySelector(".pane.sidebar").getBoundingClientRect().width - 260) <= 2);
   await alice.click("nav .note-row ::-p-text(Ideas)");
   await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("fly"));
   check(await alice.evaluate(() => document.querySelector("nav .row.selected .label")?.textContent === "Ideas"), "a sidebar note opens and takes the highlight from its folder");

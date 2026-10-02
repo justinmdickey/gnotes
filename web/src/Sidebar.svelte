@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { TreeNote, TreeNotebook } from "./lib/api";
+  import { untrack } from "svelte";
   import Icon, { type IconName } from "./lib/Icon.svelte";
   import Menu from "./lib/Menu.svelte";
   import NewNotebookDialog from "./NewNotebookDialog.svelte";
@@ -30,26 +31,67 @@
   const sharedRoots = $derived((byParent.get(null) ?? []).filter((n) => n.role !== "owner" && !hiddenShares.has(n.id)));
   const hasSharedNotes = $derived(app.tree.shared.some((s) => s.resource_type === "note" && !s.hidden));
 
-  /** Desktop: notebooks whose sub-notebooks are folded away. Remembered per browser. */
-  let collapsed = $state<Set<string>>(loadCollapsed());
-  function loadCollapsed() {
+  const ROOT = "@root";
+  const SHARED = "@shared";
+
+  /**
+   * Desktop: which folders show what's inside. Notebooks start folded; Notes and Shared with Me start
+   * open. `flipped` holds the folders that differ from that right now; only the ones you flipped by
+   * hand are remembered, per browser, so folders opened on the way to a note fold again next time.
+   */
+  let saved = loadFlipped();
+  let flipped = $state<Set<string>>(new Set(saved));
+  function loadFlipped() {
     try {
-      return new Set<string>(JSON.parse(localStorage.getItem("gnotes.collapsed") ?? "[]"));
+      return new Set<string>(JSON.parse(localStorage.getItem("gnotes.folds") ?? "[]"));
     } catch {
       return new Set<string>();
     }
   }
-  function toggle(id: string) {
-    const next = new Set(collapsed);
-    if (!next.delete(id)) next.add(id);
-    collapsed = next;
+  const startsOpen = (key: string) => key === ROOT || key === SHARED;
+  function folded(key: string) {
+    return startsOpen(key) === flipped.has(key);
+  }
+  function setFolded(keys: string[], fold: boolean) {
+    const change = keys.filter((k) => folded(k) !== fold);
+    if (!change.length) return;
+    const next = new Set(flipped);
+    for (const k of change) if (!next.delete(k)) next.add(k);
+    flipped = next;
+  }
+  function toggle(key: string) {
+    setFolded([key], !folded(key));
+    if (flipped.has(key)) saved.add(key);
+    else saved.delete(key);
     try {
-      localStorage.setItem("gnotes.collapsed", JSON.stringify([...next]));
+      localStorage.setItem("gnotes.folds", JSON.stringify([...saved]));
     } catch {}
   }
 
-  const ROOT = "@root";
-  const SHARED = "@shared";
+  // Going to a folder, or opening a note from anywhere, unfolds the way to it so its row is in view.
+  // It runs when you move, and once the tree first arrives; later tree changes leave your folds alone.
+  const loaded = $derived(app.tree.notebooks.length + app.tree.notes.length > 0);
+  $effect(() => {
+    const view = app.view;
+    const noteId = app.noteId;
+    if (!loaded) return;
+    untrack(() => {
+      const note = noteId ? app.tree.notes.find((n) => n.id === noteId) : undefined;
+      let id = view.kind === "notebook" ? view.id : (note?.notebook_id ?? null);
+      const keys: string[] = [];
+      let top: TreeNotebook | undefined;
+      while (id) {
+        const nb = app.tree.notebooks.find((n) => n.id === id);
+        if (!nb) break;
+        keys.push(nb.id);
+        top = nb;
+        id = nb.parent_id;
+      }
+      const owner = top?.role ?? note?.role;
+      if (owner) keys.push(owner === "owner" ? ROOT : SHARED);
+      setFolded(keys, false);
+    });
+  });
 
   /** A folder's own notes, A–Z so rows don't jump while you type. Desktop and tablet only. */
   function notesIn(view: View): TreeNote[] {
@@ -64,7 +106,7 @@
   const shownNotes = $derived.by(() => {
     const out = new Set<string>();
     const walk = (view: View, fold: string, kids: TreeNotebook[]) => {
-      if (collapsed.has(fold)) return;
+      if (folded(fold)) return;
       for (const n of notesIn(view)) out.add(n.id);
       for (const nb of kids) walk({ kind: "notebook", id: nb.id }, nb.id, byParent.get(nb.id) ?? []);
     };
@@ -104,7 +146,7 @@
     dropKey = key;
     clearTimeout(openTimer);
     // Hovering a folded notebook opens it, so a drag can reach the notebooks inside.
-    if (fold && collapsed.has(fold)) openTimer = setTimeout(() => collapsed.has(fold) && toggle(fold), 600);
+    if (fold && folded(fold)) openTimer = setTimeout(() => setFolded([fold], false), 600);
   }
 
   function dragLeave(e: DragEvent) {
@@ -184,9 +226,9 @@
     {#if fold}
       <button
         class="flat icon circular fold"
-        class:closed={collapsed.has(fold)}
-        aria-label="{collapsed.has(fold) ? 'Show' : 'Hide'} what's in {label}"
-        aria-expanded={!collapsed.has(fold)}
+        class:closed={folded(fold)}
+        aria-label="{folded(fold) ? 'Show' : 'Hide'} what's in {label}"
+        aria-expanded={!folded(fold)}
         onclick={() => toggle(fold)}
       >
         <Icon name="expand" size={14} />
@@ -223,7 +265,7 @@
   {@const kids = byParent.get(nb.id) ?? []}
   {@const notes = notesIn(view)}
   {@render row(view, "folder", nb.name, nb.role !== "owner" ? nb.owner : "", depth, kids.length || notes.length ? nb.id : null, nb.shared)}
-  {#if !collapsed.has(nb.id)}
+  {#if !folded(nb.id)}
     {#each kids as child (child.id)}
       {@render notebookRows(child, depth + 1)}
     {/each}
@@ -246,7 +288,7 @@
     <!-- The same places as the phone's tab bar: your folders, Recent, and what's shared with you. -->
     <ul class="group">
       {@render row({ kind: "root" }, "home", "Notes", "", 0, ownRoots.length || rootNotes.length ? ROOT : null)}
-      {#if !collapsed.has(ROOT)}
+      {#if !folded(ROOT)}
         {#each ownRoots as nb (nb.id)}
           {@render notebookRows(nb, 1)}
         {/each}
@@ -257,7 +299,7 @@
       {@render row({ kind: "all" }, "clock", "Recent")}
       {#if sharedRoots.length || hasSharedNotes}
         {@render row({ kind: "shared-notes" }, "people", "Shared with Me", "", 0, sharedRoots.length || sharedNotes.length ? SHARED : null)}
-        {#if !collapsed.has(SHARED)}
+        {#if !folded(SHARED)}
           {#each sharedRoots as nb (nb.id)}
             {@render notebookRows(nb, 1)}
           {/each}
