@@ -89,3 +89,7 @@ How it's built and why: [`docs/DESIGN.md`](docs/DESIGN.md).
 ## Status
 
 Early and used daily by a few people. Expect rough edges; there's no end-to-end encryption, so whoever runs the server can read its notes.
+
+## License
+
+MIT. See [`LICENSE`](LICENSE).
