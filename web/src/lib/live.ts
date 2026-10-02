@@ -51,7 +51,7 @@ export class LiveSession {
   private finished: (() => void) | null = null;
 
   private constructor(
-    private source: MediaStreamAudioSourceNode,
+    private source: AudioNode,
     private on: LiveHandlers,
   ) {
     const scheme = location.protocol === "https:" ? "wss" : "ws";
@@ -64,7 +64,7 @@ export class LiveSession {
   }
 
   /** Starts streaming `source` (an input of `ctx`). Resolves once audio is flowing to the server. */
-  static async start(ctx: AudioContext, source: MediaStreamAudioSourceNode, on: LiveHandlers): Promise<LiveSession> {
+  static async start(ctx: AudioContext, source: AudioNode, on: LiveHandlers): Promise<LiveSession> {
     const session = new LiveSession(source, on);
     const url = URL.createObjectURL(new Blob([WORKLET], { type: "text/javascript" }));
     try {

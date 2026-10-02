@@ -2,7 +2,8 @@
   import { onDestroy } from "svelte";
   import Icon from "./lib/Icon.svelte";
   import { LiveSession, type LiveHandlers } from "./lib/live";
-  import { bloom } from "./lib/ui.svelte";
+  import Menu, { type MenuItem } from "./lib/Menu.svelte";
+  import { bloom, media, toast } from "./lib/ui.svelte";
 
   /**
    * A small recording bar that floats over the note instead of covering it, so a live transcript can
@@ -23,13 +24,27 @@
   let liveState = $state<"connecting" | "on" | "off" | null>(null);
 
   let recorder: MediaRecorder | null = null;
-  let stream: MediaStream | null = null;
   let audioCtx: AudioContext | null = null;
+  /**
+   * Every input feeds this one node: the microphone, and meeting audio when it's added. The saved
+   * recording, the level bars and the live transcript all hear the mix, so inputs can change mid-way.
+   */
+  let mix: GainNode | null = null;
+  let mic: { stream: MediaStream; node: MediaStreamAudioSourceNode } | null = null;
+  let meeting = $state<{ stream: MediaStream; node: MediaStreamAudioSourceNode } | null>(null);
   let session: LiveSession | null = null;
   let chunks: Blob[] = [];
   let timer = 0;
   let frame = 0;
   let saving = false;
+
+  /** Audio inputs the browser lists; their names show once the microphone is allowed. */
+  let inputs = $state<MediaDeviceInfo[]>([]);
+  let inputId = $state("");
+  const MIC_KEY = "gnotes.mic";
+  // Sharing a tab's or the screen's audio: Chrome and Edge on desktop. Firefox shares video only.
+  const canShareAudio =
+    !media.phone && !!navigator.mediaDevices?.getDisplayMedia && "suppressLocalAudioPlayback" in (navigator.mediaDevices.getSupportedConstraints?.() ?? {});
 
   /** Opus in WebM where supported (Chrome, Firefox), AAC in MP4 on Safari. */
   function pickType() {
@@ -39,19 +54,103 @@
     return "";
   }
 
+  function savedInput() {
+    try {
+      return localStorage.getItem(MIC_KEY) ?? "";
+    } catch {
+      return "";
+    }
+  }
+
+  /** Opens a microphone and puts it into the mix in place of the last. */
+  async function useMic(deviceId: string, exact = false) {
+    // A remembered input is only preferred, so a missing one falls back to the default; a pick is required.
+    const want = deviceId ? { deviceId: exact ? { exact: deviceId } : { ideal: deviceId } } : {};
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: { ...want, echoCancellation: true, noiseSuppression: true } });
+    if (!audioCtx || !mix) return void stream.getTracks().forEach((t) => t.stop());
+    const node = audioCtx.createMediaStreamSource(stream);
+    node.connect(mix);
+    if (mic) {
+      mic.node.disconnect();
+      mic.stream.getTracks().forEach((t) => t.stop());
+    }
+    mic = { stream, node };
+    inputId = exact ? deviceId : (stream.getAudioTracks()[0]?.getSettings().deviceId ?? deviceId);
+    inputs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "audioinput" && d.deviceId);
+  }
+
+  async function chooseInput(deviceId: string) {
+    if (deviceId === inputId) return;
+    try {
+      await useMic(deviceId, true);
+      localStorage.setItem(MIC_KEY, deviceId);
+    } catch {
+      toast("Couldn't switch to that input");
+    }
+  }
+
+  /** Asks to share a tab or the screen and mixes its sound in, for the other side of a call. */
+  async function addMeeting() {
+    let stream: MediaStream;
+    try {
+      // Browsers only share audio along with a picture; the picture is dropped right away.
+      stream = await navigator.mediaDevices.getDisplayMedia({
+        video: true,
+        audio: { suppressLocalAudioPlayback: false },
+        systemAudio: "include",
+        selfBrowserSurface: "exclude",
+      } as DisplayMediaStreamOptions);
+    } catch {
+      return;
+    }
+    stream.getVideoTracks().forEach((t) => t.stop());
+    const track = stream.getAudioTracks()[0];
+    if (!track || !audioCtx || !mix) {
+      stream.getTracks().forEach((t) => t.stop());
+      return toast("That share has no sound. Pick a tab and turn on “Share tab audio”.");
+    }
+    const node = audioCtx.createMediaStreamSource(stream);
+    node.connect(mix);
+    meeting = { stream, node };
+    // The browser's own "Stop sharing" ends the track.
+    track.addEventListener("ended", stopMeeting);
+    toast("Meeting audio added. Use headphones so it isn't recorded twice.");
+  }
+
+  function stopMeeting() {
+    meeting?.node.disconnect();
+    meeting?.stream.getTracks().forEach((t) => t.stop());
+    meeting = null;
+  }
+
+  const inputItems: MenuItem[] = $derived([
+    ...inputs.map((d, i) => ({ label: d.label || `Input ${i + 1}`, checked: d.deviceId === inputId, onselect: () => chooseInput(d.deviceId) })),
+    ...(canShareAudio
+      ? [meeting
+          ? { label: "Stop Meeting Audio", icon: "people" as const, onselect: stopMeeting }
+          : { label: "Add Meeting Audio…", icon: "people" as const, onselect: () => void addMeeting() }]
+      : []),
+  ]);
+
   async function start() {
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
       phase = "unsupported";
       return;
     }
+    // Made first, while the tap that started recording still counts, so it's allowed to run.
+    audioCtx = new AudioContext();
+    mix = audioCtx.createGain();
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+      await useMic(savedInput());
     } catch {
       phase = "denied";
       return;
     }
+    void audioCtx.resume();
+    const out = audioCtx.createMediaStreamDestination();
+    mix.connect(out);
     const type = pickType();
-    recorder = new MediaRecorder(stream, type ? { mimeType: type } : undefined);
+    recorder = new MediaRecorder(out.stream, type ? { mimeType: type } : undefined);
     recorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
     recorder.onstop = finish;
     recorder.start(1000);
@@ -59,11 +158,9 @@
     const began = performance.now();
     timer = window.setInterval(() => (seconds = Math.floor((performance.now() - began) / 1000)), 250);
 
-    audioCtx = new AudioContext();
-    const source = audioCtx.createMediaStreamSource(stream);
     const analyser = audioCtx.createAnalyser();
     analyser.fftSize = 512;
-    source.connect(analyser);
+    mix.connect(analyser);
     const buf = new Uint8Array(analyser.fftSize);
     let last = 0;
     const tick = (t: number) => {
@@ -81,7 +178,7 @@
       liveState = "connecting";
       const handlers = live;
       try {
-        session = await LiveSession.start(audioCtx, source, {
+        session = await LiveSession.start(audioCtx, mix, {
           ondelta: (text) => ((liveState = "on"), handlers.ondelta(text)),
           onfinal: (text) => ((liveState = "on"), handlers.onfinal(text)),
           onerror: (message) => ((liveState = "off"), handlers.onerror(message)),
@@ -116,10 +213,12 @@
     clearInterval(timer);
     cancelAnimationFrame(frame);
     session?.close();
-    stream?.getTracks().forEach((t) => t.stop());
+    stopMeeting();
+    mic?.stream.getTracks().forEach((t) => t.stop());
     void audioCtx?.close();
     session = null;
-    stream = null;
+    mic = null;
+    mix = null;
     audioCtx = null;
   }
 
@@ -148,10 +247,16 @@
         <span style:transform="scaleY({0.12 + l * 0.88})"></span>
       {/each}
     </span>
+    {#if meeting}<span class="tag on" title="Sound from the shared tab or screen is mixed in">Meeting</span>{/if}
     {#if liveState}
       <span class="tag" class:on={liveState === "on"} title={liveState === "off" ? "Live transcript stopped; it will be transcribed when saved" : "Words appear in the note as you speak"}>
         {liveState === "off" ? "Not live" : "Live"}
       </span>
+    {/if}
+    {#if inputItems.length > 1 || canShareAudio}
+      <Menu label="Audio input" class="flat icon circular input" items={inputItems}>
+        {#snippet trigger()}<Icon name="mic" />{/snippet}
+      </Menu>
     {/if}
     <button class="flat icon circular" aria-label="Discard recording" title="Discard" disabled={phase === "stopping"} onclick={() => stop(false)}>
       <Icon name="close" />

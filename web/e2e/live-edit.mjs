@@ -548,6 +548,25 @@ try {
   await alice.waitForFunction(() => document.querySelector(".cm-content").innerText.includes("remember the"), { timeout: 8000 });
   check(await alice.evaluate(() => document.querySelector(".recorder .tag.on")?.textContent.trim() === "Live"), "the live transcript writes into the note while recording");
   if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-recording-live.png") });
+  // The bar's input menu lists the browser's inputs and offers meeting audio; a pick is remembered.
+  await alice.click(".recorder button[aria-label='Audio input']");
+  await alice.waitForSelector(".popover [role=menuitemradio]");
+  const inputs = await alice.$$eval(".popover [role=menuitemradio]", (els) => els.map((e) => [e.textContent.trim(), e.getAttribute("aria-checked")]));
+  const meetingOffered = await alice.evaluate(() => [...document.querySelectorAll(".popover [role=menuitem]")].some((e) => e.textContent.includes("Add Meeting Audio")));
+  if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-recording-inputs.png") });
+  check(inputs.length >= 2 && inputs.filter(([, on]) => on === "true").length === 1 && meetingOffered, `the input menu lists inputs with one checked, and meeting audio (${JSON.stringify(inputs)})`);
+  const other = inputs.find(([, on]) => on !== "true")[0];
+  const pick = await alice.evaluateHandle((label) => [...document.querySelectorAll(".popover [role=menuitemradio]")].find((e) => e.textContent.trim() === label), other);
+  await pick.click();
+  await alice.waitForFunction(() => !!localStorage.getItem("gnotes.mic") && !document.querySelector(".popover"));
+  await alice.click(".recorder button[aria-label='Audio input']");
+  await alice.waitForSelector(".popover [role=menuitemradio]");
+  check(
+    await alice.evaluate((label) => [...document.querySelectorAll(".popover [role=menuitemradio]")].find((e) => e.getAttribute("aria-checked") === "true")?.textContent.trim() === label, other),
+    "switching input mid-recording takes effect and is remembered",
+  );
+  await alice.keyboard.press("Escape");
+  await alice.waitForFunction(() => !document.querySelector(".popover"));
   await alice.click(".recorder .stop");
   await alice.waitForSelector(".cm-audio", { timeout: 5000 });
   await alice.waitForFunction(() => document.querySelector(".cm-content").innerText.includes("Remember the milk and the eggs."), { timeout: 5000 });
