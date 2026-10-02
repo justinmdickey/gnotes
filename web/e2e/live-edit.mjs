@@ -312,7 +312,13 @@ try {
   if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-two-pane-folder.png") });
   await alice.click("nav .row ::-p-text(Recent)");
   await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Recent");
-  check(JSON.stringify(await panes()) === '["list","editor"]', "Recent keeps its list beside the note");
+  check(JSON.stringify(await panes()) === '["list"]', "Recent fills the main pane like a folder");
+  if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-two-pane-recent.png") });
+  await alice.click(".pane.list .note ::-p-text(Ideas)");
+  await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("fly"));
+  check(JSON.stringify(await panes()) === '["editor"]', "a note opened from Recent covers it");
+  await alice.click(".pane.editor header button[aria-label='Back to Recent']");
+  await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Recent" && !location.hash.includes("/note/"));
   await alice.click("nav .row ::-p-text(Vault)");
   await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Vault");
 
@@ -481,7 +487,7 @@ try {
 
   // A note that starts with a photo offers a title line above it, and styles leave embeds alone.
   await closed(alice);
-  await alice.click(".list header button[aria-label='New note']");
+  await alice.click(".pane.editor header button[aria-label='New note']");
   await alice.waitForFunction(() => document.querySelector(".editor .headerbar .title strong")?.textContent === "New Note");
   await alice.waitForSelector(".cm-content[contenteditable=true]");
   const photoId = await alice.evaluate(async () => {

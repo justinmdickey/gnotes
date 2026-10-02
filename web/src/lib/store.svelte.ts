@@ -31,12 +31,9 @@ export const app = $state({
   signedOutReason: "" as string,
 });
 
-/**
- * Wide screens in a folder use two panes: the sidebar tree, and either the folder's page or the open
- * note. Recent and Shared keep their list beside the note, since the date order is the point there.
- */
-export function twoPane(view: View = app.view): boolean {
-  return media.wide && (view.kind === "root" || view.kind === "notebook");
+/** Wide screens use two panes: the sidebar tree, and either the current page (a folder, Recent, Shared) or the open note. */
+export function twoPane(): boolean {
+  return media.wide;
 }
 
 export function viewTitle(view: View, tree: Tree): string {
