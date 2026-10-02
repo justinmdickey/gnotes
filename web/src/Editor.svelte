@@ -1119,9 +1119,21 @@
     color: var(--dim-fg);
   }
 
+  /* Bullets and checkboxes (with the space after them) are --marker wide, so wrapped lines hang there. */
+  .page :global(.cm-item) {
+    --marker: 1.4em;
+    padding-left: var(--marker);
+    text-indent: calc(-1 * var(--marker));
+  }
+
+  .page :global(.cm-item:has(.cm-checkbox)) {
+    --marker: 1.75em;
+  }
+
   .page :global(.cm-bullet) {
     display: inline-block;
-    width: 1.1em;
+    width: 1.4em;
+    text-indent: 0;
     color: var(--dim-fg);
   }
 
@@ -1129,7 +1141,7 @@
     display: inline-block;
     width: 1.15em;
     height: 1.15em;
-    margin-right: 0.45em;
+    margin-right: 0.6em;
     vertical-align: -0.2em;
     border: 1.5px solid var(--dim-fg);
     border-radius: 50%;

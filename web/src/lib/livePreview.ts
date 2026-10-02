@@ -303,6 +303,8 @@ const headingLines = [1, 2, 3, 4, 5, 6].map((n) => lineClass(`cm-h${Math.min(n, 
 const quoteLine = lineClass("cm-quote");
 const doneText = Decoration.mark({ class: "cm-task-done" });
 const embedLine = lineClass("cm-embed-line");
+// List items whose wrapped lines hang under the text rather than under the bullet.
+const itemLine = lineClass("cm-item");
 
 /** Line numbers touched by the selection. Their marks stay visible so they can be edited. */
 function activeLines(view: EditorView): Set<number> {
@@ -389,14 +391,17 @@ function build(view: EditorView): { decorations: DecorationSet; atomic: Decorati
           case "ListMark": {
             const item = node.node.parent;
             if (item?.parent?.name !== "BulletList") break;
+            // The marker's space goes with it, so the text starts a fixed width in and wrapped lines
+            // can hang under it. Nested items keep their leading spaces, so only top-level ones hang.
+            if (lineAt(node.from).from === node.from) decos.push(itemLine.range(node.from));
             if (item.getChild("Task")) decos.push(hidden.range(node.from, withSpace(state, node.to)));
-            else decos.push(bullet.range(node.from, node.to));
+            else decos.push(bullet.range(node.from, withSpace(state, node.to)));
             break;
           }
           case "TaskMarker": {
             const checked = /x/i.test(state.sliceDoc(node.from, node.to));
-            decos.push(Decoration.replace({ widget: new CheckboxWidget(checked, node.from) }).range(node.from, node.to));
             const textFrom = withSpace(state, node.to);
+            decos.push(Decoration.replace({ widget: new CheckboxWidget(checked, node.from) }).range(node.from, textFrom));
             const lineEnd = lineAt(node.from).to;
             if (checked && lineEnd > textFrom) decos.push(doneText.range(textFrom, lineEnd));
             break;
