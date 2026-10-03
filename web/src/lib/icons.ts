@@ -47,6 +47,8 @@ const stroked = {
   image: "M2.5 3.5h11v9h-11zM2.5 10.5l3-3 3 3 2-2 3 3M10.5 6.5h.01",
   // Have AI make something, like a note's summary.
   sparkle: "M8 2.5c.4 2.9 2.6 5.1 5.5 5.5-2.9.4-5.1 2.6-5.5 5.5-.4-2.9-2.6-5.1-5.5-5.5 2.9-.4 5.1-2.6 5.5-5.5z",
+  // Fold every folder: two chevrons pointing in.
+  collapse: "M5 3l3 3 3-3M5 13l3-3 3 3",
   // Drag to move, beside a block in a note.
   grip: "M5.6 4h.8M9.6 4h.8M5.6 8h.8M9.6 8h.8M5.6 12h.8M9.6 12h.8",
   // Hide the on-screen keyboard.

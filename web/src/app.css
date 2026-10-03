@@ -32,6 +32,12 @@
   --warning-bg: #e5a50a;
   /* The shared badge: Adwaita yellow, so shared things stand out from blue actions. */
   --shared: #e5a50a;
+  /* Sidebar level lines, one color per depth, from the Adwaita palette. */
+  --guide-1: #3584e4;
+  --guide-2: #2ec27e;
+  --guide-3: #e5a50a;
+  --guide-4: #e66100;
+  --guide-5: #9141ac;
   /* Code blocks: their tint and syntax colors, from the Adwaita palette. */
   --code-bg: rgb(0 0 6 / 5%);
   --code-keyword: #813d9c;
@@ -94,6 +100,11 @@
     --warning: #ffc252;
     --warning-bg: #cd9309;
     --shared: #f6d32d;
+    --guide-1: #62a0ea;
+    --guide-2: #57e389;
+    --guide-3: #f8e45c;
+    --guide-4: #ffa348;
+    --guide-5: #c061cb;
     --code-bg: rgb(255 255 255 / 6%);
     --code-keyword: #dc8add;
     --code-string: #8ff0a4;

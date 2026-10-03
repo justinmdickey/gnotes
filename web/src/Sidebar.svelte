@@ -68,6 +68,18 @@
     } catch {}
   }
 
+  /** Notebooks showing what's inside, so the headings know whether Collapse All has anything to do. */
+  const openNotebooks = $derived(app.tree.notebooks.filter((nb) => !folded(nb.id)).map((nb) => nb.id));
+  /** Folds every notebook under a heading, leaving the headings themselves open. */
+  function collapseAll(owned: boolean) {
+    const ids = app.tree.notebooks.filter((nb) => (nb.role === "owner") === owned).map((nb) => nb.id);
+    setFolded(ids, true);
+    for (const id of ids) saved.delete(id);
+    try {
+      localStorage.setItem("gnotes.folds", JSON.stringify([...saved]));
+    } catch {}
+  }
+
   // Going to a folder, or opening a note from anywhere, unfolds the way to it so its row is in view.
   // It runs when you move, and once the tree first arrives; later tree changes leave your folds alone.
   const loaded = $derived(app.tree.notebooks.length + app.tree.notes.length > 0);
@@ -202,6 +214,7 @@
       }}
       ondragend={endDrag}
     >
+      {@render guides(depth)}
       {#if !heading}<Icon name={icon} />{/if}
       <span class="label">{label}</span>
       {#if shared}<span class="shared-badge" title="Shared"><Icon name="person" size={14} /></span>{/if}
@@ -224,6 +237,11 @@
         </Menu>
       </span>
     {/if}
+    {#if heading && openNotebooks.some((id) => app.tree.notebooks.find((n) => n.id === id && (n.role === "owner") === (view.kind === "root")))}
+      <button class="flat icon circular collapse" title="Collapse All" aria-label="Collapse all in {label}" onclick={() => collapseAll(view.kind === "root")}>
+        <Icon name="collapse" size={14} />
+      </button>
+    {/if}
     {#if fold}
       <button
         class="flat icon circular fold"
@@ -236,6 +254,13 @@
       </button>
     {/if}
   </li>
+{/snippet}
+
+<!-- One colored line per level above a row, under each parent's icon, so deep folders read at a glance. -->
+{#snippet guides(depth: number)}
+  {#each { length: depth } as _, i (i)}
+    <span class="guide" style:--i={i} style:--guide="var(--guide-{(i % 5) + 1})"></span>
+  {/each}
 {/snippet}
 
 {#snippet noteRow(note: TreeNote, folder: View, depth: number)}
@@ -253,6 +278,7 @@
       }}
       ondragend={endDrag}
     >
+      {@render guides(depth)}
       <Icon name="note" />
       <span class="label">{note.title || "New Note"}</span>
       {#if note.shared}<span class="shared-badge" title="Shared"><Icon name="person" size={14} /></span>{/if}
@@ -363,6 +389,7 @@
   }
 
   .row {
+    position: relative;
     width: 100%;
     justify-content: flex-start;
     gap: 12px;
@@ -455,6 +482,32 @@
   .heading .row.selected {
     background: transparent;
     color: var(--accent);
+  }
+
+  .collapse {
+    position: absolute;
+    top: 50%;
+    right: 34px;
+    min-width: 24px;
+    min-height: 24px;
+    translate: 0 -50%;
+    color: var(--dim-fg);
+  }
+
+  .heading:has(.collapse) .adder {
+    right: 62px;
+  }
+
+  .guide {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: calc(19px + var(--i) * 18px);
+    width: 1.5px;
+    border-radius: 1px;
+    background: var(--guide);
+    opacity: 0.6;
+    pointer-events: none;
   }
 
   .heading .fold,

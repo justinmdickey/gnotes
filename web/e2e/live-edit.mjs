@@ -604,6 +604,12 @@ try {
   await dragTo(alice, "nav li:has(button[aria-label='New in Vault']) .row", "nav li:has(button[aria-label='New in Trips']) .row");
   await new Promise((r) => setTimeout(r, 400));
   check((await tree()).notebooks.find((n) => n.name === "Vault").parent_id === null, "a notebook can't be dropped inside itself");
+  // Nested rows carry a colored line per level, and Collapse All folds every notebook under the heading.
+  check(await alice.evaluate(() => [...document.querySelectorAll("nav .row")].find((r) => r.textContent.trim() === "Lisbon")?.querySelectorAll(".guide").length === 2), "a row two levels down shows two level lines");
+  if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-sidebar-guides.png") });
+  await alice.click("nav button[aria-label='Collapse all in Notes']");
+  await alice.waitForFunction(() => ![...document.querySelectorAll("nav .row .guide")].length);
+  check(await alice.evaluate(() => !document.querySelector("nav button[aria-label='Collapse all in Notes']")), "Collapse All folds every notebook, then steps aside");
   await alice.evaluate((hash) => (location.hash = hash), beforeImport);
   await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("bread"));
 
