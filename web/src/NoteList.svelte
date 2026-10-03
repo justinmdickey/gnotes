@@ -313,6 +313,18 @@
       {/if}
     {/each}
     {/key}
+    {#if media.phone && app.view.kind === "root" && !q}
+      <!-- Last, where the desktop sidebar keeps it too. -->
+      <ul class="boxed-list trash-link">
+        <li>
+          <button class="flat place-row" onclick={() => navigate({ kind: "trash" })}>
+            <Icon name="trash" />
+            <span class="name">Trash</span>
+            <span class="dim chev"><Icon name="next" /></span>
+          </button>
+        </li>
+      </ul>
+    {/if}
   </div>
 
 </section>
@@ -582,6 +594,42 @@
 
   form input {
     width: 100%;
+  }
+
+  /* Trash at the bottom of Notes on phones: a row like a notebook's, in a plain color since it isn't one. */
+  .trash-link {
+    margin-top: 20px;
+  }
+
+  .place-row {
+    width: 100%;
+    justify-content: flex-start;
+    gap: 12px;
+    min-height: 56px;
+    padding: 0 14px 0 16px;
+    border-radius: 0;
+    font-size: var(--text-lg);
+    font-weight: 500;
+    text-align: left;
+  }
+
+  .place-row:active:not(:disabled) {
+    transform: none;
+  }
+
+  .place-row > :global(svg:first-child) {
+    flex: none;
+    width: var(--icon-touch);
+    height: var(--icon-touch);
+    color: var(--dim-fg);
+  }
+
+  .place-row .name {
+    flex: 1;
+  }
+
+  .place-row .chev {
+    display: flex;
   }
 
   @media (max-width: 700px) {

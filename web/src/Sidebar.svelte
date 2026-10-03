@@ -312,16 +312,10 @@
   </header>
 
   <div class="scroll" use:scrollEdge>
-    <!-- The same places as the phone's tab bar: Recent and Trash, then your folders and what's shared with
-         you under headings, so the tree starts at the left edge. -->
+    <!-- The same places as the phone's tab bar: Recent, then your folders and what's shared with
+         you under headings, so the tree starts at the left edge. Trash comes last. -->
     <ul class="group">
       {@render row({ kind: "all" }, "clock", "Recent")}
-      <li>
-        <button class="row flat" class:selected={app.view.kind === "trash"} onclick={() => navigate({ kind: "trash" })}>
-          <Icon name="trash" />
-          <span class="label">Trash</span>
-        </button>
-      </li>
     </ul>
     <ul class="group section">
       {@render row({ kind: "root" }, "home", "Notes", "", 0, ownRoots.length || rootNotes.length ? ROOT : null, false, true)}
@@ -347,6 +341,14 @@
         {/if}
       </ul>
     {/if}
+    <ul class="group section">
+      <li>
+        <button class="row flat" class:selected={app.view.kind === "trash"} onclick={() => navigate({ kind: "trash" })}>
+          <Icon name="trash" />
+          <span class="label">Trash</span>
+        </button>
+      </li>
+    </ul>
   </div>
 
   <footer class="dim" title={app.status === "online" ? "Changes sync live" : "Changes will sync when the server is back"}>

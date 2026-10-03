@@ -70,7 +70,7 @@
     let speed = 0;
     const start = (e: TouchEvent) => {
       const t = e.touches[0];
-      const canGoBack = app.noteId !== null || parentView(app.view) !== null || app.view.kind === "trash";
+      const canGoBack = app.noteId !== null || parentView(app.view) !== null;
       tracking = media.phone && canGoBack && !app.settings && e.touches.length === 1 && t.clientX < 28;
       startX = lastX = t.clientX;
       startY = t.clientY;

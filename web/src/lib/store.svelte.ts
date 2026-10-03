@@ -190,12 +190,6 @@ export function goBack() {
     if (history.state?.from !== undefined) return history.back();
     return navigate(null, null, true);
   }
-  // Phones reach Trash from the Account tab, so that's where back goes.
-  if (app.view.kind === "trash" && !app.noteId && media.phone) {
-    if (history.state?.from === "#/settings") return history.back();
-    app.settings = true;
-    return history.replaceState(history.state, "", "#/settings");
-  }
   const parent = app.noteId ? app.view : parentView(app.view);
   // The top folder, Recent and Shared are tabs; there's nothing above them.
   if (!app.noteId && !parent) return;
@@ -205,6 +199,8 @@ export function goBack() {
 
 /** The screen above a note list: a notebook's parent notebook or the top folder, or nothing for tabs. */
 export function parentView(view: View): View | null {
+  // Trash sits at the bottom of the top folder.
+  if (view.kind === "trash") return { kind: "root" };
   if (view.kind !== "notebook") return null;
   const nb = app.tree.notebooks.find((n) => n.id === view.id);
   if (nb?.parent_id && app.tree.notebooks.some((n) => n.id === nb.parent_id)) return { kind: "notebook", id: nb.parent_id };

@@ -535,6 +535,7 @@ try {
   const rows = await sidebar();
   const at = (name) => rows.indexOf(name);
   check(at("Vault") < at("Trips") && at("Trips") < at("Camping") && at("Camping") < at("Ideas") && at("Lisbon") === -1, `sidebar shows folders, then notes, with sub-folders folded (${rows})`);
+  check(rows[0] === "Recent" && rows.at(-1) === "Trash", "the sidebar starts with Recent and ends with Trash, after the folders");
   await alice.click("nav button[aria-label=\"Show what's in Trips\"]");
   await alice.waitForFunction(() => [...document.querySelectorAll("nav .note-row .label")].some((l) => l.textContent === "Lisbon"));
   check(true, "unfolding a notebook shows its notes");
@@ -1161,17 +1162,21 @@ try {
     await alice.waitForFunction(() => document.querySelector(".tab-page h1")?.textContent === "Account");
     check(await alice.evaluate(() => !!document.querySelector(".tabbar .tab.on") && !document.querySelector(".tab-page .back")), "Account opens as a tab with the tab bar still there");
     await shot("phone-account-dark");
-    // Trash opens from Account, keeps the Account tab lit, and Back returns there.
-    await alice.evaluate(() => [...document.querySelectorAll(".tab-page li")].find((li) => li.textContent.includes("Trash")).querySelector("button").click());
-    await alice.waitForFunction(() => !document.querySelector(".tab-page") && document.querySelector(".pane.list .hero h1")?.textContent === "Trash");
-    check(await alice.evaluate(() => document.querySelector(".tabbar .tab.on")?.textContent.includes("Account")), "Trash opens from the Account tab");
-    await shot("phone-trash-dark");
-    await alice.click(".pane.list .back-icon");
-    await alice.waitForFunction(() => document.querySelector(".tab-page h1")?.textContent === "Account");
-    check(true, "Back from Trash returns to Account");
+    check(await alice.evaluate(() => ![...document.querySelectorAll(".tab-page li")].some((li) => li.textContent.includes("Trash"))), "Account no longer has a Trash entry");
     await alice.evaluate(() => [...document.querySelectorAll(".tabbar button")].find((b) => b.textContent.includes("Recent")).click());
     await alice.waitForFunction(() => !document.querySelector(".tab-page") && document.querySelector(".hero h1")?.textContent === "Recent");
     check(true, "another tab leaves Account");
+    // Trash is the last row of the Notes tab, as on the desktop sidebar; it keeps Notes lit and Back returns there.
+    await alice.evaluate(() => [...document.querySelectorAll(".tabbar button")].find((b) => b.textContent.includes("Notes")).click());
+    await alice.waitForFunction(() => document.querySelector(".pane.list .hero h1")?.textContent === "Notes");
+    check(await alice.evaluate(() => document.querySelector(".pane.list .scroll > :last-child")?.textContent.trim() === "Trash"), "Trash is the last row on the phone's Notes screen");
+    await alice.click(".pane.list .trash-link button");
+    await alice.waitForFunction(() => document.querySelector(".pane.list .hero h1")?.textContent === "Trash");
+    check(await alice.evaluate(() => document.querySelector(".tabbar .tab.on")?.textContent.includes("Notes")), "Trash opens from the Notes tab and keeps it lit");
+    await shot("phone-trash-dark");
+    await alice.click(".pane.list .back-icon");
+    await alice.waitForFunction(() => document.querySelector(".pane.list .hero h1")?.textContent === "Notes" && location.hash === "#/");
+    check(true, "Back from Trash returns to Notes");
 
     // ---- Tables and kanban boards on a phone ----
     await alice.evaluate((id) => (location.hash = `#/all/note/${id}`), plansId);

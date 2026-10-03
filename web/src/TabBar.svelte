@@ -2,9 +2,9 @@
   import Icon, { type IconName } from "./lib/Icon.svelte";
   import { app, colorFor, composeNote, navigate, openSettings, type View } from "./lib/store.svelte";
 
-  /** Which tab the current screen belongs to. Shared notebooks count as Shared, wherever you are in them. */
+  /** Which tab the current screen belongs to. Shared notebooks count as Shared, wherever you are in them; Trash is in Notes. */
   const active = $derived.by(() => {
-    if (app.settings || app.view.kind === "trash") return "account";
+    if (app.settings) return "account";
     const v = app.view;
     if (v.kind === "all") return "recent";
     if (v.kind === "shared-notes") return "shared";

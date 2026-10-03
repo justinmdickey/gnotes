@@ -4,7 +4,7 @@
   import Icon from "./lib/Icon.svelte";
   import Menu from "./lib/Menu.svelte";
   import ServiceForm from "./ServiceForm.svelte";
-  import { app, colorFor, endSession, goBack, importable, importNotes, navigate } from "./lib/store.svelte";
+  import { app, colorFor, endSession, goBack, importable, importNotes } from "./lib/store.svelte";
   import { ask, scrollEdge, toast } from "./lib/ui.svelte";
 
   /** Shown as the phone's Account tab rather than a full screen with Back. */
@@ -178,10 +178,6 @@
               if (files.length) void importNotes(files);
             }}
           />
-        </li>
-        <li>
-          <span class="label">Trash<span class="dim sub">Restore deleted notes and notebooks</span></span>
-          <button onclick={() => navigate({ kind: "trash" })}>Open</button>
         </li>
       </ul>
 

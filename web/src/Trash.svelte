@@ -101,8 +101,8 @@
     <button class="flat icon tablet-only" title="Show notebooks" aria-label="Show notebooks" onclick={() => (app.drawer = true)}>
       <Icon name="sidebar" />
     </button>
-    <!-- Phones come here from the Account tab. -->
-    <button class="flat icon circular back-icon phone-only" title="Back to Account" aria-label="Back to Account" onclick={goBack}>
+    <!-- Phones come here from the bottom of Notes. -->
+    <button class="flat icon circular back-icon phone-only" title="Back to Notes" aria-label="Back to Notes" onclick={goBack}>
       <Icon name="back" />
     </button>
     <div class="title" class:shown={compact} aria-hidden={!compact}>
