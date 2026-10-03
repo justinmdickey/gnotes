@@ -6,6 +6,8 @@ import { EditorSelection } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import { setBlock, type Block } from "./format";
 import { iconSvg, type IconName } from "./icons";
+import { insertBoard } from "./kanban";
+import { insertTable } from "./tables";
 
 interface SlashItem extends Completion {
   icon: IconName;
@@ -57,6 +59,8 @@ function items(actions: SlashActions): SlashItem[] {
     { label: "Numbered List", icon: "numbers", apply: block("number"), section: TEXT },
     { label: "Quote", icon: "quote", apply: block("quote"), section: TEXT },
     { label: "Code Block", icon: "code", apply: pick(codeBlock), section: ADD },
+    { label: "Table", icon: "table", apply: pick(insertTable), section: ADD },
+    { label: "Board", icon: "board", apply: pick(insertBoard), section: ADD },
     { label: "Photo", icon: "camera", apply: pick(actions.photo), section: ADD },
     { label: "Voice Memo", icon: "mic", apply: pick(actions.record), section: ADD },
   ];

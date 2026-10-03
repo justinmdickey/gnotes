@@ -678,6 +678,20 @@ try {
   await new Promise((r) => setTimeout(r, 300));
   check(!(await alice.$(".cm-slash")), "a slash inside code is just a slash");
   for (let i = 0; i < 2; i++) await alice.keyboard.press("Backspace");
+  for (const [word, widget] of [["table", ".cm-table-widget"], ["board", ".cm-kanban-widget"]]) {
+    // Back into the note's text from wherever the last insert left the cursor.
+    await alice.evaluate(() => document.activeElement?.blur());
+    await (await alice.evaluateHandle(() => [...document.querySelectorAll(".cm-line")].find((l) => l.textContent === "end"))).click();
+    await alice.keyboard.down("Control");
+    await alice.keyboard.press("End");
+    await alice.keyboard.up("Control");
+    await alice.keyboard.type(`\n/${word}`);
+    await alice.waitForFunction((w) => document.querySelector(".cm-slash li[aria-selected]")?.textContent.toLowerCase() === w, {}, word);
+    await new Promise((r) => setTimeout(r, 150));
+    await alice.keyboard.press("Enter");
+    await alice.waitForSelector(widget, { timeout: 5000 });
+  }
+  check(true, "the slash menu adds a table and a board");
   // Pointing at a block shows a grip beside it; dragging the grip moves the block, nested items and all.
   await alice.keyboard.down("Control");
   await alice.keyboard.press("End");

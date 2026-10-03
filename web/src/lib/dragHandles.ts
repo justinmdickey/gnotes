@@ -16,9 +16,10 @@ interface Block {
 
 const indentOf = (text: string) => text.match(/^\s*/)![0].length;
 
+/** A code block, board or table around a position: these move whole. */
 function fencedAt(state: EditorState, pos: number): Block | null {
   for (let node: { name: string; from: number; to: number; parent: unknown } | null = syntaxTree(state).resolveInner(pos, 1); node; node = node.parent as typeof node) {
-    if (node.name === "FencedCode") return { first: state.doc.lineAt(node.from).number, last: state.doc.lineAt(node.to).number };
+    if (node.name === "FencedCode" || node.name === "Table") return { first: state.doc.lineAt(node.from).number, last: state.doc.lineAt(node.to).number };
   }
   return null;
 }
