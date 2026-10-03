@@ -533,8 +533,8 @@
   }
 
   .dot.online {
-    background: var(--success);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 20%, transparent);
+    background: var(--success-bg);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--success-bg) 20%, transparent);
   }
 
   .dot.connecting {
@@ -542,7 +542,7 @@
   }
 
   .dot.offline {
-    background: var(--warning);
+    background: var(--warning-bg);
   }
 
   @keyframes pulse {

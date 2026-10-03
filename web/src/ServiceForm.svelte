@@ -224,7 +224,7 @@
   }
 
   .status .dot.on {
-    background: var(--success);
+    background: var(--success-bg);
   }
 
   @media (max-width: 700px) {
