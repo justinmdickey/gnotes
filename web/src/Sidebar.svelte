@@ -175,12 +175,13 @@
   let newNotebookIn = $state<string | null | undefined>(undefined);
 </script>
 
-{#snippet row(view: View, icon: IconName, label: string, owner = "", depth = 0, fold: string | null = null, shared = false)}
+{#snippet row(view: View, icon: IconName, label: string, owner = "", depth = 0, fold: string | null = null, shared = false, heading = false)}
   {@const canAdd = addable(view)}
   {@const movable = view.kind === "notebook" && !media.phone && app.tree.notebooks.find((n) => n.id === (view as { id: string }).id)?.role !== "viewer"}
   <li
     class:foldable={fold}
     class:addable={canAdd}
+    class:heading
     class:drop={dropKey !== null && dropInto(view) !== undefined && dropKey === (dropInto(view) ?? ROOT)}
     ondragover={(e) => dragOver(e, view, fold)}
     ondragleave={dragLeave}
@@ -201,11 +202,11 @@
       }}
       ondragend={endDrag}
     >
-      <Icon name={icon} />
+      {#if !heading}<Icon name={icon} />{/if}
       <span class="label">{label}</span>
       {#if shared}<span class="shared-badge" title="Shared"><Icon name="person" size={14} /></span>{/if}
       {#if owner}<span class="dim owner">{owner}</span>{/if}
-      <span class="count">{count(view)}</span>
+      {#if !heading}<span class="count">{count(view)}</span>{/if}
       <span class="chevron phone-only"><Icon name="next" /></span>
     </button>
     {#if canAdd}
@@ -285,29 +286,10 @@
   </header>
 
   <div class="scroll" use:scrollEdge>
-    <!-- The same places as the phone's tab bar: your folders, Recent, and what's shared with you. -->
+    <!-- The same places as the phone's tab bar: Recent and Trash, then your folders and what's shared with
+         you under headings, so the tree starts at the left edge. -->
     <ul class="group">
-      {@render row({ kind: "root" }, "home", "Notes", "", 0, ownRoots.length || rootNotes.length ? ROOT : null)}
-      {#if !folded(ROOT)}
-        {#each ownRoots as nb (nb.id)}
-          {@render notebookRows(nb, 1)}
-        {/each}
-        {#each rootNotes as note (note.id)}
-          {@render noteRow(note, { kind: "root" }, 1)}
-        {/each}
-      {/if}
       {@render row({ kind: "all" }, "clock", "Recent")}
-      {#if sharedRoots.length || hasSharedNotes}
-        {@render row({ kind: "shared-notes" }, "people", "Shared with Me", "", 0, sharedRoots.length || sharedNotes.length ? SHARED : null)}
-        {#if !folded(SHARED)}
-          {#each sharedRoots as nb (nb.id)}
-            {@render notebookRows(nb, 1)}
-          {/each}
-          {#each sharedNotes as note (note.id)}
-            {@render noteRow(note, { kind: "shared-notes" }, 1)}
-          {/each}
-        {/if}
-      {/if}
       <li>
         <button class="row flat" class:selected={app.view.kind === "trash"} onclick={() => navigate({ kind: "trash" })}>
           <Icon name="trash" />
@@ -315,6 +297,30 @@
         </button>
       </li>
     </ul>
+    <ul class="group section">
+      {@render row({ kind: "root" }, "home", "Notes", "", 0, ownRoots.length || rootNotes.length ? ROOT : null, false, true)}
+      {#if !folded(ROOT)}
+        {#each ownRoots as nb (nb.id)}
+          {@render notebookRows(nb, 0)}
+        {/each}
+        {#each rootNotes as note (note.id)}
+          {@render noteRow(note, { kind: "root" }, 0)}
+        {/each}
+      {/if}
+    </ul>
+    {#if sharedRoots.length || hasSharedNotes}
+      <ul class="group section">
+        {@render row({ kind: "shared-notes" }, "people", "Shared with Me", "", 0, sharedRoots.length || sharedNotes.length ? SHARED : null, false, true)}
+        {#if !folded(SHARED)}
+          {#each sharedRoots as nb (nb.id)}
+            {@render notebookRows(nb, 0)}
+          {/each}
+          {#each sharedNotes as note (note.id)}
+            {@render noteRow(note, { kind: "shared-notes" }, 0)}
+          {/each}
+        {/if}
+      </ul>
+    {/if}
   </div>
 
   <footer class="dim" title={app.status === "online" ? "Changes sync live" : "Changes will sync when the server is back"}>
@@ -434,6 +440,29 @@
     rotate: -90deg;
   }
 
+  /* Notes and Shared with Me: small headings over their folders, still a place you can open and drop on. */
+  .section {
+    margin-top: 14px;
+  }
+
+  .heading .row {
+    min-height: 30px;
+    color: var(--dim-fg);
+    font-size: var(--text-sm);
+    font-weight: 700;
+  }
+
+  .heading .row.selected {
+    background: transparent;
+    color: var(--accent);
+  }
+
+  .heading .fold,
+  .heading .adder :global(button) {
+    min-width: 24px;
+    min-height: 24px;
+  }
+
   .row:active:not(:disabled) {
     transform: none;
   }
@@ -448,8 +477,10 @@
     font-weight: 400;
   }
 
+  /* Icons let drags through to their row: a drop that lands on an icon never fires otherwise. */
   .row :global(svg) {
     color: var(--dim-fg);
+    pointer-events: none;
   }
 
   .row .shared-badge :global(svg) {
