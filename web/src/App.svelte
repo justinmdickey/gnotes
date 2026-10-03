@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { fade } from "svelte/transition";
+  import { fade, slide } from "svelte/transition";
   import { api } from "./lib/api";
+  import { cachedUser, unreachable } from "./lib/offline";
   import Icon from "./lib/Icon.svelte";
   import Overlays from "./lib/Overlays.svelte";
   import StatusPage from "./lib/StatusPage.svelte";
@@ -206,7 +207,11 @@
     api
       .me()
       .then(startSession)
-      .catch(() => {})
+      .catch((err) => {
+        // No network: open as whoever was signed in last, from what's saved on the device.
+        const user = unreachable(err) ? cachedUser() : null;
+        if (user) startSession(user);
+      })
       .finally(() => (checked = true));
     window.addEventListener("popstate", readHash);
     return () => window.removeEventListener("popstate", readHash);
@@ -275,6 +280,12 @@
     </div>
   {/if}
   </div>
+  <!-- Phones and tablets: a quiet strip over the tab bar while the server is out of reach. Wide screens say so in the sidebar's footer. -->
+  {#if app.status === "offline" && !media.wide && !(media.phone && app.typing)}
+    <div class="offline-bar" role="status" transition:slide={{ duration: 160 }}>
+      <Icon name="offline" size={14} />Offline · changes sync when you reconnect
+    </div>
+  {/if}
   {#if media.phone && !app.typing}
     <TabBar />
   {/if}
@@ -316,6 +327,22 @@
     flex: 1;
     min-height: 0;
     display: flex;
+  }
+
+  .offline-bar {
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: 28px;
+    padding: 0 16px;
+    border-top: 1px solid var(--border);
+    background: var(--headerbar-bg);
+    color: var(--dim-fg);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    white-space: nowrap;
   }
 
   .tab-page {

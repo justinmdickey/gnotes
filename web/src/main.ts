@@ -1,4 +1,5 @@
 import { mount } from "svelte";
+import * as loro from "loro-crdt/web";
 import "./app.css";
 import App from "./App.svelte";
 
@@ -18,4 +19,8 @@ function fitSafeTop() {
 fitSafeTop();
 screen.orientation?.addEventListener("change", () => setTimeout(fitSafeTop, 300));
 
-export default mount(App, { target: document.getElementById("app")! });
+// Loro's WebAssembly loads with fetch, which the service worker answers from its cache, so the app
+// opens with no network. (Loro's sync-XHR browser entry can't: service workers don't see sync XHR.)
+// Its types leave out the init function the web entry exports as default.
+const initLoro = (loro as unknown as { default: () => Promise<unknown> }).default;
+export default initLoro().then(() => mount(App, { target: document.getElementById("app")! }));

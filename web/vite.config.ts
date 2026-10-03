@@ -29,8 +29,9 @@ export default defineConfig({
     }),
   ],
   resolve: {
-    // loro-crdt's dev entry needs native .wasm imports; its browser entry works in both dev and build.
-    alias: [{ find: /^loro-crdt$/, replacement: "loro-crdt/browser" }],
+    // loro-crdt's dev entry needs native .wasm imports. Its web entry works in both dev and build, and
+    // fetches the .wasm in main.ts, where the service worker can serve it offline.
+    alias: [{ find: /^loro-crdt$/, replacement: "loro-crdt/web" }],
   },
   server: {
     proxy: { "/api": { target: "http://localhost:8080", ws: true } },

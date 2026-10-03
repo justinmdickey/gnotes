@@ -1,5 +1,6 @@
 import { api, ApiError, type Features, type Tree, type TreeNote, type User } from "./api";
 import { sync, type Status } from "./sync";
+import { cache, closeCache, flush, isQueued, loadQueue, openCache, queueNote, unreachable, uuidv7 } from "./offline";
 import { media, toast } from "./ui.svelte";
 
 /** What the note list shows. */
@@ -55,14 +56,55 @@ export function addableView(view: View): View {
   return view;
 }
 
-/** Apple Notes-style compose: make the note and drop straight into it. */
+/** Apple Notes-style compose: make the note and drop straight into it. Offline, it's made on the device and sent later. */
 export async function composeNote(view: View = app.view) {
   view = addableView(view);
   const notebook = view.kind === "notebook" ? view.id : null;
-  const { id } = await api.createNote(notebook);
+  const id = uuidv7();
+  let queued = app.status !== "online";
+  if (!queued) {
+    try {
+      await api.createNote(notebook, id);
+    } catch (err) {
+      if (!unreachable(err)) throw err;
+      queued = true;
+    }
+  }
+  if (queued) {
+    await queueNote(id, notebook);
+    const role = notebook ? (app.tree.notebooks.find((n) => n.id === notebook)?.role ?? "editor") : "owner";
+    app.tree.notes.push({ id, notebook_id: notebook, title: "", preview: "", owner: app.user!.display_name, role, updated_at: Date.now(), shared: false });
+    saveTree();
+  }
   app.freshNote = id;
   navigate(view, id);
-  void refreshTree();
+  if (!queued) void refreshTree();
+}
+
+/** Keeps the tree on the device, so the app opens offline. */
+export function saveTree() {
+  void cache.saveTree($state.snapshot(app.tree));
+}
+
+/** Offline, a note's title and preview in lists follow its text here, as the server would. */
+export function retitle(id: string, body: string) {
+  const note = app.tree.notes.find((n) => n.id === id);
+  if (!note) return;
+  const [title = "", preview = ""] = body.split("\n").map(plainLine).filter(Boolean);
+  if (note.title === title && note.preview === preview) return;
+  note.title = title;
+  note.preview = preview;
+  note.updated_at = Date.now();
+  saveTree();
+}
+
+/** A line without its Markdown block marks, like the server's `plain_line`. */
+function plainLine(line: string): string {
+  let l = line.trim().replace(/^#+\s*/, "").replace(/^>+\s*/, "");
+  l = l.replace(/^(- \[[ xX]\] |[*+-] |\d+\. )/, "");
+  const embed = l.match(/^!\[([^\]]*)\]\(att:[^)]*\)$/);
+  if (embed) return embed[1].trim().slice(0, 120);
+  return l.replaceAll("**", "").replaceAll("~~", "").replaceAll("`", "").trim().slice(0, 120);
 }
 
 /** Files an import takes: Markdown and zips of it. */
@@ -96,7 +138,10 @@ export function refreshTree(): Promise<void> {
   refreshing = api
     .tree()
     .then((t) => {
+      // Notes made offline stay listed until the server has them.
+      for (const n of app.tree.notes) if (isQueued(n.id) && !t.notes.some((m) => m.id === n.id)) t.notes.push(n);
       app.tree = t;
+      saveTree();
     })
     .catch((e) => console.warn("tree refresh failed", e))
     .finally(() => {
@@ -108,14 +153,27 @@ export function refreshTree(): Promise<void> {
 
 export function startSession(user: User) {
   app.user = user;
+  openCache(user);
+  // The saved tree shows at once, and is all there is with no network.
+  void cache.tree().then((t) => {
+    if (t && app.user?.id === user.id && !app.tree.notebooks.length && !app.tree.notes.length) app.tree = t;
+  });
+  void loadQueue();
   sync.onTreeChanged = () => void refreshTree();
   sync.onStatus = (s) => {
     app.status = s;
+    if (s === "online") {
+      void flush().then(() => refreshTree());
+      // Fetched again after opening offline, when the first try failed.
+      api.features().then((f) => (app.features = f), () => {});
+    }
     // A dropped connection can mean the session ended (password reset, account disabled).
     if (s === "offline" && app.user) {
       api.me().catch((e) => {
         if (e instanceof ApiError && e.status === 401) {
           sync.disconnect();
+          // Saved notes stay, in case edits made offline haven't reached the server; only this account opens them.
+          void closeCache(false);
           app.user = null;
           app.signedOutReason = "You were signed out. Log in again to continue.";
         }
@@ -124,14 +182,16 @@ export function startSession(user: User) {
   };
   sync.connect();
   void refreshTree();
-  api.features().then((f) => (app.features = f), () => {});
   readHash();
 }
 
 export async function endSession() {
   sync.disconnect();
   await api.logout().catch(() => {});
+  // Nothing of this account stays on the device for the next person.
+  await closeCache(true);
   app.user = null;
+  app.tree = { notebooks: [], notes: [], shared: [] };
   app.settings = false;
   history.replaceState(null, "", "/#/");
 }
