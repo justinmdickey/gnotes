@@ -53,7 +53,7 @@ async function login(page) {
   await page.waitForSelector("nav");
 }
 
-/** Notebooks Home › Kitchen and Home › Garage, a loose note, a note in Kitchen, and Home shared with Bob. */
+/** Notebooks Home › Kitchen and Home › Garage, two loose notes, a note in Kitchen, and Home shared with Bob. */
 async function seed(page) {
   const ids = await page.evaluate(async () => {
     const post = (path, body) =>
@@ -77,6 +77,8 @@ async function seed(page) {
   // Lists continue on Enter, so only the first item gets its marker.
   await write("#/", "# Groceries\nmilk\n- [ ] eggs\nbread");
   await write(`#/nb/${ids.kitchen}`, "# Pantry\nrice, beans, flour");
+  // Code blocks: one labeled, one left for the guesser.
+  await write("#/", '# Snippets\nRun this first:\n```bash\nnpm run build\n```\nThen:\n```\n// say hi\nconst greet = (name) => `Hello ${name}`;\nconsole.log(greet("Ada"), 42);\n```\nDone.');
   await page.evaluate(() => document.activeElement?.blur());
 }
 

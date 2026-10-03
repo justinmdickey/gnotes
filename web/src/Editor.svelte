@@ -11,6 +11,7 @@
   import { api, type Role } from "./lib/api";
   import { activeFormats, formatKeymap, type Block, type Inline } from "./lib/format";
   import Icon from "./lib/Icon.svelte";
+  import { codeBlocks } from "./lib/codeBlocks";
   import { livePreview } from "./lib/livePreview";
   import { sync } from "./lib/sync";
   import Menu from "./lib/Menu.svelte";
@@ -149,6 +150,7 @@
             markdown({ base: markdownLanguage }),
             syntaxHighlighting(markdownStyle),
             livePreview,
+            codeBlocks,
             EditorView.lineWrapping,
             EditorView.editable.of(false),
             EditorState.readOnly.of(true),
@@ -203,6 +205,7 @@
           markdown({ base: markdownLanguage }),
           syntaxHighlighting(markdownStyle),
           livePreview,
+          codeBlocks,
           recordingMarker,
           dropImages,
           EditorView.lineWrapping,
@@ -1166,6 +1169,102 @@
     background: var(--accent-bg)
       url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 8.5l2.5 2.5L12 5.5' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
       center / 80% no-repeat;
+  }
+
+  /* Fenced code: a tinted block in a monospace face, its language picker on the first row. */
+  .page :global(.cm-line.cm-code) {
+    padding: 0 14px;
+    background: var(--code-bg);
+    font-family: "Adwaita Mono", "Source Code Pro", monospace;
+    font-size: 0.85em;
+    line-height: 1.6;
+  }
+
+  .page :global(.cm-code-first) {
+    padding-top: 6px !important;
+    border-radius: var(--radius) var(--radius) 0 0;
+  }
+
+  .page :global(.cm-code-last) {
+    padding-bottom: 4px !important;
+    border-radius: 0 0 var(--radius) var(--radius);
+  }
+
+  /* The hidden closing fence leaves just a little room under the code. */
+  .page :global(.cm-line.cm-code-closed) {
+    height: 12px;
+    padding: 0 !important;
+    overflow: hidden;
+  }
+
+  /* The language, a quiet dropdown lined up with the code. */
+  .page :global(.cm-code-lang) {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: -6px;
+    padding: 0 6px;
+    border-radius: var(--radius-sm);
+    color: var(--dim-fg);
+  }
+
+  .page :global(.cm-code-lang:has(select:enabled):hover) {
+    background: var(--hover);
+  }
+
+  .page :global(.cm-code-lang select) {
+    appearance: none;
+    field-sizing: content;
+    min-height: 24px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: inherit;
+    font-family: system-ui, sans-serif;
+    font-size: var(--text-xs);
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  .page :global(.cm-code-lang select:disabled) {
+    opacity: 1;
+    cursor: default;
+  }
+
+  .page :global(.cm-code .tok-keyword),
+  .page :global(.cm-code .tok-operator.tok-keyword) {
+    color: var(--code-keyword);
+  }
+
+  .page :global(.cm-code .tok-string),
+  .page :global(.cm-code .tok-string2) {
+    color: var(--code-string);
+  }
+
+  .page :global(.cm-code .tok-number),
+  .page :global(.cm-code .tok-bool),
+  .page :global(.cm-code .tok-atom) {
+    color: var(--code-number);
+  }
+
+  .page :global(.cm-code .tok-comment),
+  .page :global(.cm-code .tok-meta) {
+    color: var(--dim-fg);
+    font-style: italic;
+  }
+
+  .page :global(.cm-code .tok-typeName),
+  .page :global(.cm-code .tok-className),
+  .page :global(.cm-code .tok-namespace) {
+    color: var(--code-type);
+  }
+
+  .page :global(.cm-code .tok-definition),
+  .page :global(.cm-code .tok-macroName),
+  .page :global(.cm-code .tok-propertyName),
+  .page :global(.cm-code .tok-tagName) {
+    color: var(--code-name);
   }
 
   .page :global(.cm-task-done) {

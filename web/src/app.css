@@ -30,6 +30,13 @@
   --warning: #e5a50a;
   /* The shared badge: Adwaita yellow, so shared things stand out from blue actions. */
   --shared: var(--warning);
+  /* Code blocks: their tint and syntax colors, from the Adwaita palette. */
+  --code-bg: rgb(0 0 6 / 5%);
+  --code-keyword: #813d9c;
+  --code-string: #1f7a4a;
+  --code-number: #c64600;
+  --code-type: #1a5fb4;
+  --code-name: #865e3c;
   /* Type scale. */
   --text-xs: 0.8rem;
   --text-sm: 0.875rem;
@@ -82,6 +89,12 @@
     --destructive-bg: #c01c28;
     --success: #8ff0a4;
     --warning: #f6d32d;
+    --code-bg: rgb(255 255 255 / 6%);
+    --code-keyword: #dc8add;
+    --code-string: #8ff0a4;
+    --code-number: #ffa348;
+    --code-type: #99c1f1;
+    --code-name: #f8e45c;
     --shadow-md: 0 2px 8px rgb(0 0 0 / 35%), 0 0 0 1px rgb(255 255 255 / 6%);
     --shadow-lg: 0 12px 40px rgb(0 0 0 / 50%), 0 0 0 1px rgb(255 255 255 / 8%);
   }

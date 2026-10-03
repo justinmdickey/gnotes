@@ -540,6 +540,24 @@ try {
   );
   await alice.keyboard.press("Escape");
   await alice.waitForFunction(() => !document.querySelector(".popover"));
+  // A code block without a language gets colors from a best guess; its picker writes the language after the fence.
+  await alice.click(".list header button[aria-label='New note']");
+  await alice.waitForSelector(".cm-content[contenteditable=true]");
+  await alice.keyboard.type("Snippets\n```\nconst greet = (name) => name;\n```\nend");
+  await alice.evaluate(() => document.activeElement?.blur());
+  await alice.waitForFunction(() => document.querySelector(".cm-code .tok-keyword")?.textContent === "const", { timeout: 5000 });
+  check(
+    await alice.$eval(".cm-code-lang select", (s) => s.options[s.selectedIndex].text === "JavaScript (guess)" && !document.querySelector(".cm-content").innerText.includes("```")),
+    "an unlabeled code block is colored as its guessed language, with the fences hidden",
+  );
+  await alice.select(".cm-code-lang select", "python");
+  await alice.waitForFunction(() => document.querySelector(".cm-code-lang select")?.value === "python");
+  // The picker is drawn from the text, so a new selection that sticks means the fence changed.
+  check(await alice.$eval(".cm-code-lang select", (s) => s.options[s.selectedIndex].text === "Python"), "the language picker sets the block's language");
+  if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-code-block.png") });
+  // The note covers the folder's page; Back returns to it.
+  await alice.goBack();
+  await alice.waitForSelector(".list header button[aria-label='New note']", { visible: true });
   await alice.click(".list header button[aria-label='New note']");
   await alice.waitForSelector(".cm-content[contenteditable=true]");
   // The "Title" hint is drawn by the line, not an inline widget that would push the caret off the title.
