@@ -103,7 +103,7 @@ const closed = (page) => page.waitForFunction(() => !document.querySelector("dia
 
 const text = (page) => page.$eval(".cm-content", (el) => el.innerText);
 
-/** The note with a table, for screenshots. */
+/** The note with a table and a kanban board, for screenshots. */
 let plansId;
 
 /** Sidebar rows lit as drop targets at the end of the last drag. */
@@ -272,8 +272,8 @@ try {
   await bob.waitForSelector(".cm-checkbox.checked", { timeout: 5000 });
   check(true, "checklist item created and ticked live");
 
-  // ---- Tables (lib/tables.ts) ----
-  // Alice builds one in a new note; Bob, who can only view it, watches it change live.
+  // ---- Tables and kanban boards (lib/tables.ts, lib/kanban.ts) ----
+  // Alice builds both in a new note; Bob, who can only view it, watches them change live.
   const markdown = (page) => page.evaluate(() => document.querySelector(".cm-content").cmTile.root.view.state.doc.toString());
   await alice.click(".pane.editor header button[aria-label='New note']");
   await alice.waitForFunction(() => document.querySelector(".editor .headerbar .title strong")?.textContent === "New Note" && document.activeElement?.matches(".cm-content[contenteditable=true]"));
@@ -303,9 +303,33 @@ try {
   if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-table-editing.png") });
   await alice.keyboard.press("Escape");
 
+  await alice.click(".cm-line");
+  await alice.keyboard.down("Control");
+  await alice.keyboard.press("End");
+  await alice.keyboard.up("Control");
+  await alice.click("button[aria-label='Insert board']");
+  await alice.waitForSelector(".cm-kanban-card.editing .cm-kanban-text:focus");
+  await alice.keyboard.type("Bread");
+  await alice.keyboard.press("Escape");
+  await alice.click(".cm-kanban-col[data-col='1'] .cm-kanban-add");
+  await alice.waitForSelector(".cm-kanban-card[data-col='1'].editing .cm-kanban-text:focus");
+  await alice.keyboard.type("Butter");
+  await alice.keyboard.press("Escape");
+  check((await markdown(alice)).includes("```kanban\n## To do\n- Bread\n\n## Doing\n- Butter\n\n## Done\n```"), "a new board takes its first card, and Add card adds one to its column");
+  const card = await (await alice.$(".cm-kanban-card[data-col='0'][data-card='0']")).boundingBox();
+  const done = await (await alice.$(".cm-kanban-col[data-col='2']")).boundingBox();
+  await alice.mouse.move(card.x + card.width / 2, card.y + card.height / 2);
+  await alice.mouse.down();
+  await alice.mouse.move(done.x + done.width / 2, done.y + done.height / 2, { steps: 12 });
+  if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-board-drag.png") });
+  await alice.mouse.up();
+  await alice.waitForFunction(() => document.querySelector(".cm-kanban-col[data-col='2'] .cm-kanban-text")?.textContent === "Bread");
+  check((await markdown(alice)).includes("## To do\n\n## Doing\n- Butter\n\n## Done\n- Bread\n```"), "dragging a card to another column moves its line there");
+  await bob.waitForFunction(() => document.querySelector(".cm-kanban-col[data-col='2'] .cm-kanban-text")?.textContent === "Bread", { timeout: 5000 });
+  check(await bob.evaluate(() => !document.querySelector(".cm-kanban-widget [contenteditable]") && !document.querySelector(".cm-kanban-add")), "a viewer sees the card move live, without editing tools");
   for (const p of [alice, bob]) await p.goBack();
   for (const p of [alice, bob]) await p.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("jam"));
-  // ---- end of tables ----
+  // ---- end of tables and kanban boards ----
 
   // Revoking removes access live.
   await alice.click("button[aria-label='Share']");
@@ -1062,13 +1086,34 @@ try {
     await alice.waitForFunction(() => !document.querySelector(".tab-page") && document.querySelector(".hero h1")?.textContent === "Recent");
     check(true, "another tab leaves Account");
 
-    // ---- Tables on a phone ----
+    // ---- Tables and kanban boards on a phone ----
     await alice.evaluate((id) => (location.hash = `#/all/note/${id}`), plansId);
-    await alice.waitForSelector(".cm-table-cell");
-    await shot("phone-table-dark");
+    await alice.waitForSelector(".cm-kanban-card");
+    await shot("phone-table-board-dark");
+    const sideways = () => alice.evaluate(() => [document.scrollingElement, document.querySelector(".pane.editor .scroll")].every((el) => el.scrollWidth <= el.clientWidth));
+    check(await sideways(), "a wide board scrolls inside itself, not the page");
+    // A finger holds a card still for a moment, then drags it to another column.
+    const butter = await (await alice.$(".cm-kanban-col[data-col='1'] .cm-kanban-card")).boundingBox();
+    const todo = await (await alice.$(".cm-kanban-col[data-col='0']")).boundingBox();
+    await alice.touchscreen.touchStart(butter.x + 30, butter.y + butter.height / 2);
+    await new Promise((r) => setTimeout(r, 500));
+    for (let i = 1; i <= 8; i++) await alice.touchscreen.touchMove(butter.x + 30 + ((todo.x + 40 - butter.x - 30) * i) / 8, butter.y + butter.height / 2);
+    await shot("phone-board-drag-dark");
+    await alice.touchscreen.touchEnd();
+    await alice.waitForFunction(() => document.querySelector(".cm-kanban-col[data-col='0'] .cm-kanban-text")?.textContent === "Butter");
+    check((await markdown(alice)).includes("## To do\n- Butter\n\n## Doing\n\n## Done\n- Bread"), "a long press drags a card to another column on a phone");
     await alice.emulateMediaFeatures([]);
+    await shot("phone-table-board");
     await alice.tap(".cm-table-cell[data-r='0'][data-c='0']");
     await shot("phone-table-editing");
+    await alice.evaluate(() => document.activeElement?.blur());
+    await alice.evaluate(() => document.querySelector(".cm-kanban").scrollBy(1000, 0));
+    await shot("phone-board-scrolled");
+    await alice.setViewport({ width: 1280, height: 800 });
+    await alice.waitForSelector(".cm-kanban-card");
+    await shot("desktop-table-board");
+    await alice.emulateMediaFeatures([{ name: "prefers-color-scheme", value: "dark" }]);
+    await shot("desktop-table-board-dark");
   }
   console.log("all checks passed");
 } finally {

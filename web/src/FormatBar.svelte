@@ -3,6 +3,7 @@
   import { setBlock, toggleInline, type Block, type Inline } from "./lib/format";
   import Icon from "./lib/Icon.svelte";
   import { insertTable } from "./lib/tables";
+  import { insertBoard } from "./lib/kanban";
 
   let {
     view,
@@ -88,6 +89,7 @@
     <Icon name="quote" />
   </button>
   <button class="flat icon extra" title="Table" aria-label="Insert table" onclick={() => insertTable(view)}><Icon name="table" /></button>
+  <button class="flat icon extra" title="Kanban board" aria-label="Insert board" onclick={() => insertBoard(view)}><Icon name="board" /></button>
   <span class="sep"></span>
 
   <button class="flat icon main attach" title="Add photo" aria-label="Add photo" onclick={onphoto}><Icon name="camera" /></button>

@@ -17,6 +17,7 @@
   import { dragHandles } from "./lib/dragHandles";
   import { undoCommands } from "./lib/undo";
   import { tables } from "./lib/tables";
+  import { kanban } from "./lib/kanban";
   import { sync } from "./lib/sync";
   import Menu from "./lib/Menu.svelte";
   import StatusPage from "./lib/StatusPage.svelte";
@@ -160,6 +161,7 @@
             livePreview,
             codeBlocks,
             tables,
+            kanban,
             EditorView.lineWrapping,
             EditorView.editable.of(false),
             EditorState.readOnly.of(true),
@@ -218,6 +220,7 @@
           slashMenu({ photo: () => pickPhoto(), record: () => startRecording() }),
           dragHandles,
           tables,
+          kanban,
           recordingMarker,
           dropImages,
           EditorView.lineWrapping,
@@ -1396,8 +1399,9 @@
     text-decoration: line-through;
   }
 
-  /* Tables (lib/tables.ts): drawn from their Markdown, scrolling sideways inside when wide. */
-  .page :global(.cm-table-widget) {
+  /* Tables and kanban boards (lib/tables.ts, lib/kanban.ts): drawn from their Markdown, scrolling sideways inside when wide. */
+  .page :global(.cm-table-widget),
+  .page :global(.cm-kanban-widget) {
     /* Its content never widens the note; it scrolls instead. */
     contain: inline-size;
     padding: 6px 0;
@@ -1495,6 +1499,196 @@
   .page :global(.cm-table-tools button:disabled) {
     opacity: 0.45;
     cursor: default;
+  }
+
+  .page :global(.cm-kanban) {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding-bottom: 6px;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scroll-snap-type: x proximity;
+  }
+
+  .page :global(.cm-kanban-col) {
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    width: 240px;
+    padding: 6px;
+    border-radius: var(--radius-lg);
+    background: var(--hover);
+    scroll-snap-align: start;
+  }
+
+  .page :global(.cm-kanban-head) {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 32px;
+    padding: 0 6px;
+  }
+
+  .page :global(.cm-kanban-title) {
+    flex: 1;
+    min-width: 0;
+    margin: 0 -4px;
+    padding: 2px 4px;
+    border-radius: var(--radius-sm);
+    font-size: var(--text-sm);
+    font-weight: 700;
+    overflow-wrap: anywhere;
+    outline: none;
+  }
+
+  .page :global(.cm-kanban-title:focus) {
+    background: var(--view-bg);
+    box-shadow: 0 0 0 2px var(--accent-bg);
+  }
+
+  .page :global(.cm-kanban-count) {
+    color: var(--dim-fg);
+    font-size: var(--text-xs);
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .page :global(.cm-kanban-cards) {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .page :global(.cm-kanban-card) {
+    position: relative;
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 9px 12px;
+    border-radius: var(--radius);
+    background: var(--card-bg);
+    box-shadow: var(--shadow-sm), 0 0 0 1px var(--border);
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+  }
+
+  .page :global(.cm-kanban-widget.editable .cm-kanban-card) {
+    cursor: grab;
+  }
+
+  .page :global(.cm-kanban-card.editing) {
+    padding-right: 40px;
+    box-shadow: 0 0 0 2px var(--accent-bg);
+    cursor: text !important;
+    user-select: text;
+    -webkit-user-select: text;
+  }
+
+  .page :global(.cm-kanban-text) {
+    flex: 1;
+    min-width: 0;
+    min-height: 1.4em;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    outline: none;
+  }
+
+  .page :global(.cm-kanban-card .cm-checkbox) {
+    flex: none;
+    margin: 0.12em 0 0;
+  }
+
+  .page :global(.cm-kanban-card.done .cm-kanban-text) {
+    color: var(--dim-fg);
+    text-decoration: line-through;
+  }
+
+  .page :global(.cm-kanban-del) {
+    position: absolute;
+    top: 50%;
+    right: 6px;
+    display: none;
+    width: 28px;
+    min-height: 28px;
+    padding: 0;
+    translate: 0 -50%;
+    border-radius: 50%;
+    background: var(--popover-bg);
+    color: var(--dim-fg);
+    box-shadow: var(--shadow-sm);
+  }
+
+  .page :global(.cm-kanban-card:hover .cm-kanban-del),
+  .page :global(.cm-kanban-card.editing .cm-kanban-del) {
+    display: inline-flex;
+  }
+
+  .page :global(.cm-kanban-add) {
+    justify-content: flex-start;
+    min-height: 34px;
+    padding: 0 8px;
+    background: transparent;
+    color: var(--dim-fg);
+    font-size: var(--text-sm);
+  }
+
+  .page :global(.cm-kanban-add:hover) {
+    background: var(--hover);
+    color: var(--fg);
+  }
+
+  .page :global(.cm-kanban-end) {
+    flex: none;
+    display: flex;
+    gap: 6px;
+  }
+
+  .page :global(.cm-kanban-add-col),
+  .page :global(.cm-kanban-md) {
+    min-height: 44px;
+    border-radius: var(--radius-lg);
+    background: var(--hover);
+    color: var(--dim-fg);
+    font-size: var(--text-sm);
+  }
+
+  .page :global(.cm-kanban-md) {
+    width: 44px;
+    padding: 0;
+    background: transparent;
+  }
+
+  /* Dragging a card: it follows the pointer, and a tinted gap shows where it will land. */
+  .page :global(.cm-kanban-card.dragging) {
+    display: none;
+  }
+
+  .page :global(.cm-kanban-spot) {
+    border-radius: var(--radius);
+    background: var(--accent-soft);
+  }
+
+  .page :global(.cm-kanban-ghost) {
+    position: fixed;
+    z-index: 30;
+    margin: 0;
+    background: var(--popover-bg);
+    box-shadow: var(--shadow-lg);
+    pointer-events: none;
+  }
+
+  .page :global(.cm-kanban-widget.dragging),
+  .page :global(.cm-kanban-widget.dragging *) {
+    cursor: grabbing !important;
+  }
+
+  @media (max-width: 700px) {
+    .page :global(.cm-kanban-col) {
+      width: min(76vw, 260px);
+    }
   }
 
   /* Phone: the formatting bar floats on top of the keyboard while typing. */
