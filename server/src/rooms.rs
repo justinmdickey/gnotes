@@ -318,12 +318,16 @@ impl Room {
             return Err(RoomError::Forbidden);
         }
         let user_id = client.user_id.clone();
+        let before = st.doc.oplog_vv();
         let status = st.doc.import(data).map_err(|_| RoomError::BadUpdate)?;
         if status.pending.is_some() {
             // Loro keeps pending changes and applies them once the gap is filled by the rejoin.
             return Err(RoomError::OutOfSync);
         }
         Self::broadcast(&st, conn, &frame(KIND_UPDATE, &self.id, data));
+        // Sessions with new edits in this update are this user's, for showing who wrote what.
+        let peers: Vec<String> =
+            st.doc.oplog_vv().iter().filter(|(p, c)| before.get(p).is_none_or(|b| b < c)).map(|(p, _)| p.to_string()).collect();
 
         st.last_seq += 1;
         st.unsnapshotted += 1;
@@ -340,6 +344,15 @@ impl Room {
                 .bind(now)
                 .execute(&state.db)
                 .await?;
+            for peer in &peers {
+                sqlx::query("INSERT OR IGNORE INTO note_peers (note_id, peer, user_id, first_seen) VALUES (?, ?, ?, ?)")
+                    .bind(&key)
+                    .bind(peer)
+                    .bind(&user_id)
+                    .bind(now)
+                    .execute(&state.db)
+                    .await?;
+            }
             sqlx::query("UPDATE notes SET title = ?, preview = ?, updated_at = ? WHERE id = ?")
                 .bind(&title)
                 .bind(&preview)

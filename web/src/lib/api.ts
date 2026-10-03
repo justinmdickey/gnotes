@@ -211,6 +211,8 @@ export const api = {
   testChat: (kind: "vision" | "summary", body: ServiceInput) =>
     request<{ ok: boolean; message: string }>("POST", `/admin/settings/${kind}/test`, body),
   summary: (noteId: string) => request<NoteSummary>("GET", `/notes/${noteId}/summary`),
+  /** Whose editing session each Loro peer was, for showing who wrote what. */
+  authors: (noteId: string) => request<{ peers: Record<string, { user_id: string | null; name: string | null }> }>("GET", `/notes/${noteId}/authors`),
   summarize: (noteId: string) => request<NoteSummary>("POST", `/notes/${noteId}/summary`, {}),
   photoText: (id: string) => request<{ text: string }>("POST", `/attachments/${id}/text`, {}),
   features: () => request<Features>("GET", "/features"),

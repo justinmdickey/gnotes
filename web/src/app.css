@@ -357,6 +357,8 @@ button:focus-visible {
 .user-orange { --user-color: #e66100; }
 .user-purple { --user-color: #9141ac; }
 .user-red { --user-color: #e01b24; }
+/* Edits from before authors were kept. */
+.user-unknown { --user-color: var(--border); }
 
 .loro-cursor {
   position: absolute;

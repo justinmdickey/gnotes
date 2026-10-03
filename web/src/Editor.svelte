@@ -16,6 +16,7 @@
   import { slashMenu } from "./lib/slash";
   import { dragHandles } from "./lib/dragHandles";
   import { undoCommands } from "./lib/undo";
+  import { blame, setBlame } from "./lib/blame";
   import { tables } from "./lib/tables";
   import { kanban } from "./lib/kanban";
   import { sync } from "./lib/sync";
@@ -79,6 +80,14 @@
   const canEdit = $derived(loaded && !lost && role !== null && role !== "viewer");
 
   const doc = new LoroDoc();
+  // Times on each change, so who-wrote-what can say when.
+  doc.setRecordTimestamp(true);
+  /** Bars beside each line showing who wrote it, from the note menu. */
+  let showBlame = $state(false);
+  function toggleBlame() {
+    showBlame = !showBlame;
+    view?.dispatch({ effects: setBlame.of(showBlame) });
+  }
   const ephemeral = new EphemeralStore(30_000);
   const undoManager = new UndoManager(doc, {});
   /** Whether there's anything to undo or redo, for the format bar's buttons. */
@@ -219,6 +228,7 @@
           codeBlocks,
           slashMenu({ photo: () => pickPhoto(), record: () => startRecording() }),
           dragHandles,
+          blame(doc, noteId),
           tables,
           kanban,
           recordingMarker,
@@ -449,6 +459,7 @@
         <Menu
           label="Note menu"
           items={[
+            { label: "Show Who Wrote What", icon: "people", checked: showBlame, onselect: toggleBlame },
             { label: "Move to…", icon: "move", onselect: () => (moving = true) },
             ...(role === "owner"
               ? [{ label: "Move to Trash", icon: "trash" as const, destructive: true, onselect: () => trashNote(noteId) }]
@@ -1188,6 +1199,33 @@
     background: var(--accent-bg)
       url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 8.5l2.5 2.5L12 5.5' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
       center / 80% no-repeat;
+  }
+
+  /* Who wrote each line: a bar in their color in the margin, with room around it to point at or tap. */
+  .page :global(.cm-blamed) {
+    position: relative;
+  }
+
+  .page :global(.cm-blame) {
+    position: absolute;
+    top: 0.2em;
+    bottom: 0.2em;
+    left: -12px;
+    width: 3px;
+    border-radius: 2px;
+    background: var(--user-color);
+    text-indent: 0;
+    cursor: pointer;
+  }
+
+  .page :global(.cm-blame::before) {
+    content: "";
+    position: absolute;
+    inset: -0.2em -6px;
+  }
+
+  .page :global(.cm-blame-on .cm-drag-grip) {
+    display: none;
   }
 
   /* The grip beside a block, in the margin left of its text, and where a dragged block will land. */

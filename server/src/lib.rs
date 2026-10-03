@@ -1,5 +1,6 @@
 pub mod account;
 pub mod attachments;
+pub mod authors;
 pub mod auth;
 pub mod chat;
 pub mod error;
@@ -188,6 +189,7 @@ pub fn router(state: AppState) -> Router {
         .route("/admin/settings/{chat}", axum::routing::put(settings::put_chat))
         .route("/admin/settings/{chat}/test", post(settings::test_chat))
         .route("/notes/{id}/summary", get(summary::get_summary).post(summary::summarize))
+        .route("/notes/{id}/authors", get(authors::list_authors))
         .route("/attachments/{id}/text", post(attachments::photo_text))
         .route("/ws", get(ws::handler))
         .fallback(|| async { error::AppError::NotFound });
