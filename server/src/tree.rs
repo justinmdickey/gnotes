@@ -18,6 +18,7 @@ use crate::{
 };
 
 const TRASH_DAYS: i64 = 30;
+const TRASH_MS: i64 = TRASH_DAYS * 24 * 60 * 60 * 1000;
 
 #[derive(Serialize)]
 pub struct TreeNotebook {
@@ -467,23 +468,26 @@ pub struct TrashItem {
     id: String,
     name: String,
     deleted_at: i64,
+    /// When `purge_trash` removes it for good.
+    purge_at: i64,
 }
 
 /// Only the items the owner deleted directly, not everything swept along with a notebook.
 pub async fn get_trash(State(state): State<AppState>, CurrentUser(me): CurrentUser) -> ApiResult<Json<Vec<TrashItem>>> {
     let items = sqlx::query_as::<_, TrashItem>(
-        "SELECT 'notebook' AS resource_type, nb.id, nb.name, nb.deleted_at FROM notebooks nb
+        "SELECT 'notebook' AS resource_type, nb.id, nb.name, nb.deleted_at, nb.deleted_at + ?2 AS purge_at FROM notebooks nb
          LEFT JOIN notebooks p ON p.id = nb.parent_id
          WHERE nb.owner_id = ?1 AND nb.deleted_at IS NOT NULL
            AND (p.id IS NULL OR p.deleted_at IS NOT nb.deleted_at)
          UNION ALL
-         SELECT 'note', n.id, n.title, n.deleted_at FROM notes n
+         SELECT 'note', n.id, n.title, n.deleted_at, n.deleted_at + ?2 FROM notes n
          LEFT JOIN notebooks p ON p.id = n.notebook_id
          WHERE n.owner_id = ?1 AND n.deleted_at IS NOT NULL
            AND (p.id IS NULL OR p.deleted_at IS NOT n.deleted_at)
          ORDER BY 4 DESC",
     )
     .bind(&me.id)
+    .bind(TRASH_MS)
     .fetch_all(&state.db)
     .await?;
     Ok(Json(items))
@@ -556,7 +560,7 @@ pub async fn restore(
 
 /// Permanently removes items that have been in the trash longer than the retention window.
 pub async fn purge_trash(db: &sqlx::SqlitePool) -> sqlx::Result<()> {
-    let cutoff = now_ms() - TRASH_DAYS * 24 * 60 * 60 * 1000;
+    let cutoff = now_ms() - TRASH_MS;
     sqlx::query("DELETE FROM notes WHERE deleted_at < ?").bind(cutoff).execute(db).await?;
     sqlx::query("DELETE FROM notebooks WHERE deleted_at < ?").bind(cutoff).execute(db).await?;
     sqlx::query(

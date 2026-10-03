@@ -308,6 +308,12 @@
           {/each}
         {/if}
       {/if}
+      <li>
+        <button class="row flat" class:selected={app.view.kind === "trash"} onclick={() => navigate({ kind: "trash" })}>
+          <Icon name="trash" />
+          <span class="label">Trash</span>
+        </button>
+      </li>
     </ul>
   </div>
 

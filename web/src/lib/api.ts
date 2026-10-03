@@ -36,6 +36,17 @@ export interface SharedRoot {
   hidden: boolean;
 }
 
+/** Something you deleted directly, not what was swept along inside a deleted notebook. */
+export interface TrashItem {
+  resource_type: "note" | "notebook";
+  id: string;
+  /** A notebook's name or a note's title. */
+  name: string;
+  deleted_at: number;
+  /** When the server removes it for good. */
+  purge_at: number;
+}
+
 export interface Tree {
   notebooks: TreeNotebook[];
   notes: TreeNote[];
@@ -225,6 +236,7 @@ export const api = {
     if (!res.ok) throw new ApiError(res.status, data.error ?? "unknown", data.message ?? res.statusText);
     return data as ImportResult;
   },
+  trash: () => request<TrashItem[]>("GET", "/trash"),
   restore: (kind: "note" | "notebook", id: string) => request("POST", `/trash/${kind}/${id}/restore`, {}),
   /** Permanently removes the note only if it's blank; the server refuses otherwise. */
   discardNote: (id: string) => request("DELETE", `/notes/${id}?discard=true`),

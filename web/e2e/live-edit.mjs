@@ -660,6 +660,21 @@ try {
   await alice.waitForFunction(() => document.querySelector(".notebook-chip")?.textContent.trim() === "Home › Garage");
   check(true, "a note moves to another notebook");
 
+  // Trash: a deleted note waits in the Trash screen and Restore puts it back where it was.
+  await alice.click(".editor header button[aria-label='Note menu']");
+  await alice.waitForFunction(() => [...document.querySelectorAll("[role=menuitem]")].some((b) => b.textContent.includes("Move to Trash")));
+  await alice.evaluate(() => [...document.querySelectorAll("[role=menuitem]")].find((b) => b.textContent.includes("Move to Trash")).click());
+  await alice.waitForFunction(() => [...document.querySelectorAll(".toast")].some((t) => t.textContent.includes("moved to trash")));
+  await alice.evaluate(() => [...document.querySelectorAll("nav .row")].find((b) => b.textContent.trim() === "Trash").click());
+  await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Trash" && document.querySelector(".boxed-list .row")?.textContent.includes("Pantry"));
+  check(await alice.evaluate(() => /Deleted .+ · 30 days left/.test(document.querySelector(".boxed-list .row small").textContent)), "the Trash screen lists a deleted note with when it goes for good");
+  await alice.evaluate(() => [...document.querySelectorAll(".boxed-list .row")].find((r) => r.textContent.includes("Pantry")).querySelector("button").click());
+  await alice.waitForFunction(() => [...document.querySelectorAll(".toast")].some((t) => t.textContent.includes("restored")) && !document.querySelector(".boxed-list"));
+  if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-trash-empty.png") });
+  await alice.click(".toast ::-p-text(Show)");
+  await alice.waitForFunction(() => document.querySelector(".notebook-chip")?.textContent.trim() === "Home › Garage");
+  check(true, "Restore on the Trash screen puts the note back in its notebook");
+
   // Deep down, the middle levels fold into a "…" crumb that still reaches them.
   const deepest = await alice.evaluate(async () => {
     const post = (path, body) => fetch(`/api${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then((r) => r.json());
@@ -958,6 +973,14 @@ try {
     await alice.waitForFunction(() => document.querySelector(".tab-page h1")?.textContent === "Account");
     check(await alice.evaluate(() => !!document.querySelector(".tabbar .tab.on") && !document.querySelector(".tab-page .back")), "Account opens as a tab with the tab bar still there");
     await shot("phone-account-dark");
+    // Trash opens from Account, keeps the Account tab lit, and Back returns there.
+    await alice.evaluate(() => [...document.querySelectorAll(".tab-page li")].find((li) => li.textContent.includes("Trash")).querySelector("button").click());
+    await alice.waitForFunction(() => !document.querySelector(".tab-page") && document.querySelector(".pane.list .hero h1")?.textContent === "Trash");
+    check(await alice.evaluate(() => document.querySelector(".tabbar .tab.on")?.textContent.includes("Account")), "Trash opens from the Account tab");
+    await shot("phone-trash-dark");
+    await alice.click(".pane.list .back-icon");
+    await alice.waitForFunction(() => document.querySelector(".tab-page h1")?.textContent === "Account");
+    check(true, "Back from Trash returns to Account");
     await alice.evaluate(() => [...document.querySelectorAll(".tabbar button")].find((b) => b.textContent.includes("Recent")).click());
     await alice.waitForFunction(() => !document.querySelector(".tab-page") && document.querySelector(".hero h1")?.textContent === "Recent");
     check(true, "another tab leaves Account");

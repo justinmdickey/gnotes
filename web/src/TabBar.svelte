@@ -4,7 +4,7 @@
 
   /** Which tab the current screen belongs to. Shared notebooks count as Shared, wherever you are in them. */
   const active = $derived.by(() => {
-    if (app.settings) return "account";
+    if (app.settings || app.view.kind === "trash") return "account";
     const v = app.view;
     if (v.kind === "all") return "recent";
     if (v.kind === "shared-notes") return "shared";

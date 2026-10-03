@@ -391,6 +391,10 @@ async fn trash_and_restore_notebook() {
     assert_eq!(tree["notes"].as_array().unwrap().len(), 0);
     let trash = alice.get("/trash").await;
     assert_eq!(trash.as_array().unwrap().len(), 1, "only the directly deleted notebook: {trash}");
+    let gone = &trash[0];
+    assert_eq!(gone["name"], "Home");
+    let kept = gone["purge_at"].as_i64().unwrap() - gone["deleted_at"].as_i64().unwrap();
+    assert_eq!(kept, 30 * 24 * 60 * 60 * 1000, "trash keeps items for 30 days: {gone}");
 
     alice.post(&format!("/trash/notebook/{parent}/restore"), json!({})).await;
     let tree = alice.get("/tree").await;

@@ -7,7 +7,8 @@ export type View =
   | { kind: "root" }
   | { kind: "all" }
   | { kind: "notebook"; id: string }
-  | { kind: "shared-notes" };
+  | { kind: "shared-notes" }
+  | { kind: "trash" };
 
 export const app = $state({
   user: null as User | null,
@@ -40,12 +41,13 @@ export function viewTitle(view: View, tree: Tree): string {
   if (view.kind === "root") return "Notes";
   if (view.kind === "all") return "Recent";
   if (view.kind === "shared-notes") return "Shared with Me";
+  if (view.kind === "trash") return "Trash";
   return tree.notebooks.find((n) => n.id === view.id)?.name ?? "Notes";
 }
 
-/** Where new notes from `view` go: Shared and view-only notebooks can't take them, so the top folder does. */
+/** Where new notes from `view` go: Shared, Trash and view-only notebooks can't take them, so the top folder does. */
 export function addableView(view: View): View {
-  if (view.kind === "shared-notes") return { kind: "root" };
+  if (view.kind === "shared-notes" || view.kind === "trash") return { kind: "root" };
   if (view.kind === "notebook") {
     const id = view.id;
     if (app.tree.notebooks.find((n) => n.id === id)?.role === "viewer") return { kind: "root" };
@@ -138,11 +140,13 @@ export async function endSession() {
 // back button steps back through them:
 //   #/                                the top folder: top-level notebooks and loose notes
 //   #/all  #/shared  #/nb/<id>        Recent, Shared with Me, a notebook
+//   #/trash                           deleted notes and notebooks
 //   #/note/<id>  #/nb/<id>/note/<id>  a note, remembering the list it came from
 
 function viewPath(view: View): string {
   if (view.kind === "notebook") return `nb/${view.id}`;
   if (view.kind === "root") return "";
+  if (view.kind === "trash") return "trash";
   return view.kind === "shared-notes" ? "shared" : "all";
 }
 
@@ -185,6 +189,12 @@ export function goBack() {
   if (app.settings) {
     if (history.state?.from !== undefined) return history.back();
     return navigate(null, null, true);
+  }
+  // Phones reach Trash from the Account tab, so that's where back goes.
+  if (app.view.kind === "trash" && !app.noteId && media.phone) {
+    if (history.state?.from === "#/settings") return history.back();
+    app.settings = true;
+    return history.replaceState(history.state, "", "#/settings");
   }
   const parent = app.noteId ? app.view : parentView(app.view);
   // The top folder, Recent and Shared are tabs; there's nothing above them.
@@ -251,6 +261,7 @@ export function readHash() {
   if (nb) view = { kind: "notebook", id: nb[1] };
   else if (base === "shared") view = { kind: "shared-notes" };
   else if (base === "all") view = { kind: "all" };
+  else if (base === "trash") view = { kind: "trash" };
   apply(view, note);
 }
 
@@ -269,6 +280,8 @@ export function notesFor(view: View, tree: Tree): TreeNote[] {
       );
       return tree.notes.filter((n) => direct.has(n.id));
     }
+    case "trash":
+      return [];
   }
 }
 

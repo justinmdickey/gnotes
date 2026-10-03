@@ -14,6 +14,7 @@
   import NoteList from "./NoteList.svelte";
   import Sidebar from "./Sidebar.svelte";
   import TabBar from "./TabBar.svelte";
+  import Trash from "./Trash.svelte";
 
   type Pane = "sidebar" | "list" | "editor";
   const order: Pane[] = ["sidebar", "list", "editor"];
@@ -69,7 +70,7 @@
     let speed = 0;
     const start = (e: TouchEvent) => {
       const t = e.touches[0];
-      const canGoBack = app.noteId !== null || parentView(app.view) !== null;
+      const canGoBack = app.noteId !== null || parentView(app.view) !== null || app.view.kind === "trash";
       tracking = media.phone && canGoBack && !app.settings && e.touches.length === 1 && t.clientX < 28;
       startX = lastX = t.clientX;
       startY = t.clientY;
@@ -235,7 +236,7 @@
         {#if p === "sidebar"}
           <Sidebar />
         {:else if p === "list"}
-          <NoteList />
+          {#if app.view.kind === "trash"}<Trash />{:else}<NoteList />{/if}
         {:else if shownNote}
           {#key shownNote}
             <div class="note-swap" in:fadeIn={{ duration: 160 }}>

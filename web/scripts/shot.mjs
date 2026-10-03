@@ -2,7 +2,7 @@
 // Starts a throwaway server with demo data, logs in, and saves one PNG per screen.
 //
 // Usage: npm run build && cargo build -p gnotes-server && node scripts/shot.mjs [options] [screen...]
-//   screens: home recent shared account notebook:<name> note:<title> search:<query>
+//   screens: home recent shared account trash notebook:<name> note:<title> search:<query>
 //            (default: home notebook:Kitchen note:Groceries account)
 //   --phone | --desktop   viewport (default: both)
 //   --dark | --light      color scheme (default: dark)
@@ -53,7 +53,7 @@ async function login(page) {
   await page.waitForSelector("nav");
 }
 
-/** Notebooks Home › Kitchen and Home › Garage, two loose notes, a note in Kitchen, and Home shared with Bob. */
+/** Notebooks Home › Kitchen and Home › Garage, two loose notes, a note in Kitchen, Home shared with Bob, and a note and notebook in the trash. */
 async function seed(page) {
   const ids = await page.evaluate(async () => {
     const post = (path, body) =>
@@ -79,7 +79,15 @@ async function seed(page) {
   await write(`#/nb/${ids.kitchen}`, "# Pantry\nrice, beans, flour");
   // Code blocks: one labeled, one left for the guesser.
   await write("#/", '# Snippets\nRun this first:\n```bash\nnpm run build\n```\nThen:\n```\n// say hi\nconst greet = (name) => `Hello ${name}`;\nconsole.log(greet("Ada"), 42);\n```\nDone.');
+  await write("#/", "# Old packing list\nsocks");
   await page.evaluate(() => document.activeElement?.blur());
+  await page.evaluate(async () => {
+    const tree = await fetch("/api/tree").then((r) => r.json());
+    const del = (path) => fetch(`/api${path}`, { method: "DELETE" });
+    await del(`/notes/${tree.notes.find((n) => n.title === "Old packing list").id}`);
+    const old = await fetch("/api/notebooks", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Archive", parent_id: null }) }).then((r) => r.json());
+    await del(`/notebooks/${old.id}`);
+  });
 }
 
 async function go(page, target) {
@@ -91,6 +99,7 @@ async function go(page, target) {
     recent: "#/all",
     shared: "#/shared",
     account: "#/settings",
+    trash: "#/trash",
     search: "#/",
     notebook: `#/nb/${tree.notebooks.find((n) => n.name === arg)?.id}`,
     note: `#/note/${tree.notes.find((n) => n.title === arg)?.id}`,
