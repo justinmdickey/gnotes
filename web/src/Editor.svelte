@@ -34,6 +34,8 @@
   import { ApiError } from "./lib/api";
   import MoveDialog from "./MoveDialog.svelte";
   import ShareDialog from "./ShareDialog.svelte";
+  import Dialog from "./lib/Dialog.svelte";
+  import { changesBetween } from "./lib/tidy";
 
   const props: { noteId: string } = $props();
   const noteId = $derived(props.noteId);
@@ -152,6 +154,20 @@
     { tag: [tags.processingInstruction, tags.contentSeparator, tags.meta], color: "var(--dim-fg)" },
   ]);
 
+  /** A note's look, read-only: for its summary and Tidy Up's preview. */
+  const readOnlyLook = (label: string) => [
+    markdown({ base: markdownLanguage }),
+    syntaxHighlighting(markdownStyle),
+    livePreview,
+    codeBlocks,
+    tables,
+    kanban,
+    EditorView.lineWrapping,
+    EditorView.editable.of(false),
+    EditorState.readOnly.of(true),
+    EditorView.contentAttributes.of({ "aria-label": label }),
+  ];
+
   // The Summary tab: an AI summary of the whole note, made the first time the tab is opened (and again
   // on request), shown read-only with the note's own styling. The note's editor stays as it is underneath.
   let tab = $state<"note" | "summary">("note");
@@ -207,23 +223,61 @@
       if (summaryView) return void summaryView.dispatch({ changes: { from: 0, to: summaryView.state.doc.length, insert: doc } });
       summaryView = new EditorView({
         parent: el,
-        state: EditorState.create({
-          doc,
-          extensions: [
-            markdown({ base: markdownLanguage }),
-            syntaxHighlighting(markdownStyle),
-            livePreview,
-            codeBlocks,
-            tables,
-            kanban,
-            EditorView.lineWrapping,
-            EditorView.editable.of(false),
-            EditorState.readOnly.of(true),
-            EditorView.contentAttributes.of({ "aria-label": "Summary" }),
-          ],
-        }),
+        state: EditorState.create({ doc, extensions: readOnlyLook("Summary") }),
       });
     });
+  });
+
+  // Tidy Up: the summary chat model improves the note's structure and formatting. The server makes
+  // sure nothing was lost; the result is shown rendered, and Apply writes it in as the smallest edits
+  // that get there, so it merges like typing and one Undo takes it back.
+  const canTidy = $derived(canEdit && app.features.summaries);
+  let tidying = $state<{ busy: boolean; error: string; original: string; text: string } | null>(null);
+  let tidyParent = $state<HTMLDivElement>();
+  /** Which request is current, so an answer for a closed dialog is dropped. */
+  let tidyRun = 0;
+
+  async function startTidy() {
+    if (!view) return;
+    const run = ++tidyRun;
+    const original = view.state.doc.toString();
+    tidying = { busy: true, error: "", original, text: "" };
+    view.contentDOM.blur();
+    try {
+      const res = await api.tidy(noteId, original);
+      if (run !== tidyRun || !tidying) return;
+      if (res.text === res.original) {
+        tidying = null;
+        toast("This note is already tidy");
+      } else tidying = { busy: false, error: "", original: res.original, text: res.text };
+    } catch (err) {
+      if (run === tidyRun && tidying) tidying = { ...tidying, busy: false, error: err instanceof ApiError ? err.message : "Couldn't reach the server" };
+    }
+  }
+
+  function closeTidy() {
+    tidyRun++;
+    tidying = null;
+  }
+
+  function applyTidy() {
+    const t = tidying;
+    closeTidy();
+    if (!view || !t?.text) return;
+    if (view.state.doc.toString() !== t.original) return toast("The note changed meanwhile. Try Tidy Up again.");
+    // Its own undo step, never merged with an edit just before it, like the slash command's.
+    undoManager.setMergeInterval(0);
+    view.dispatch({ changes: changesBetween(t.original, t.text), userEvent: "input.tidy" });
+    undoManager.setMergeInterval(1000);
+    toast("Note tidied up", { label: "Undo", run: steps.undo });
+  }
+
+  $effect(() => {
+    const text = tidying?.text;
+    const el = tidyParent;
+    if (!text || !el) return;
+    const preview = untrack(() => new EditorView({ parent: el, state: EditorState.create({ doc: text, extensions: readOnlyLook("Tidied note") }) }));
+    return () => preview.destroy();
   });
 
   const madeAt = (ms: number) => new Date(ms).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
@@ -271,7 +325,7 @@
           syntaxHighlighting(markdownStyle),
           livePreview,
           codeBlocks,
-          slashMenu({ photo: () => pickPhoto(), record: () => startRecording() }),
+          slashMenu({ photo: () => pickPhoto(), record: () => startRecording(), tidy: () => void startTidy(), canTidy: () => canTidy }),
           dragHandles,
           blame(doc, noteId, () => shared),
           emojiOnColon,
@@ -543,6 +597,7 @@
         <Menu
           label="Note menu"
           items={[
+            ...(canTidy ? [{ label: "Tidy Up", icon: "broom" as const, onselect: () => void startTidy() }] : []),
             { label: "Move to…", icon: "move", onselect: () => (moving = true) },
             ...(role === "owner"
               ? [{ label: "Move to Trash", icon: "trash" as const, destructive: true, onselect: () => trashNote(noteId) }]
@@ -648,6 +703,27 @@
 
 {#if moving}
   <MoveDialog kind="note" id={noteId} name={note?.title ?? ""} onclose={() => (moving = false)} />
+{/if}
+
+{#if tidying}
+  <Dialog title="Tidy Up" wide onclose={closeTidy}>
+    {#if tidying?.busy}
+      <div class="tidy-state dim" aria-live="polite"><span class="spinner"></span>Tidying up…</div>
+    {:else if tidying?.error}
+      <p class="tidy-state error-text">{tidying.error}</p>
+    {:else}
+      <p class="tidy-hint dim">Rearranged and formatted with AI. Everything in the note is still there.</p>
+      <div class="page tidy-page" bind:this={tidyParent}></div>
+    {/if}
+    {#snippet actions()}
+      <button onclick={closeTidy}>Cancel</button>
+      {#if tidying?.error}
+        <button onclick={() => void startTidy()}>Try Again</button>
+      {:else}
+        <button class="suggested" disabled={!tidying?.text} onclick={applyTidy}>Apply</button>
+      {/if}
+    {/snippet}
+  </Dialog>
 {/if}
 
 {#if sharing}
@@ -1173,6 +1249,36 @@
   .summary-page,
   .tab-hidden {
     display: none;
+  }
+
+  .tidy-state {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    margin: 8px 0 16px;
+    text-align: center;
+  }
+
+  .tidy-hint {
+    margin: -8px 0 12px;
+    font-size: var(--text-sm);
+    text-align: center;
+  }
+
+  /* The tidied note, drawn like the note itself on a card of its own. */
+  .page.tidy-page {
+    --room: 0px;
+    --gutter: 0px;
+    --measure: 100%;
+    padding: 14px 16px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--view-bg);
+  }
+
+  .tidy-page :global(.cm-editor) {
+    font-size: var(--text-md);
   }
 
   .summary-page.shown {

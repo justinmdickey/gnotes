@@ -49,6 +49,8 @@ const stroked = {
   sparkle: "M8 2.5c.4 2.9 2.6 5.1 5.5 5.5-2.9.4-5.1 2.6-5.5 5.5-.4-2.9-2.6-5.1-5.5-5.5 2.9-.4 5.1-2.6 5.5-5.5z",
   // Send what's typed, like Ask's question: an arrow up.
   send: "M8 13.5V2.5M3.5 7 8 2.5 12.5 7",
+  // Have AI tidy a note: a broom.
+  broom: "M13.5 2.5 9 7M6 6.5 9.5 10M6.5 7c-1.5 1.5-3 2.5-4 3l3.5 3.5c.5-1 1.5-2.5 3-4M4.75 11.25 7 9",
   // Fold every folder: two chevrons pointing in.
   collapse: "M5 3l3 3 3-3M5 13l3-3 3 3",
   // Insert an emoji.

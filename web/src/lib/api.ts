@@ -319,6 +319,8 @@ export const api = {
   /** Whose editing session each Loro peer was, for showing who wrote what. */
   authors: (noteId: string) => request<{ peers: Record<string, { user_id: string | null; name: string | null }> }>("GET", `/notes/${noteId}/authors`),
   summarize: (noteId: string) => request<NoteSummary>("POST", `/notes/${noteId}/summary`, {}),
+  /** `text` improved by the summary chat model, with nothing of it lost. Nothing is saved. */
+  tidy: (noteId: string, text: string) => request<{ original: string; text: string }>("POST", `/notes/${noteId}/tidy`, { text }),
   photoText: (id: string) => request<{ text: string }>("POST", `/attachments/${id}/text`, {}),
   features: () => request<Features>("GET", "/features"),
   attachmentMeta: (id: string) => request<AttachmentMeta>("GET", `/attachments/${id}/meta`),

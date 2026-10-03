@@ -15,6 +15,7 @@ Gnotes is a self-hosted Markdown notes app. One server holds a household's accou
 | Encryption | TLS in transit. No end-to-end encryption, so the server admin can read notes. |
 | Speech-to-text | The server forwards voice memos to an external OpenAI-compatible transcription API (e.g. faster-whisper). The note keeps the recording and the transcript. |
 | AI summaries | On demand: a note's Summary tab sends the whole note to an OpenAI-compatible chat API (local or hosted) the first time it's opened, and shows the gist, key points and action items read-only. Kept in `note_summaries` beside the note, not in its text, with a hash of the text it covers so the tab can say when the note has changed. |
+| AI Tidy Up | On demand, from the note menu or `/tidy`: the summary chat model improves a note's structure and formatting (headings, grouping, lists, tables, fenced code with its language). It may move and add, never remove: the server refuses any result that lost something, and the app shows the result for the user to apply. See [Tidy Up](#tidy-up). |
 | Text from photos | On demand: Get Text on a photo (on hover, always on touch) sends it to an OpenAI-compatible chat API with a vision model (e.g. Ollama or llama.cpp on local hardware), and the text it reads goes under the photo. |
 | AI search | Optional. Notes are embedded in chunks through an OpenAI-compatible embeddings API, in the background after edits settle. Search adds notes close in meaning; Ask is a chat that finds notes by words and meaning, shows them, and streams an answer from the summary chat model with links to them. See [AI search](#ai-search). |
 
@@ -145,6 +146,7 @@ POST   /trash/:type/:id/restore
 GET    /search?q=                  full-text search of notes I can see -> {results}
 GET    /search/meaning?q=          semantic search of notes I can see -> {results}, empty when off
 POST   /ask                        {question} -> {answer, sources}; 409 unless Ask is set up
+POST   /notes/:id/tidy             editors: {text?} -> {original, text}; the note improved by AI, not saved
 
 GET    /notes/:id/shares           owner only (same for /notebooks/:id/shares)
 POST   /shares                     {resource_type, resource_id, username, role}
@@ -248,6 +250,23 @@ With the instruction, the note a question was about scored 0.48 (median), and th
 - What's typed and the conversation stay while you visit other tabs, until **New Chat** or logging out; leaving doesn't stop an answer.
 - A note list's search still searches inside its folder, with its own By Meaning group. Its **Ask Your Notes** row opens Ask with the search text and asks it. The row comes first when the search reads like a question (ends in `?` or starts with a question word), otherwise last. With no matches at all it's the empty page's button.
 
+### Tidy Up
+
+Tidy Up (`server/src/tidy.rs`) asks the summary chat model to improve a note: add a title and `##` headings, move related lines together, make lists, checklists and tables, put pasted code in fences with its language, bold a few key terms, fix spacing. The rule is that **nothing is ever removed**. The prompt says so, and the server checks it rather than trusting the model.
+
+**`POST /notes/:id/tidy {text?}`** takes the text the app shows (or, without `text`, the note's text on the server), at most 20,000 characters, for an editor of the note (viewers get 403). It strips a leading `<think>…</think>` and a ``` fence around the whole reply, then compares the result with the original. Moving and adding are fine; these must all still be there:
+
+- **Words:** runs of letters or digits, case-insensitive, each at least as many times as before. Markdown marks (`#`, `-`, `*`, `>`, `|`, `[ ]`, backticks) aren't words; digits are; emoji and other symbols, and `$ % & @ ?`, count too. A code fence's language doesn't.
+- **Code:** every line inside a fenced block stays a line of fenced code, unchanged apart from its indentation. Every line of code in the result must be in the original, as a line or part of one, so text can move into a new fence but code can't be written.
+- **Links:** every `att:` attachment and http(s) URL, exactly.
+- **Checklists:** every item, with its box ticked or unticked as before.
+
+When something's missing the reply is 409 "Couldn't tidy this note without losing some of it" and nothing changes. The server saves nothing either way: `{original, text}` goes back to the app.
+
+**In the app.** Tidy Up (a broom) is in the note menu, and in the slash menu as `/tidy`, `/clean up`, `/format` or `/improve`, for editors when AI Summaries is set up. It isn't a headerbar button or on the format bar, which are full on phones. A dialog (a bottom sheet on phones) shows the result drawn like a note, with Apply and Cancel. Apply checks the note hasn't changed meanwhile, then writes the result through the editor as the smallest edits that get there (unchanged lines matched by a longest common subsequence, each changed run trimmed to the characters that differ), so collaborators see it live and their edits merge. It's one undo step, and its toast offers Undo.
+
+Measured against Qwen3.8 (vLLM, temperature 0) with nine synthetic messy notes (pasted code and config, a rambling house to-do list, a meeting with a checklist, a recipe with a photo, a trip plan with links, a table, a German shopping list, an already tidy list, and loose snippets), all nine passed the check, in 3–16 seconds each.
+
 ## Websocket protocol
 
 A client opens one websocket to `/api/ws` (authenticated by the session cookie) and joins the notes it has open on that one connection.
@@ -312,7 +331,7 @@ docker run -v gnotes-data:/data -p 8080:8080 gnotes
 - Config comes from environment variables: `GNOTES_DATA_DIR` (default `./data`), `GNOTES_BIND` (default `0.0.0.0:8080`), `GNOTES_PUBLIC_URL` (used to validate the websocket Origin header).
 - Speech-to-text is set by an admin under Settings → Speech-to-Text: an OpenAI-compatible API URL including the version (e.g. `http://whisper:8000/v1`), a model and an optional key. Once saved there, it overrides the env defaults `GNOTES_WHISPER_URL`, `GNOTES_WHISPER_MODEL` (default `whisper-1`) and `GNOTES_WHISPER_KEY`. An optional live URL (`ws://` or `wss://`, e.g. `ws://whisper:8000/v1/realtime`, env `GNOTES_WHISPER_REALTIME_URL`) turns on live transcripts. The key is never sent back to the app.
 - Text from photos is set the same way under Settings → Text from Photos: an OpenAI-compatible URL including the version (e.g. `http://ollama:11434/v1`), a vision model (required, e.g. `qwen2.5vl`) and an optional key; env defaults `GNOTES_VISION_URL`, `GNOTES_VISION_MODEL`, `GNOTES_VISION_KEY`. `POST /attachments/:id/text` sends the photo as a data URL to `/chat/completions` and asks for the text only, or `NO_TEXT`.
-- AI summaries are set the same way under Settings → AI Summaries; env defaults `GNOTES_SUMMARY_URL`, `GNOTES_SUMMARY_MODEL`, `GNOTES_SUMMARY_KEY`. Ask uses this chat model too.
+- AI summaries are set the same way under Settings → AI Summaries; env defaults `GNOTES_SUMMARY_URL`, `GNOTES_SUMMARY_MODEL`, `GNOTES_SUMMARY_KEY`. Ask and Tidy Up use this chat model too.
 - Semantic search is set under Settings → Semantic Search: an OpenAI-compatible URL including the version (e.g. `http://ollama:11434/v1`), an embedding model (required, e.g. `nomic-embed-text`) and an optional key; env defaults `GNOTES_EMBED_URL`, `GNOTES_EMBED_MODEL`, `GNOTES_EMBED_KEY`. The server calls `/embeddings`. Changing the model re-embeds every note.
 - The data folder holds everything: `gnotes.db`, `blobs/` and `export/`. Backing up means copying that folder.
 

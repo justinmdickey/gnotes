@@ -16,6 +16,7 @@ pub mod semantic;
 pub mod settings;
 pub mod shares;
 pub mod summary;
+pub mod tidy;
 pub mod tree;
 pub mod util;
 pub mod ws;
@@ -205,6 +206,7 @@ pub fn router(state: AppState) -> Router {
         .route("/admin/settings/{chat}/test", post(settings::test_chat))
         .route("/admin/semantic/reindex", post(settings::reindex_embed))
         .route("/notes/{id}/summary", get(summary::get_summary).post(summary::summarize))
+        .route("/notes/{id}/tidy", post(tidy::tidy))
         .route("/notes/{id}/authors", get(authors::list_authors))
         .route("/search", get(search::search))
         .route("/search/meaning", get(semantic::search))

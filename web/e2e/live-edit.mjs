@@ -18,7 +18,7 @@ const base = `http://127.0.0.1:${port}`;
 // It's also the chat model: a photo always reads as a short shopping list, a note (text only)
 // summarizes to a fixed summary, and a question (Ask) gets a one-line answer citing note [1],
 // streamed a few characters at a time, each a moment later. A follow-up is rewritten as the first
-// question plus the follow-up. And the embedding model: dairy words land together; any other word is its own
+// question plus the follow-up. Tidy Up adds a heading and makes plain lines bullets. And the embedding model: dairy words land together; any other word is its own
 // direction (hashed), so texts only come close when they share a word or are both about dairy.
 const whisper = createServer((req, res) => {
   const chunks = [];
@@ -36,6 +36,19 @@ const whisper = createServer((req, res) => {
         let i = 0;
         const next = () => (i < pieces.length ? (res.write(pieces[i++]), setTimeout(next, 60)) : res.end("data: [DONE]\n\n"));
         setTimeout(next, 800);
+        return;
+      }
+      // Tidy Up: a heading under the title, and plain lines outside code as bullets.
+      const [, note] = photo ? [] : last.split("The note:\n\n");
+      if (note !== undefined) {
+        let code = false;
+        const [first, ...rest] = note.split("\n");
+        const lines = rest.map((l) => {
+          if (l.startsWith("```")) code = !code;
+          return code || l.startsWith("```") || !l.trim() || /^\s*([-*#>|!]|\d+\.)/.test(l) ? l : `- ${l}`;
+        });
+        const content = ["<think>Tidying.</think>", first, "", "## To buy", "", ...lines].join("\n");
+        setTimeout(() => res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content } }] })), 800);
         return;
       }
       const followUp = !photo && last.split("\nLast message: ");
@@ -536,6 +549,12 @@ try {
   );
   await alice.evaluate((h) => (location.hash = h), noteHash);
   await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("bread"));
+  // Tidy Up needs the AI chat model.
+  await alice.click(".editor header button[aria-label='Note menu']");
+  await alice.waitForSelector("[role=menuitem]");
+  check(await alice.evaluate(() => ![...document.querySelectorAll("[role=menuitem]")].some((b) => b.textContent.includes("Tidy Up"))), "without AI, the note menu has no Tidy Up");
+  await alice.keyboard.press("Escape");
+  await alice.waitForFunction(() => !document.querySelector("[role=menuitem]"));
 
   // Settings: an admin resets Bob's password, and Bob's open app drops to the login screen.
   await alice.click("nav button[aria-label='Settings']");
@@ -636,6 +655,45 @@ try {
   await alice.click(".tabs ::-p-text(Note)");
   await alice.keyboard.press("Backspace");
   for (let i = 0; i < 7; i++) await alice.keyboard.press("Backspace");
+
+  // Tidy Up, from the note menu: a rendered preview, then Apply writes it into the note, and Undo takes it back.
+  await new Promise((r) => setTimeout(r, 600));
+  const untidy = await markdown(alice);
+  await alice.click(".editor header button[aria-label='Note menu']");
+  await alice.waitForSelector("[role=menuitem]");
+  await alice.evaluate(() => [...document.querySelectorAll("[role=menuitem]")].find((b) => b.textContent.includes("Tidy Up")).click());
+  await alice.waitForSelector("dialog .tidy-state .spinner");
+  await alice.waitForFunction(() => document.querySelector("dialog .tidy-page .cm-content")?.innerText.includes("To buy"), { timeout: 5000 });
+  check(await alice.evaluate(() => !document.querySelector("dialog .tidy-page").innerText.includes("##")), "Tidy Up shows the tidied note, drawn like a note");
+  if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-tidy.png") });
+  check(await markdown(alice) === untidy, "the note doesn't change until Apply");
+  await alice.click("dialog ::-p-text(Apply)");
+  await closed(alice);
+  const tidied = await markdown(alice);
+  check(tidied.includes("\n\n## To buy\n\n") && tidied.split("\n")[0] === untidy.split("\n")[0], `Apply writes the tidied note in (${JSON.stringify(tidied.slice(0, 60))})`);
+  await alice.click(".toast ::-p-text(Undo)");
+  await alice.waitForFunction((t) => document.querySelector(".cm-content").cmTile.root.view.state.doc.toString() === t, { timeout: 3000 }, untidy);
+  check(true, "the toast's Undo puts the note back as it was");
+  // The same from the slash menu, by another of its words.
+  await alice.click(".cm-content");
+  await alice.keyboard.down("Control");
+  await alice.keyboard.press("End");
+  await alice.keyboard.up("Control");
+  await alice.keyboard.type(" /form");
+  await alice.waitForFunction(() => document.querySelector(".cm-slash li[aria-selected]")?.textContent === "Tidy Up");
+  if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-slash-tidy.png") });
+  await new Promise((r) => setTimeout(r, 150));
+  await alice.keyboard.press("Enter");
+  await alice.waitForFunction(() => document.querySelector("dialog .tidy-page .cm-content")?.innerText.includes("To buy"), { timeout: 5000 });
+  check(await markdown(alice) === `${untidy} `, "/format finds Tidy Up in the slash menu, which takes its words out and opens the preview");
+  await alice.click("dialog ::-p-text(Cancel)");
+  await closed(alice);
+  check(await markdown(alice) === `${untidy} `, "Cancel leaves the note as it was");
+  await alice.click(".cm-content");
+  await alice.keyboard.down("Control");
+  await alice.keyboard.press("End");
+  await alice.keyboard.up("Control");
+  await alice.keyboard.press("Backspace");
 
   // Search by meaning: "dairy" isn't in Groceries, but milk and cheese are. Ask answers from it and links it.
   await alice.evaluate(() => document.activeElement?.blur());
@@ -1394,6 +1452,22 @@ try {
     await alice.waitForFunction(() => document.querySelector(".summary-page.shown .cm-content")?.innerText.includes("Things to buy"), { timeout: 5000 });
     await shot("phone-summary-dark");
     await alice.tap(".tabs button:first-child");
+    // Tidy Up on a phone: the note menu's sheet, then the preview as a bottom sheet with Apply in reach.
+    await alice.tap(".editor header button[aria-label='Note menu']");
+    await alice.waitForSelector("[role=menuitem]");
+    await shot("phone-note-menu-dark");
+    await alice.evaluate(() => [...document.querySelectorAll("[role=menuitem]")].find((b) => b.textContent.includes("Tidy Up")).click());
+    await alice.waitForFunction(() => document.querySelector("dialog .tidy-page .cm-content")?.innerText.includes("To buy"), { timeout: 5000 });
+    await shot("phone-tidy-dark");
+    check(
+      await alice.evaluate(() => {
+        const apply = [...document.querySelectorAll("dialog button")].find((b) => b.textContent.trim() === "Apply").getBoundingClientRect();
+        return apply.bottom <= innerHeight && apply.top > innerHeight / 2;
+      }),
+      "on a phone, Tidy Up's preview is a bottom sheet with Apply in thumb reach",
+    );
+    await alice.evaluate(() => [...document.querySelectorAll("dialog button")].find((b) => b.textContent.trim() === "Cancel").click());
+    await closed(alice);
     // The tab bar is Notes, Recent, +, Ask, Shared; Account is your avatar at the top right of each tab.
     check(
       await alice.evaluate(() => [...document.querySelectorAll(".tabbar > *")].map((t) => t.textContent.trim() || "+").join(",") === "Notes,Recent,+,Ask,Shared"),

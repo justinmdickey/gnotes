@@ -5,6 +5,7 @@
 //   screens: home recent shared account trash notebook:<name> note:<title> edit:<title> search:<query>
 //            ask (the Ask tab, empty; Search without --ai) find:<query> (typed in Ask's field, not sent)
 //            ask:<question>[|<follow-up>...] (with --ai) service:<form> (a Settings service form, e.g. service:embed)
+//            menu:<title> (a note with its menu open) tidy:<title> (Tidy Up's preview, with --ai)
 //            (default: home notebook:Kitchen note:Groceries account)
 //   --phone | --desktop   viewport (default: both)
 //   --dark | --light      color scheme (default: dark)
@@ -78,6 +79,15 @@ if (flag("--ai")) {
             res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\n`);
           }
           res.end("data: [DONE]\n\n");
+          return;
+        }
+        // Tidy Up: a title mark, a heading, and plain lines as bullets.
+        const [, note] = last.split("The note:\n\n");
+        if (note !== undefined) {
+          const [first, ...rest] = note.split("\n");
+          const items = rest.map((l) => (!l.trim() || /^\s*([-*]|\d+\.|```)/.test(l) ? l : `- ${l}`));
+          const content = [first.startsWith("#") ? first : `# ${first}`, "", "## To buy", "", ...items].join("\n");
+          res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content } }] }));
           return;
         }
         // A follow-up stands on its own as the first question plus the follow-up.
@@ -175,6 +185,8 @@ async function go(page, target) {
     notebook: `#/nb/${tree.notebooks.find((n) => n.name === arg)?.id}`,
     note: `#/note/${tree.notes.find((n) => n.title === arg)?.id}`,
     edit: `#/note/${tree.notes.find((n) => n.title === arg)?.id}`,
+    menu: `#/note/${tree.notes.find((n) => n.title === arg)?.id}`,
+    tidy: `#/note/${tree.notes.find((n) => n.title === arg)?.id}`,
   }[kind];
   if (!hash || hash.endsWith("undefined")) throw new Error(`unknown screen ${target}`);
   // No dialog left over from the screen before.
@@ -220,6 +232,16 @@ async function go(page, target) {
     await page.evaluate((name) => document.querySelector(`.service.${name}`).scrollIntoView({ block: "center" }), arg);
   }
   // Typing: the cursor in the note, with the format bar (on phones, the keyboard bar) up.
+  if (kind === "menu" || kind === "tidy") {
+    await page.waitForSelector(".editor header button[aria-label='Note menu']");
+    await settle(300);
+    await page.click(".editor header button[aria-label='Note menu']");
+    await page.waitForSelector("[role=menuitem]");
+  }
+  if (kind === "tidy") {
+    await page.evaluate(() => [...document.querySelectorAll("[role=menuitem]")].find((b) => b.textContent.includes("Tidy Up")).click());
+    await page.waitForSelector("dialog .tidy-page .cm-content", { timeout: 8000 });
+  }
   if (kind === "edit") {
     await page.waitForSelector(".cm-content[contenteditable=true]");
     await page.click(".cm-content");

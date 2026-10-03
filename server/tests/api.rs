@@ -1080,6 +1080,89 @@ async fn notes_are_summarized_on_request() {
     assert_eq!(res.status(), 400);
 }
 
+type Rewrite = std::sync::Arc<std::sync::Mutex<fn(&str) -> String>>;
+
+/// A stand-in chat model for Tidy Up: answers with `rewrite` of the note it was sent.
+async fn fake_tidier(rewrite: Rewrite) -> String {
+    let fake = axum::Router::new().route(
+        "/v1/chat/completions",
+        axum::routing::post(move |axum::Json(body): axum::Json<Value>| async move {
+            let prompt = body["messages"][0]["content"].as_str().unwrap().to_owned();
+            let (rules, note) = prompt.split_once("The note:\n\n").unwrap();
+            assert!(rules.contains("Never delete"), "{rules}");
+            let content = (rewrite.lock().unwrap())(note);
+            axum::Json(json!({ "choices": [{ "message": { "role": "assistant", "content": content } }] }))
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/v1", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, fake).await });
+    url
+}
+
+#[tokio::test]
+async fn tidy_up_never_loses_anything() {
+    let rewrite: Rewrite = std::sync::Arc::new(std::sync::Mutex::new(|n| n.to_owned()));
+    let fake_url = fake_tidier(rewrite.clone()).await;
+    let dir = TempDir::new().unwrap();
+    let server = start(&dir).await;
+    auth::create_user(&server.state.db, "root", "", "password123", true).await.unwrap();
+    let root = login(&server.base, "root").await;
+    let alice = user(&server, "alice").await;
+    let bob = user(&server, "bob").await;
+    let note = "Plan\ncall Bob about the roof\n[x] buy nails\n[ ] rent a ladder\n![Photo](att:01a0d056-667e-733b-a280-1d118b647773)\nsee https://example.com/roofs?page=2\n```sh\n  ls -la\n```";
+    let res = import(&alice, None, vec![("Plan.md", note.as_bytes().to_vec())]).await;
+    assert!(res.status().is_success());
+    let plan = alice.get("/tree").await["notes"][0]["id"].as_str().unwrap().to_owned();
+    let path = format!("/notes/{plan}/tidy");
+
+    // Off until the summary chat model is set up.
+    let res = alice.send(reqwest::Method::POST, &path, json!({})).await;
+    assert_eq!(res.status(), 409);
+    root.send(reqwest::Method::PUT, "/admin/settings/summary", json!({ "url": fake_url, "model": "llama3.1" })).await;
+
+    // A good tidy: headings added, lines moved and restyled, wrapped in thinking and a fence.
+    *rewrite.lock().unwrap() = |_| {
+        "<think>Let me see.</think>\n```markdown\n# Plan\n\n## Roof\n\nCall **Bob** about the roof\n\n## To do\n\n- [ ] Rent a ladder\n- [x] Buy nails\n\n![Photo](att:01a0d056-667e-733b-a280-1d118b647773)\n\nSee https://example.com/roofs?page=2\n\n```sh\nls -la\n```\n```".into()
+    };
+    let tidied = alice.post(&path, json!({})).await;
+    let body = tidied["original"].as_str().unwrap().to_owned();
+    assert!(body.contains("call Bob about the roof"), "{body}");
+    assert!(tidied["text"].as_str().unwrap().starts_with("# Plan\n\n## Roof\n\nCall **Bob**"), "{tidied}");
+    // Nothing is saved: the app applies it.
+    assert_eq!(gnotes_server::rooms::note_body(&server.state, plan.parse().unwrap()).await.unwrap(), body);
+    // The app can send the text it shows.
+    *rewrite.lock().unwrap() = |n| format!("# Title\n\n{n}");
+    assert_eq!(alice.post(&path, json!({ "text": "hello there" })).await["text"], "# Title\n\nhello there");
+
+    // Anything lost or changed is refused, and nothing is changed.
+    let refused: [fn(&str) -> String; 6] = [
+        |n| n.replace("about ", ""),
+        |n| n.replace("call Bob", "phone Bob"),
+        |n| n.replace("ls -la", "ls -l"),
+        |n| n.replace("att:01a0d056", "att:01a0d057"),
+        |n| n.replace("[x] buy", "[ ] buy"),
+        |n| n.replace("page=2", "page=3"),
+    ];
+    for f in refused {
+        *rewrite.lock().unwrap() = f;
+        let res = alice.send(reqwest::Method::POST, &path, json!({})).await;
+        assert_eq!(res.status(), 409, "{}", f(&body));
+        let err: Value = res.json().await.unwrap();
+        assert_eq!(err["message"], "Couldn't tidy this note without losing some of it");
+    }
+    assert_eq!(gnotes_server::rooms::note_body(&server.state, plan.parse().unwrap()).await.unwrap(), body);
+
+    // Viewers can't, strangers don't see the note, and long notes are too long.
+    alice.post("/shares", json!({ "resource_type": "note", "resource_id": plan, "username": "bob", "role": "viewer" })).await;
+    assert_eq!(bob.send(reqwest::Method::POST, &path, json!({})).await.status(), 403);
+    let carol = user(&server, "carol").await;
+    assert_eq!(carol.send(reqwest::Method::POST, &path, json!({})).await.status(), 404);
+    let long = "word ".repeat(5000);
+    assert_eq!(alice.send(reqwest::Method::POST, &path, json!({ "text": long })).await.status(), 400);
+    assert_eq!(alice.send(reqwest::Method::POST, &path, json!({ "text": "  " })).await.status(), 400);
+}
+
 /// Every file under `data/export`, relative and sorted.
 fn exported(dir: &TempDir) -> Vec<String> {
     let root = dir.path().join("export");
