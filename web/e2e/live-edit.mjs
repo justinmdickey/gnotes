@@ -521,6 +521,12 @@ try {
   await bob.waitForFunction(() => document.body.innerText.includes("You were signed out"), { timeout: 10000 });
   check(true, "admin reset signs the user out of their open app");
 
+  // AI services start folded away behind a switch; switching one on opens its form.
+  check(
+    await alice.evaluate(() => [".stt", ".vision", ".summaries", ".embed"].every((c) => !document.querySelector(`${c} input`))),
+    "AI services are folded away while off",
+  );
+  for (const c of [".stt", ".vision", ".summaries", ".embed"]) await alice.click(`${c} .switch`);
   // The admin points speech-to-text at a service from Settings, tests it and saves it.
   await alice.type(".stt input[type=url]", `http://127.0.0.1:${port + 1}/v1`);
   await alice.type(".stt input[placeholder^='Optional, e.g. ws']", `ws://127.0.0.1:${port + 2}/v1/realtime`);
@@ -544,6 +550,12 @@ try {
   await alice.click(".embed button[type=submit]");
   await alice.waitForFunction(() => document.body.innerText.includes("Semantic search saved"));
   check(true, "admin sets up semantic search in settings");
+  // Switching a running service off asks first, and Cancel leaves it on.
+  await alice.click(".vision .switch");
+  await alice.waitForSelector("dialog[open]");
+  await alice.evaluate(() => [...document.querySelectorAll("dialog[open] button")].find((b) => b.textContent.trim() === "Cancel").click());
+  await closed(alice);
+  check(await alice.$eval(".vision .switch", (b) => b.getAttribute("aria-checked") === "true" && !!document.querySelector(".vision input")), "turning a service off asks first");
   if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-settings.png") });
   await alice.click(".settings-layer .back");
   await alice.waitForFunction(() => !document.querySelector(".settings-layer"));
@@ -1244,7 +1256,10 @@ try {
     await alice.waitForFunction(() => [...document.querySelectorAll(".note .where")].some((w) => w.textContent.includes("Home › Garage")));
     check(true, "searching from the top finds notes anywhere and says where they are");
     await shot("phone-search-dark");
-    await alice.click(".search .clear");
+    // The Notes tab drops the search and goes back to the plain list.
+    await alice.evaluate(() => [...document.querySelectorAll(".tabbar button")].find((b) => b.textContent.includes("Notes")).click());
+    await alice.waitForFunction(() => document.querySelector(".search input")?.value === "" && !!document.querySelector(".pane.list .folder-row"));
+    check(true, "the Notes tab clears a search");
     await alice.evaluate(() => [...document.querySelectorAll(".pane.list .folder-row")].find((b) => b.textContent.includes("Home")).click());
     await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Home");
     await alice.evaluate(() => [...document.querySelectorAll(".pane.list .folder-row")].find((b) => b.textContent.includes("Kitchen")).click());

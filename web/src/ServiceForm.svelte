@@ -1,14 +1,17 @@
 <script lang="ts">
   import { ApiError, type ServiceInput, type ServiceSettings } from "./lib/api";
   import Icon from "./lib/Icon.svelte";
-  import { toast } from "./lib/ui.svelte";
+  import { ask, toast } from "./lib/ui.svelte";
 
   /**
    * Settings for an OpenAI-compatible service the server calls out to (speech-to-text, photo reading):
-   * URL, model, optional key, an optional live URL, and Test and Save.
+   * a row with a switch, like an AdwExpanderRow, that opens URL, model, optional key, an optional live
+   * URL, and Test and Save. Folded away while the service is off.
    */
   let {
     name,
+    title,
+    subtitle,
     explain,
     urlPlaceholder,
     modelPlaceholder,
@@ -21,6 +24,9 @@
   }: {
     /** For the form's class, which tests and styles find it by. */
     name: string;
+    title: string;
+    /** One line under the title saying what it does. */
+    subtitle: string;
     explain: string;
     urlPlaceholder: string;
     modelPlaceholder: string;
@@ -40,6 +46,7 @@
   /** What's typed in the key field; empty means "keep the saved key". */
   let key = $state("");
   let clearKey = $state(false);
+  let open = $state(settings.enabled);
   let testing = $state(false);
   let result = $state<{ ok: boolean; message: string } | null>(null);
   const dirty = $derived(
@@ -71,8 +78,34 @@
     testing = false;
   }
 
+  async function toggle() {
+    if (!open) {
+      open = true;
+      return;
+    }
+    if (settings.enabled) {
+      const ok = await ask({ title: `Turn Off ${title}?`, body: "Its settings are cleared.", confirm: "Turn Off", destructive: true });
+      if (!ok) return;
+      url = "";
+      if (!(await apply())) return;
+    } else {
+      url = settings.url;
+      model = settings.model;
+      liveUrl = settings.realtime_url ?? "";
+      key = "";
+      clearKey = false;
+      result = null;
+    }
+    open = false;
+  }
+
   async function submit(e: SubmitEvent) {
     e.preventDefault();
+    if (await apply()) open = settings.enabled;
+  }
+
+  /** Saves what's in the form. An empty URL turns the service off. */
+  async function apply() {
     const turningOff = !url.trim();
     try {
       settings = await save(input());
@@ -83,13 +116,23 @@
       clearKey = false;
       result = null;
       toast(turningOff ? off : saved);
+      return true;
     } catch (err) {
       result = failure(err);
+      return false;
     }
   }
 </script>
 
-<form class="boxed service {name}" onsubmit={submit}>
+<form class="boxed service {name}" class:open onsubmit={submit}>
+  <div class="head">
+    <div class="titles">
+      <span class="title">{title}</span>
+      <span class="dim subtitle">{subtitle}</span>
+    </div>
+    <button type="button" class="switch" role="switch" aria-checked={open} aria-label={title} onclick={toggle}></button>
+  </div>
+  {#if open}
   <p class="dim explain">{explain}</p>
   <label class="field">
     <span>Service URL</span>
@@ -133,6 +176,7 @@
     <button type="button" disabled={!url.trim() || testing} onclick={runTest}>Test</button>
     <button type="submit" class="suggested" disabled={!dirty}>Save</button>
   </div>
+  {/if}
 </form>
 
 <style>
@@ -149,6 +193,67 @@
     flex-direction: column;
     gap: 2px;
     padding: 12px;
+  }
+
+  .head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 34px;
+    padding: 0 4px;
+  }
+
+  .titles {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .subtitle {
+    font-size: var(--text-sm);
+  }
+
+  .service.open .head {
+    padding-bottom: 10px;
+    margin-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  /* An AdwSwitch: a pill track with a round knob, accent when on. */
+  .switch {
+    flex: none;
+    position: relative;
+    width: 48px;
+    min-width: 48px;
+    height: 26px;
+    min-height: 26px;
+    padding: 0;
+    border-radius: 13px;
+    background: var(--border);
+    transition: background 150ms;
+  }
+
+  .switch::after {
+    content: "";
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 1px 2px rgb(0 0 0 / 25%);
+    transition: transform 150ms;
+  }
+
+  .switch[aria-checked="true"] {
+    background: var(--accent-bg);
+  }
+
+  .switch[aria-checked="true"]::after {
+    transform: translateX(22px);
   }
 
   .explain {

@@ -251,11 +251,17 @@
           </li>
         </ul>
 
+        {#if whisper || vision || summary || embed}
+          <h2 class="group-title">AI Services</h2>
+          <p class="dim group-note">Optional. Each one sends data to a service you choose, and nothing is sent while it's off.</p>
+        {/if}
+        <div class="services">
         {#if whisper}
-          <h2 class="group-title">Speech-to-Text</h2>
           <ServiceForm
             name="stt"
-            explain="Voice memos are sent here to be transcribed. Any OpenAI-compatible service works, such as faster-whisper-server or OpenAI. Leave the URL empty to turn it off. Add a live URL to see words in the note while you record."
+            title="Speech-to-Text"
+            subtitle="Transcribe voice memos"
+            explain="Voice memos are sent here to be transcribed. Any OpenAI-compatible service works, such as faster-whisper-server or OpenAI. Add a live URL to see words in the note while you record."
             urlPlaceholder="http://whisper:8000/v1"
             modelPlaceholder="whisper-1"
             live
@@ -272,10 +278,11 @@
         {/if}
 
         {#if vision}
-          <h2 class="group-title">Text from Photos</h2>
           <ServiceForm
             name="vision"
-            explain="Get Text on a photo sends it here, and the text in it is written under the photo. Any OpenAI-compatible service with a vision model works, such as Ollama, llama.cpp or vLLM on your own hardware. Leave the URL empty to turn it off."
+            title="Text from Photos"
+            subtitle="Read the text in photos"
+            explain="Get Text on a photo sends it here, and the text in it is written under the photo. Any OpenAI-compatible service with a vision model works, such as Ollama, llama.cpp or vLLM on your own hardware."
             urlPlaceholder="http://ollama:11434/v1"
             modelPlaceholder="qwen2.5vl"
             bind:settings={vision}
@@ -291,10 +298,11 @@
         {/if}
 
         {#if summary}
-          <h2 class="group-title">AI Summaries</h2>
           <ServiceForm
             name="summaries"
-            explain="A note's Summary tab sends the note here and shows what comes back: the gist, key points and action items. Nothing is sent until someone opens that tab. Any OpenAI-compatible chat service works, such as Ollama, llama.cpp or vLLM on your own hardware. Leave the URL empty to turn it off."
+            title="AI Summaries"
+            subtitle="Summarize notes, and answer Ask Your Notes"
+            explain="A note's Summary tab sends the note here and shows what comes back: the gist, key points and action items. Nothing is sent until someone opens that tab. Any OpenAI-compatible chat service works, such as Ollama, llama.cpp or vLLM on your own hardware."
             urlPlaceholder="http://ollama:11434/v1"
             modelPlaceholder="llama3.1"
             bind:settings={summary}
@@ -310,10 +318,11 @@
         {/if}
 
         {#if embed}
-          <h2 class="group-title">Semantic Search</h2>
           <ServiceForm
             name="embed"
-            explain="Search also finds notes by meaning, not just matching words, and Ask Your Notes answers questions from them with the AI Summaries service. Notes are sent here in pieces to be indexed, and again after edits. Any OpenAI-compatible embeddings service works, such as Ollama with nomic-embed-text. Leave the URL empty to turn it off."
+            title="Semantic Search"
+            subtitle="Find notes by meaning"
+            explain="Search also finds notes by meaning, not just matching words, and Ask Your Notes answers questions from them with the AI Summaries service. Notes are sent here in pieces to be indexed, and again after edits. Any OpenAI-compatible embeddings service works, such as Ollama with nomic-embed-text."
             urlPlaceholder="http://ollama:11434/v1"
             modelPlaceholder="nomic-embed-text"
             bind:settings={embed}
@@ -327,6 +336,8 @@
             off="Semantic search turned off"
           />
         {/if}
+
+        </div>
 
         {#if invites.length}
           <h2 class="group-title">Unused Invites</h2>
@@ -455,6 +466,17 @@
 
   .group-title {
     margin-top: 26px;
+  }
+
+  .group-note {
+    margin: -4px 4px 10px;
+    font-size: var(--text-sm);
+  }
+
+  .services {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
   }
 
   .boxed {
