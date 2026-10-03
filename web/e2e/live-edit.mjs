@@ -337,7 +337,10 @@ try {
   await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("bread"));
 
   // The Summary tab summarizes the note the first time it's opened, and says when the note has moved on.
-  await alice.click(".tabs ::-p-text(Summary)");
+  await alice.waitForFunction(() => document.querySelector(".tabs button:last-child")?.innerText.trim() === "Summarize");
+  check(true, "with no summary yet, the tab offers to Summarize");
+  if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-summarize-tab.png") });
+  await alice.click(".tabs button:last-child");
   await alice.waitForSelector(".summary-state .spinner");
   await alice.waitForFunction(() => document.querySelector(".summary-page.shown .cm-content")?.innerText.includes("Things to buy this week."), { timeout: 5000 });
   check(
@@ -350,6 +353,10 @@ try {
   if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-summary.png") });
   await alice.click(".tabs ::-p-text(Note)");
   await alice.waitForFunction(() => !document.querySelector(".summary-page.shown") && !!document.querySelector(".format"));
+  await alice.reload();
+  await alice.waitForFunction(() => document.querySelector(".tabs button:last-child")?.innerText.trim() === "Summary");
+  check(true, "once a note has a summary, the tab reads Summary before it's opened");
+  await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("bread"));
   await alice.click(".cm-content");
   await alice.keyboard.down("Control");
   await alice.keyboard.press("End");

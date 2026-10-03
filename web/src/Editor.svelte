@@ -112,6 +112,13 @@
     summarizing = false;
   }
 
+  // Fetched up front, so the tab can say whether opening it shows a summary or makes one.
+  $effect(() => {
+    if (!app.features.summaries) return;
+    const id = noteId;
+    untrack(() => api.summary(id).then((s) => { if (!summarizing && s.summary) keep(s); }, () => {}));
+  });
+
   /** Opening the tab is the trigger: it shows the saved summary, or makes one when there's none. */
   async function openSummary() {
     tab = "summary";
@@ -473,7 +480,10 @@
           {#if app.features.summaries}
             <div class="tabs" role="tablist" aria-label="Note or summary">
               <button role="tab" aria-selected={tab === "note"} class:on={tab === "note"} onclick={(e) => (e.stopPropagation(), (tab = "note"))}>Note</button>
-              <button role="tab" aria-selected={tab === "summary"} class:on={tab === "summary"} onclick={(e) => (e.stopPropagation(), void openSummary())}>Summary</button>
+              <button role="tab" aria-selected={tab === "summary"} class:on={tab === "summary"} title={summary ? "Show the summary" : "Make a summary of this note"}
+                onclick={(e) => (e.stopPropagation(), void openSummary())}>
+                {#if summary || summarizing}Summary{:else}<Icon name="sparkle" size={14} />Summarize{/if}
+              </button>
             </div>
           {/if}
         </div>
@@ -994,6 +1004,9 @@
   }
 
   .tabs button {
+    display: flex;
+    align-items: center;
+    gap: 5px;
     min-height: 28px;
     padding: 0 14px;
     border-radius: var(--radius-pill);

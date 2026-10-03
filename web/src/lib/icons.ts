@@ -43,6 +43,8 @@ const stroked = {
   camera: "M2.5 5.5h2.5l1-1.5h4l1 1.5h2.5v7.5h-11zM8 11a2 2 0 1 0 0-4 2 2 0 0 0 0 4z",
   mic: "M8 2.5a2 2 0 0 0-2 2V8a2 2 0 1 0 4 0V4.5a2 2 0 0 0-2-2zM4 7.5a4 4 0 0 0 8 0M8 11.5v2",
   image: "M2.5 3.5h11v9h-11zM2.5 10.5l3-3 3 3 2-2 3 3M10.5 6.5h.01",
+  // Have AI make something, like a note's summary.
+  sparkle: "M8 2.5c.4 2.9 2.6 5.1 5.5 5.5-2.9.4-5.1 2.6-5.5 5.5-.4-2.9-2.6-5.1-5.5-5.5 2.9-.4 5.1-2.6 5.5-5.5z",
   // Hide the on-screen keyboard.
   keyboardhide: "M2.5 3h11v6.5h-11zM5 5.25h.01M8 5.25h.01M11 5.25h.01M5.5 7.5h5M6 11.75l2 2 2-2",
   bold: "M4.5 3h4a2.5 2.5 0 0 1 0 5h-4zM4.5 8h4.8a2.5 2.5 0 0 1 0 5H4.5z",
