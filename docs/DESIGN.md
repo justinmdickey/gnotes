@@ -228,7 +228,8 @@ docker run -v gnotes-data:/data -p 8080:8080 gnotes
 3. **Extras:** server-side whisper transcription, note history view, search (SQLite FTS5).
 4. **GTK client:** Rust, gtk4-rs, libadwaita, the `loro` crate and the same websocket protocol.
 
-## Open questions
+## Decided
 
-- **Search:** server-only full-text search, or also a local index on devices so offline search works?
-- **Accounts:** should people be able to sign up themselves with an invite link, or only through the admin?
+- **Search:** the server does full-text search (SQLite FTS5). Offline, the app falls back to matching titles and previews of the notes it has cached.
+- **AI search:** optional, set up by an admin like Speech-to-Text. Semantic search finds notes by meaning through an OpenAI-compatible embeddings endpoint; Ask writes an answer from the matching notes and links them.
+- **Accounts:** sign-up is by admin-made invite link only. Letting anyone with an email at an allowed domain join is planned after 1.0; it needs email addresses and a way to verify them.
