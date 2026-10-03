@@ -15,8 +15,10 @@ const data = mkdtempSync(join(tmpdir(), "gnotes-e2e-"));
 const port = 18000 + Math.floor(Math.random() * 1000);
 const base = `http://127.0.0.1:${port}`;
 // A stand-in speech-to-text service: answers every transcription request the same way.
-// It's also the chat model: a photo always reads as a short shopping list, and a note (text only)
-// summarizes to a fixed summary, each a moment later.
+// It's also the chat model: a photo always reads as a short shopping list, a note (text only)
+// summarizes to a fixed summary, and a question (Ask) gets a one-line answer citing note [1], each a
+// moment later. And the embedding model: dairy words land together; any other word is its own
+// direction (hashed), so texts only come close when they share a word or are both about dairy.
 const whisper = createServer((req, res) => {
   const chunks = [];
   req.on("data", (c) => chunks.push(c));
@@ -25,8 +27,25 @@ const whisper = createServer((req, res) => {
     if (req.url.endsWith("/chat/completions")) {
       const body = JSON.parse(Buffer.concat(chunks).toString());
       const photo = Array.isArray(body.messages[0].content);
-      const content = photo ? "SHOPPING LIST\nOat milk" : "Things to buy this week.\n\n## Key points\n- **Milk** and eggs\n\n## Action items\n- [ ] Buy bread";
+      const question = !photo && body.messages[0].content.includes("\nQuestion: ");
+      const content = photo
+        ? "SHOPPING LIST\nOat milk"
+        : question
+          ? "You have milk and cheese on your list [1]."
+          : "Things to buy this week.\n\n## Key points\n- **Milk** and eggs\n\n## Action items\n- [ ] Buy bread";
       setTimeout(() => res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content } }] })), 800);
+    } else if (req.url.endsWith("/embeddings")) {
+      const dairy = ["milk", "dairy", "cheese", "butter", "yogurt"];
+      const embed = (t) => {
+        const v = new Array(65).fill(0);
+        for (const w of t.toLowerCase().split(/\W+/).filter(Boolean)) {
+          if (dairy.includes(w)) v[0] += 3;
+          else v[1 + ([...w].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % 64)] += 1;
+        }
+        return v;
+      };
+      const { input } = JSON.parse(Buffer.concat(chunks).toString());
+      res.end(JSON.stringify({ data: input.map((t, index) => ({ index, embedding: embed(t) })) }));
     } else res.end(JSON.stringify({ text: "remember the milk" }));
   });
 }).listen(port + 1, "127.0.0.1");
@@ -463,6 +482,11 @@ try {
   await alice.click(".summaries button[type=submit]");
   await alice.waitForFunction(() => document.body.innerText.includes("Summaries saved"));
   check(true, "admin sets up summaries in settings");
+  await alice.type(".embed input[type=url]", `http://127.0.0.1:${port + 1}/v1`);
+  await alice.type(".embed input[placeholder='nomic-embed-text']", "nomic-embed-text");
+  await alice.click(".embed button[type=submit]");
+  await alice.waitForFunction(() => document.body.innerText.includes("Semantic search saved"));
+  check(true, "admin sets up semantic search in settings");
   if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-settings.png") });
   await alice.click(".settings-layer .back");
   await alice.waitForFunction(() => !document.querySelector(".settings-layer"));
@@ -504,6 +528,38 @@ try {
   await alice.click(".tabs ::-p-text(Note)");
   await alice.keyboard.press("Backspace");
   for (let i = 0; i < 7; i++) await alice.keyboard.press("Backspace");
+
+  // Search by meaning: "dairy" isn't in Groceries, but milk and cheese are. Ask answers from it and links it.
+  await alice.evaluate(() => document.activeElement?.blur());
+  // Notes are embedded a few seconds after typing stops.
+  await alice.waitForFunction(async () => (await fetch("/api/search/meaning?q=dairy").then((r) => r.json())).results.length > 0, { timeout: 40000, polling: 500 });
+  await alice.evaluate(() => (location.hash = "#/all"));
+  await alice.waitForSelector(".pane.list .search input", { visible: true });
+  await alice.type(".pane.list .search input", "dairy");
+  await alice.waitForFunction(
+    () => [...document.querySelectorAll(".pane.list .meaning .note")].some((b) => b.textContent.includes("Groceries") && b.querySelector(".snippet")),
+    { timeout: 5000 },
+  );
+  check(
+    await alice.evaluate(() => !document.querySelector(".pane.list .boxed-list:not(.meaning):not(.ask) .note") && !!document.querySelector(".pane.list .meaning + .ask")),
+    "search finds a note by meaning under By Meaning, with Ask after it",
+  );
+  if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-search-meaning.png") });
+  // The results slide in, moving Ask down; let them settle before tapping it.
+  await new Promise((r) => setTimeout(r, 400));
+  await alice.click(".pane.list .ask button");
+  await alice.waitForSelector("dialog .answer .cite", { timeout: 5000 });
+  check(
+    await alice.evaluate(() => document.querySelector("dialog .answer").textContent.includes("milk and cheese") && document.querySelector("dialog .source")?.textContent.includes("Groceries")),
+    "Ask answers from your notes and lists the note it used",
+  );
+  if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-ask.png") });
+  await alice.click("dialog .source");
+  await closed(alice);
+  await alice.waitForFunction(() => location.hash.includes("/note/") && document.querySelector(".cm-content")?.innerText.includes("cheese"));
+  check(true, "an Ask source opens its note");
+  // The list may be covered by the note now, so clear the search without a real click.
+  await alice.evaluate(() => document.querySelector(".pane.list .search .clear")?.click());
 
   // A zip picked in Settings becomes a notebook with its folders inside, and the toast's Show opens it.
   const beforeImport = await alice.evaluate(() => location.hash);

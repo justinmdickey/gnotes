@@ -115,7 +115,8 @@ Settings are environment variables, e.g. `docker run -e GNOTES_PUBLIC_URL=https:
 | `GNOTES_WHISPER_URL`, `_MODEL`, `_KEY` | unset; model `whisper-1` | Speech-to-text defaults. See [AI services](#ai-services-optional). |
 | `GNOTES_WHISPER_REALTIME_URL` | unset | Live transcription defaults. |
 | `GNOTES_VISION_URL`, `_MODEL`, `_KEY` | unset | Text-from-photos defaults. |
-| `GNOTES_SUMMARY_URL`, `_MODEL`, `_KEY` | unset | Summary defaults. |
+| `GNOTES_SUMMARY_URL`, `_MODEL`, `_KEY` | unset | Summary defaults. Ask your notes uses this model too. |
+| `GNOTES_EMBED_URL`, `_MODEL`, `_KEY` | unset | Semantic search defaults. |
 | `GNOTES_PASSWORD` | unset | Password for `create-user`, instead of the prompt. |
 | `RUST_LOG` | `info,loro_internal=warn` | Log level, e.g. `debug`. |
 
@@ -129,11 +130,15 @@ Each one talks to an **OpenAI-compatible API**, so it can be a local server (Oll
 | Live transcripts and meeting audio | Speech-to-Text › Live URL | `GNOTES_WHISPER_REALTIME_URL` | `ws://speaches:8000/v1/realtime` |
 | Text from photos | Text from Photos | `GNOTES_VISION_URL`, `_MODEL`, `_KEY` | `http://ollama:11434/v1`, `qwen2.5vl` |
 | Note summaries | AI Summaries | `GNOTES_SUMMARY_URL`, `_MODEL`, `_KEY` | `http://ollama:11434/v1`, `llama3.2` |
+| Find notes by meaning | Semantic Search | `GNOTES_EMBED_URL`, `_MODEL`, `_KEY` | `http://ollama:11434/v1`, `nomic-embed-text` |
+| Ask your notes | Semantic Search and AI Summaries | both of the above | |
 
 - URLs include the API version (`/v1`).
 - The photo model must be able to read images.
 - The live URL is a websocket that speaks OpenAI's realtime transcription events. The server connects to it, so it can stay on a private network.
 - A summary is only made when someone opens a note's Summary tab.
+- Semantic search needs an embedding model. Every note is sent to it in pieces when it's set up, and again a few seconds after each edit.
+- Ask sends the few passages closest to the question, only from notes the asker can see, to the summary model. The answer links the notes it used.
 
 Turning a service on sends notes, photos or recordings to it, so pick one you trust with them.
 

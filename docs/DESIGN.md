@@ -16,6 +16,7 @@ Gnotes is a self-hosted Markdown notes app. One server holds a household's accou
 | Speech-to-text | The server forwards voice memos to an external OpenAI-compatible transcription API (e.g. faster-whisper). The note keeps the recording and the transcript. |
 | AI summaries | On demand: a note's Summary tab sends the whole note to an OpenAI-compatible chat API (local or hosted) the first time it's opened, and shows the gist, key points and action items read-only. Kept in `note_summaries` beside the note, not in its text, with a hash of the text it covers so the tab can say when the note has changed. |
 | Text from photos | On demand: Get Text on a photo (on hover, always on touch) sends it to an OpenAI-compatible chat API with a vision model (e.g. Ollama or llama.cpp on local hardware), and the text it reads goes under the photo. |
+| AI search | Optional. Notes are embedded in chunks through an OpenAI-compatible embeddings API, in the background after edits settle. Search adds notes close in meaning; Ask sends the closest chunks of the user's visible notes to the summary chat model and shows its answer with links to those notes. See [AI search](#ai-search). |
 
 **CRDT** (conflict-free replicated data type): a data structure where edits made on different devices, even offline, merge automatically without conflicts.
 
@@ -142,6 +143,8 @@ GET    /trash                      my directly deleted items
 POST   /trash/:type/:id/restore
 
 GET    /search?q=                  full-text search of notes I can see -> {results}
+GET    /search/meaning?q=          semantic search of notes I can see -> {results}, empty when off
+POST   /ask                        {question} -> {answer, sources}; 409 unless Ask is set up
 
 GET    /notes/:id/shares           owner only (same for /notebooks/:id/shares)
 POST   /shares                     {resource_type, resource_id, username, role}
@@ -151,6 +154,12 @@ DELETE /shares/:id
 POST   /attachments                multipart {note_id, file}   (phase 2)
 GET    /attachments/:id                                        (phase 2)
 POST   /import                     multipart {notebook_id?, file...}: .md, .txt or .zip -> counts, skipped
+GET    /features                   which optional services are on: transcription, photo_text, summaries,
+                                   semantic_search, ask, ...
+
+GET    /admin/settings             admin: every service's URL, model, has_key, from_env (never the key)
+PUT    /admin/settings/:service    admin: {url, model, key?}; service is whisper, vision, summary or embed
+POST   /admin/settings/:service/test  admin: checks the service's /models before saving
 
 POST   /admin/users                admin only
 GET    /invites                    admin: pending invite links
@@ -174,6 +183,31 @@ Changes to `/tree` are pushed over the websocket as `tree_changed`, so clients o
 - `source` says which search found the note; full-text is `"text"`. Other kinds of search add their own value.
 - The server keeps each note's text, with Markdown marks stripped, in an FTS5 index (`note_text`, `note_search`) updated on every edit and import. Notes from before the index existed are added at startup.
 - The PWA folds results into the folder being searched and adds any title or preview matches. Offline it has only those.
+
+### AI search
+
+Both parts are off until an admin sets up Settings → Semantic Search (an OpenAI-compatible embeddings API). Ask also needs Settings → AI Summaries, whose chat model writes the answers. `/features` says which are on; the app shows neither when they're off.
+
+**Embeddings.** Each note's search text (`note_text`) is cut into chunks of about 1,000 characters at line breaks. Each chunk is embedded as its note's title plus the chunk, and kept in `note_chunks` (`note_id, idx, text, hash, model, embedding`) with a hash of that text and the model's name.
+
+- One background task (`server/src/semantic.rs`) does the embedding. An edit marks its note; once typing pauses for 3 seconds (at most 30 seconds of continuous typing), the task embeds the chunks whose hash changed and reuses the rest.
+- At startup, when the service or model changes, after an import, and hourly, it checks every note. That backfills old notes and picks up anything that failed.
+- Requests go out one at a time, up to 16 chunks each. If the service fails, the run stops, is logged, and retries after 1 minute, doubling up to an hour. Editing never waits on it.
+- Trashed notes aren't embedded, and keep their chunks for a restore. Deleting a note deletes its chunks.
+
+**`GET /search/meaning?q=`** embeds `q` (3+ letters or digits) and compares it, by cosine similarity, with every chunk of the caller's visible, untrashed notes, using the same visibility as `/search`. That's brute force in Rust, which is plenty for a household. A note's best chunk counts. It must score at least 0.3 and be within 0.15 of the best result; at most 10 come back, as `{"note", "title", "source": "meaning", "snippet": [{"text": "<start of that chunk>", "hit": false}]}`.
+
+**`POST /ask {question}`** finds chunks the same way and sends the closest 6 (about 8,000 characters at most), grouped and numbered by note, to the chat model. The prompt says to answer only from those notes, cite them as `[n]`, keep it short, and reply `NO_ANSWER` when they don't contain the answer.
+
+```jsonc
+{"answer": "You still need milk and eggs [1].", "sources": [{"n": 1, "note": "<id>", "title": "Groceries"}]}
+{"answer": null, "sources": []}   // nothing close enough, or the model said NO_ANSWER
+```
+
+- `sources` are the notes the answer cites, or every note sent when it cites none. Nothing close means the chat model isn't called.
+- Only notes the caller can see right now are ever sent. Unsharing or trashing a note takes it out of both search and Ask at once.
+
+**In the app.** With a search typed, a **By Meaning** group lists meaning matches the word search didn't already find, in the folder being searched, under the word matches. An **Ask Your Notes** row with the search text opens the answer in a dialog. The row comes first when the search reads like a question (ends in `?` or starts with a question word), otherwise last. With no matches at all it's the empty page's button. The answer's `[n]` become small numbered links, and the notes it used are listed under it.
 
 ## Websocket protocol
 
@@ -239,6 +273,8 @@ docker run -v gnotes-data:/data -p 8080:8080 gnotes
 - Config comes from environment variables: `GNOTES_DATA_DIR` (default `./data`), `GNOTES_BIND` (default `0.0.0.0:8080`), `GNOTES_PUBLIC_URL` (used to validate the websocket Origin header).
 - Speech-to-text is set by an admin under Settings → Speech-to-Text: an OpenAI-compatible API URL including the version (e.g. `http://whisper:8000/v1`), a model and an optional key. Once saved there, it overrides the env defaults `GNOTES_WHISPER_URL`, `GNOTES_WHISPER_MODEL` (default `whisper-1`) and `GNOTES_WHISPER_KEY`. An optional live URL (`ws://` or `wss://`, e.g. `ws://whisper:8000/v1/realtime`, env `GNOTES_WHISPER_REALTIME_URL`) turns on live transcripts. The key is never sent back to the app.
 - Text from photos is set the same way under Settings → Text from Photos: an OpenAI-compatible URL including the version (e.g. `http://ollama:11434/v1`), a vision model (required, e.g. `qwen2.5vl`) and an optional key; env defaults `GNOTES_VISION_URL`, `GNOTES_VISION_MODEL`, `GNOTES_VISION_KEY`. `POST /attachments/:id/text` sends the photo as a data URL to `/chat/completions` and asks for the text only, or `NO_TEXT`.
+- AI summaries are set the same way under Settings → AI Summaries; env defaults `GNOTES_SUMMARY_URL`, `GNOTES_SUMMARY_MODEL`, `GNOTES_SUMMARY_KEY`. Ask uses this chat model too.
+- Semantic search is set under Settings → Semantic Search: an OpenAI-compatible URL including the version (e.g. `http://ollama:11434/v1`), an embedding model (required, e.g. `nomic-embed-text`) and an optional key; env defaults `GNOTES_EMBED_URL`, `GNOTES_EMBED_MODEL`, `GNOTES_EMBED_KEY`. The server calls `/embeddings`. Changing the model re-embeds every note.
 - The data folder holds everything: `gnotes.db`, `blobs/` and `export/`. Backing up means copying that folder.
 
 ## Phases

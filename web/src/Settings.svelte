@@ -35,11 +35,13 @@
     whisper = settings.whisper;
     vision = settings.vision;
     summary = settings.summary;
+    embed = settings.embed;
   }
 
   let whisper = $state<ServiceSettings | null>(null);
   let vision = $state<ServiceSettings | null>(null);
   let summary = $state<ServiceSettings | null>(null);
+  let embed = $state<ServiceSettings | null>(null);
 
   loadAdmin();
 
@@ -299,11 +301,30 @@
             test={(body) => api.testChat("summary", body)}
             save={async (body) => {
               const saved = await api.saveChat("summary", body);
-              app.features = { ...app.features, summaries: saved.enabled };
+              app.features = { ...app.features, summaries: saved.enabled, ask: saved.enabled && !!embed?.enabled };
               return saved;
             }}
             saved="Summaries saved"
             off="Summaries turned off"
+          />
+        {/if}
+
+        {#if embed}
+          <h2 class="group-title">Semantic Search</h2>
+          <ServiceForm
+            name="embed"
+            explain="Search also finds notes by meaning, not just matching words, and Ask Your Notes answers questions from them with the AI Summaries service. Notes are sent here in pieces to be indexed, and again after edits. Any OpenAI-compatible embeddings service works, such as Ollama with nomic-embed-text. Leave the URL empty to turn it off."
+            urlPlaceholder="http://ollama:11434/v1"
+            modelPlaceholder="nomic-embed-text"
+            bind:settings={embed}
+            test={(body) => api.testChat("embed", body)}
+            save={async (body) => {
+              const saved = await api.saveChat("embed", body);
+              app.features = { ...app.features, semantic_search: saved.enabled, ask: saved.enabled && !!summary?.enabled };
+              return saved;
+            }}
+            saved="Semantic search saved"
+            off="Semantic search turned off"
           />
         {/if}
 
