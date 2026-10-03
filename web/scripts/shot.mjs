@@ -122,7 +122,7 @@ async function seed(page) {
   await write("#/", "# Groceries\nmilk\n- [ ] eggs\nbread");
   await write(`#/nb/${ids.kitchen}`, "# Pantry\nrice, beans, flour");
   // Code blocks: one labeled, one left for the guesser.
-  await write("#/", '# Snippets\nRun this first:\n```bash\nnpm run build\n```\nThen:\n```\n// say hi\nconst greet = (name) => `Hello ${name}`;\nconsole.log(greet("Ada"), 42);\n```\nDone.');
+  await write("#/", '# Snippets\nRun this first:\n```bash\nnpm run build\n```\nThen:\n```\n// say hi\nconst greet = (name) => `Hello ${name}`;\nconsole.log(greet("Ada"), 42);\n```\nAnd Lua:\n```\nlocal M = {}\nfunction M.setup(opts)\nfor k, v in pairs(opts) do print(k, v) end\nend\nreturn M\n```\nDone.');
   await write("#/", "# Old packing list\nsocks");
   await page.evaluate(() => document.activeElement?.blur());
   // The notes are embedded a few seconds after typing stops.

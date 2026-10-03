@@ -818,6 +818,9 @@ try {
   await alice.waitForFunction(() => document.querySelector(".cm-code-lang select")?.value === "python");
   // The picker is drawn from the text, so a new selection that sticks means the fence changed.
   check(await alice.$eval(".cm-code-lang select", (s) => s.options[s.selectedIndex].text === "Python"), "the language picker sets the block's language");
+  await alice.select(".cm-code-lang select", "lua");
+  await alice.waitForFunction(() => document.querySelector(".cm-code-lang select")?.value === "lua");
+  check(await alice.$eval(".cm-code-lang select", (s) => s.options[s.selectedIndex].text === "Lua"), "the picker offers Lua");
   if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-code-block.png") });
   // "/" opens a menu of styles and things to add; typing narrows it and Enter picks.
   await alice.click(".cm-content");
