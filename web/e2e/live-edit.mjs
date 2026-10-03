@@ -1100,6 +1100,14 @@ try {
     // The tab bar is the way between sections; Notes opens the top folder.
     await alice.evaluate(() => [...document.querySelectorAll(".tabbar button")].find((b) => b.textContent.includes("Notes")).click());
     await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Notes");
+    // The top of Notes carries the app's icon and name, in the middle of the headerbar even with New Notebook on one side.
+    const brand = await alice.evaluate(() => {
+      const bar = document.querySelector(".pane.list .headerbar").getBoundingClientRect();
+      const title = document.querySelector(".pane.list .headerbar .brand");
+      const box = title?.getBoundingClientRect();
+      return { text: title?.textContent.trim(), icon: !!title?.querySelector("img[src='/icon.svg']")?.naturalWidth, off: box ? box.left + box.width / 2 - (bar.left + bar.width / 2) : NaN };
+    });
+    check(brand.text === "Gnotes" && brand.icon && Math.abs(brand.off) <= 2, `the phone's Notes headerbar centers the app icon and name (${brand.off.toFixed(1)}px off)`);
     await shot("phone-home-dark");
     await alice.type(".search input", "pantry");
     await alice.waitForFunction(() => [...document.querySelectorAll(".note .where")].some((w) => w.textContent.includes("Home › Garage")));

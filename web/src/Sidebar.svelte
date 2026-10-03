@@ -369,13 +369,6 @@
     background: var(--sidebar-bg);
   }
 
-  .brand {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: var(--text-lg);
-  }
-
   .scroll {
     flex: 1;
     overflow-y: auto;

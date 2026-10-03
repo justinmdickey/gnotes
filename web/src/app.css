@@ -451,6 +451,14 @@ button.fab svg {
   color: var(--dim-fg);
 }
 
+/* The app's icon and name: the desktop sidebar's headerbar, and the top of Notes on phones. */
+.headerbar .title .brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-lg);
+}
+
 /* Back buttons read as links in the accent color, with the parent's name. */
 /* Back reads like the path crumbs: a pill with a blue chevron and plain text naming where it goes. */
 button.back {

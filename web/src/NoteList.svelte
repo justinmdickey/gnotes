@@ -25,6 +25,8 @@
   let query = $state("");
   /** The big title has scrolled away, so the headerbar shows the name instead. */
   let compact = $state(false);
+  /** The phone's top folder shows the app's name in the headerbar, as the sidebar does on desktop. */
+  const brand = $derived(media.phone && app.view.kind === "root");
 
   /** Parent notebooks, outermost first, for the path above the title. */
   const path = $derived.by(() => {
@@ -174,18 +176,26 @@
 
 <section>
   <header class="headerbar">
-    <button class="flat icon tablet-only" title="Show notebooks" aria-label="Show notebooks" onclick={() => (app.drawer = true)}>
-      <Icon name="sidebar" />
-    </button>
-    <!-- Just a chevron: the path under the headerbar already names where it goes. -->
-    {#if up}
-    <button class="flat icon circular back-icon phone-only" title="Back to {backLabel}" aria-label="Back to {backLabel}" onclick={goBack}>
-      <Icon name="back" />
-    </button>
-    {/if}
-    <div class="title" class:shown={compact} aria-hidden={!compact}>
-      <strong>{title}</strong>
+    <div class="start">
+      <button class="flat icon tablet-only" title="Show notebooks" aria-label="Show notebooks" onclick={() => (app.drawer = true)}>
+        <Icon name="sidebar" />
+      </button>
+      <!-- Just a chevron: the path under the headerbar already names where it goes. -->
+      {#if up}
+      <button class="flat icon circular back-icon phone-only" title="Back to {backLabel}" aria-label="Back to {backLabel}" onclick={goBack}>
+        <Icon name="back" />
+      </button>
+      {/if}
     </div>
+    <!-- Phones have no sidebar, so the top of Notes carries the app's name and icon instead. -->
+    <div class="title" class:shown={compact || brand} aria-hidden={!compact && !brand}>
+      {#if brand}
+        <strong class="brand"><img src="/icon.svg" alt="" width="22" height="22" />Gnotes</strong>
+      {:else}
+        <strong>{title}</strong>
+      {/if}
+    </div>
+    <div class="end">
     {#if canMakeFolder}
       <button class="flat icon new-folder" title="New notebook" aria-label="New notebook" onclick={() => (creatingFolder = true)}>
         <Icon name="newfolder" />
@@ -205,6 +215,7 @@
         <Icon name="compose" />
       </button>
     {/if}
+    </div>
   </header>
 
   <div class="scroll" use:scrollEdge onscroll={(e) => (compact = e.currentTarget.scrollTop > 56)}>
@@ -343,6 +354,12 @@
   .share {
     gap: 6px;
     padding: 0 12px;
+  }
+
+  /* Wide screens lay the headerbar out as one row; the groups only matter on phones. */
+  .start,
+  .end {
+    display: contents;
   }
 
   /* The small headerbar title only appears once the big one scrolls away. */
@@ -568,6 +585,23 @@
   }
 
   @media (max-width: 700px) {
+    /* Three columns, so the title sits in the middle of the screen whatever buttons are on each side. */
+    .headerbar {
+      display: grid;
+      grid-template-columns: 1fr minmax(0, auto) 1fr;
+    }
+
+    .start,
+    .end {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .end {
+      justify-content: flex-end;
+    }
+
     .headerbar .title {
       align-items: center;
       text-align: center;
