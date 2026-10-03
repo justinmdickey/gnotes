@@ -831,6 +831,30 @@ try {
   await alice.waitForFunction(() => document.querySelector(".notebook-chip")?.textContent.trim() === "Home › Garage");
   check(true, "Restore on the Trash screen puts the note back in its notebook");
 
+  // Delete Forever takes one item out of the trash for good; Empty Trash takes the rest. Both ask first.
+  await alice.evaluate(async () => {
+    const post = (path) => fetch(`/api${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }).then((r) => r.json());
+    for (let i = 0; i < 3; i++) await fetch(`/api/notes/${(await post("/notes")).id}`, { method: "DELETE" });
+  });
+  await alice.evaluate(() => [...document.querySelectorAll("nav .row")].find((b) => b.textContent.trim() === "Trash").click());
+  await alice.waitForFunction(() => document.querySelectorAll(".boxed-list .row").length === 3);
+  await alice.click(".boxed-list .row button[aria-label$='forever']");
+  await alice.waitForSelector("dialog .destructive-action");
+  if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-trash-delete-forever.png") });
+  await alice.click("dialog ::-p-text(Cancel)");
+  await closed(alice);
+  check((await alice.$$(".boxed-list .row")).length === 3, "Cancel keeps the item");
+  await alice.click(".boxed-list .row button[aria-label$='forever']");
+  await alice.click("dialog .destructive-action");
+  await closed(alice);
+  await alice.waitForFunction(() => document.querySelectorAll(".boxed-list .row").length === 2);
+  check((await (await fetch(`${base}/api/trash`, { headers: { cookie: (await alice.cookies()).map((c) => `${c.name}=${c.value}`).join("; ") } })).json()).length === 2, "Delete Forever removes one item from the trash for good");
+  await alice.click("button.empty");
+  await alice.click("dialog .destructive-action");
+  await closed(alice);
+  await alice.waitForFunction(() => document.body.innerText.includes("Trash Is Empty") && !document.querySelector("button.empty"));
+  check(true, "Empty Trash deletes the rest and shows the empty state");
+
   // Deep down, the middle levels fold into a "…" crumb that still reaches them.
   const deepest = await alice.evaluate(async () => {
     const post = (path, body) => fetch(`/api${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then((r) => r.json());

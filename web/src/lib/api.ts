@@ -240,6 +240,9 @@ export const api = {
   },
   trash: () => request<TrashItem[]>("GET", "/trash"),
   restore: (kind: "note" | "notebook", id: string) => request("POST", `/trash/${kind}/${id}/restore`, {}),
+  /** Deletes a trashed item for good, without waiting out the 30 days. */
+  deleteForever: (kind: "note" | "notebook", id: string) => request("DELETE", `/trash/${kind}/${id}`),
+  emptyTrash: () => request<{ deleted: number }>("DELETE", "/trash"),
   /** Permanently removes the note only if it's blank; the server refuses otherwise. */
   discardNote: (id: string) => request("DELETE", `/notes/${id}?discard=true`),
 

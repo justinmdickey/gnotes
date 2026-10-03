@@ -558,11 +558,36 @@ pub async fn restore(
     Ok(Json(json!({ "ok": true })))
 }
 
-/// Permanently removes items that have been in the trash longer than the retention window.
-pub async fn purge_trash(db: &sqlx::SqlitePool) -> sqlx::Result<()> {
-    let cutoff = now_ms() - TRASH_MS;
-    sqlx::query("DELETE FROM notes WHERE deleted_at < ?").bind(cutoff).execute(db).await?;
-    sqlx::query("DELETE FROM notebooks WHERE deleted_at < ?").bind(cutoff).execute(db).await?;
+/// Removes one trashed item for good: a note, or a notebook with everything trashed along with it.
+async fn purge_item(tx: &mut sqlx::SqliteConnection, kind: &str, id: &str, ts: i64) -> sqlx::Result<()> {
+    if kind == "notebook" {
+        sqlx::query(
+            "WITH RECURSIVE sub(id) AS (
+                SELECT ?1 UNION SELECT n.id FROM notebooks n JOIN sub ON n.parent_id = sub.id WHERE n.deleted_at = ?2
+             )
+             DELETE FROM notes WHERE deleted_at = ?2 AND notebook_id IN (SELECT id FROM sub)",
+        )
+            .bind(id)
+            .bind(ts)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(
+            "WITH RECURSIVE sub(id) AS (
+                SELECT ?1 UNION SELECT n.id FROM notebooks n JOIN sub ON n.parent_id = sub.id WHERE n.deleted_at = ?2
+             )
+             DELETE FROM notebooks WHERE id IN (SELECT id FROM sub)",
+        )
+            .bind(id)
+            .bind(ts)
+            .execute(&mut *tx)
+            .await?;
+    } else {
+        sqlx::query("DELETE FROM notes WHERE id = ?").bind(id).execute(&mut *tx).await?;
+    }
+    Ok(())
+}
+
+async fn drop_dangling_shares(db: impl sqlx::SqliteExecutor<'_>) -> sqlx::Result<()> {
     sqlx::query(
         "DELETE FROM shares WHERE
            (resource_type = 'note' AND resource_id NOT IN (SELECT id FROM notes)) OR
@@ -571,4 +596,49 @@ pub async fn purge_trash(db: &sqlx::SqlitePool) -> sqlx::Result<()> {
     .execute(db)
     .await?;
     Ok(())
+}
+
+/// `DELETE /trash/:kind/:id`: deletes one of your trashed items for good, without waiting 30 days.
+pub async fn delete_forever(
+    State(state): State<AppState>,
+    CurrentUser(me): CurrentUser,
+    Path((kind, id)): Path<(String, String)>,
+) -> ApiResult<Json<Value>> {
+    let lookup = match kind.as_str() {
+        "notebook" => "SELECT deleted_at FROM notebooks WHERE id = ? AND owner_id = ?",
+        "note" => "SELECT deleted_at FROM notes WHERE id = ? AND owner_id = ?",
+        _ => return Err(AppError::NotFound),
+    };
+    let deleted_at: Option<Option<i64>> = sqlx::query_scalar(lookup).bind(&id).bind(&me.id).fetch_optional(&state.db).await?;
+    // Only what's already in the trash; live notes go there first.
+    let Some(Some(ts)) = deleted_at else {
+        return Err(AppError::NotFound);
+    };
+    let mut tx = state.db.begin().await?;
+    purge_item(&mut tx, &kind, &id, ts).await?;
+    drop_dangling_shares(&mut *tx).await?;
+    tx.commit().await?;
+    state.hub.tree_changed();
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// `DELETE /trash`: empties your trash. Others' trash, and your live notes, are untouched.
+pub async fn empty_trash(State(state): State<AppState>, CurrentUser(me): CurrentUser) -> ApiResult<Json<Value>> {
+    let Json(items) = get_trash(State(state.clone()), CurrentUser(me)).await?;
+    let mut tx = state.db.begin().await?;
+    for item in &items {
+        purge_item(&mut tx, &item.resource_type, &item.id, item.deleted_at).await?;
+    }
+    drop_dangling_shares(&mut *tx).await?;
+    tx.commit().await?;
+    state.hub.tree_changed();
+    Ok(Json(json!({ "deleted": items.len() })))
+}
+
+/// Permanently removes items that have been in the trash longer than the retention window.
+pub async fn purge_trash(db: &sqlx::SqlitePool) -> sqlx::Result<()> {
+    let cutoff = now_ms() - TRASH_MS;
+    sqlx::query("DELETE FROM notes WHERE deleted_at < ?").bind(cutoff).execute(db).await?;
+    sqlx::query("DELETE FROM notebooks WHERE deleted_at < ?").bind(cutoff).execute(db).await?;
+    drop_dangling_shares(db).await
 }

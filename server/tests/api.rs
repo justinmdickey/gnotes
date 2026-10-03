@@ -405,6 +405,34 @@ async fn trash_and_restore_notebook() {
     let tree = alice.get("/tree").await;
     assert_eq!(tree["notebooks"].as_array().unwrap().len(), 2);
     assert_eq!(tree["notes"].as_array().unwrap().len(), 1);
+
+    // Delete forever: only things already in the trash, only your own, and a notebook takes what went with it.
+    let bob = user(&server, "bob").await;
+    let loose = alice.post("/notes", json!({})).await["id"].as_str().unwrap().to_owned();
+    let res = alice.send(reqwest::Method::DELETE, &format!("/trash/note/{loose}"), json!({})).await;
+    assert_eq!(res.status(), 404, "a live note isn't in the trash");
+    alice.send(reqwest::Method::DELETE, &format!("/notes/{loose}"), json!({})).await;
+    let res = bob.send(reqwest::Method::DELETE, &format!("/trash/note/{loose}"), json!({})).await;
+    assert_eq!(res.status(), 404, "someone else's trash");
+    let res = alice.send(reqwest::Method::DELETE, &format!("/trash/note/{loose}"), json!({})).await;
+    assert!(res.status().is_success());
+    assert_eq!(alice.get("/trash").await.as_array().unwrap().len(), 0);
+    let res = alice.send(reqwest::Method::POST, &format!("/trash/note/{loose}/restore"), json!({})).await;
+    assert_eq!(res.status(), 404, "gone for good");
+
+    // Empty Trash takes a trashed notebook, its sub-notebook and its note; live notes stay.
+    let keep = alice.post("/notes", json!({})).await["id"].as_str().unwrap().to_owned();
+    alice.send(reqwest::Method::DELETE, &format!("/notebooks/{parent}"), json!({})).await;
+    let bobs = bob.post("/notes", json!({})).await["id"].as_str().unwrap().to_owned();
+    bob.send(reqwest::Method::DELETE, &format!("/notes/{bobs}"), json!({})).await;
+    let res = alice.send(reqwest::Method::DELETE, "/trash", json!({})).await;
+    assert!(res.status().is_success());
+    assert_eq!(alice.get("/trash").await.as_array().unwrap().len(), 0);
+    let res = alice.send(reqwest::Method::POST, &format!("/trash/notebook/{child}/restore"), json!({})).await;
+    assert_eq!(res.status(), 404, "the sub-notebook went too");
+    let tree = alice.get("/tree").await;
+    assert_eq!(tree["notes"].as_array().unwrap().iter().map(|n| n["id"].as_str().unwrap()).collect::<Vec<_>>(), vec![keep.as_str()]);
+    assert_eq!(bob.get("/trash").await.as_array().unwrap().len(), 1, "Bob's trash is his own");
 }
 
 #[tokio::test]

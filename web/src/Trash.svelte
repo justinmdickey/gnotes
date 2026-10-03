@@ -6,7 +6,7 @@
   import Icon from "./lib/Icon.svelte";
   import StatusPage from "./lib/StatusPage.svelte";
   import { app, goBack, navigate, refreshTree } from "./lib/store.svelte";
-  import { media, scrollEdge, toast } from "./lib/ui.svelte";
+  import { ask, media, scrollEdge, toast } from "./lib/ui.svelte";
 
   /** What you deleted, newest first; null until the first load. */
   let items = $state<TrashItem[] | null>(null);
@@ -48,6 +48,45 @@
     toast(`“${label(item)}” restored`, { label: "Show", run: () => show(item) });
   }
 
+  /** Gone for good, after a confirmation, since there's no Undo for this. */
+  async function deleteForever(item: TrashItem) {
+    const notebook = item.resource_type === "notebook";
+    const ok = await ask({
+      title: `Delete “${label(item)}” Forever?`,
+      body: notebook ? "The notebook and everything that went to the trash with it can't be restored." : "It can't be restored.",
+      confirm: "Delete Forever",
+      destructive: true,
+    });
+    if (!ok) return;
+    try {
+      await api.deleteForever(item.resource_type, item.id);
+    } catch (err) {
+      toast(err instanceof ApiError ? err.message : "Couldn't reach the server");
+      return;
+    }
+    items = items?.filter((i) => i !== item) ?? null;
+    toast(`“${label(item)}” deleted forever`);
+  }
+
+  async function emptyTrash() {
+    const n = items?.length ?? 0;
+    const ok = await ask({
+      title: "Empty Trash?",
+      body: `${n === 1 ? "The item" : `All ${n} items`} in the trash will be deleted forever. This can't be undone.`,
+      confirm: "Empty Trash",
+      destructive: true,
+    });
+    if (!ok) return;
+    try {
+      await api.emptyTrash();
+    } catch (err) {
+      toast(err instanceof ApiError ? err.message : "Couldn't reach the server");
+      return;
+    }
+    items = [];
+    toast("Trash emptied");
+  }
+
   function show(item: TrashItem) {
     if (item.resource_type === "notebook") return navigate({ kind: "notebook", id: item.id });
     const notebook = app.tree.notes.find((n) => n.id === item.id)?.notebook_id;
@@ -69,6 +108,9 @@
     <div class="title" class:shown={compact} aria-hidden={!compact}>
       <strong>Trash</strong>
     </div>
+    {#if items?.length}
+      <button class="flat destructive empty" onclick={emptyTrash}>Empty Trash</button>
+    {/if}
   </header>
 
   <div class="scroll" use:scrollEdge onscroll={(e) => (compact = e.currentTarget.scrollTop > 56)}>
@@ -88,6 +130,9 @@
                 <small class="dim">Deleted {day(item.deleted_at)} · {left(item)}</small>
               </span>
               <button onclick={() => restore(item)}>Restore</button>
+              <button class="flat icon circular destructive" title="Delete Forever" aria-label="Delete {label(item)} forever" onclick={() => deleteForever(item)}>
+                <Icon name="trash" />
+              </button>
             </div>
           </li>
         {/each}
@@ -188,6 +233,15 @@
 
   .row button {
     flex: none;
+  }
+
+  .row button + button {
+    margin-left: -4px;
+  }
+
+  .empty {
+    margin-left: auto;
+    padding: 0 12px;
   }
 
   @media (max-width: 700px) {
