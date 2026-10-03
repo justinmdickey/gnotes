@@ -81,7 +81,7 @@ function createUser(name, display) {
   const r = spawnSync(bin, ["create-user", name, "--display-name", display], { env: { ...env, GNOTES_PASSWORD: "password123" } });
   if (r.status !== 0) throw new Error(`create-user ${name}: ${r.stderr}`);
 }
-const server = spawn(bin, [], { env, stdio: "inherit" });
+let server = spawn(bin, [], { env, stdio: "inherit" });
 
 async function waitForServer() {
   for (let i = 0; i < 50; i++) {
@@ -421,6 +421,63 @@ try {
   await alice.reload();
   await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("bread"));
   check(true, "alice's note reloads from the server");
+
+  // ---- Offline (lib/offline.ts): with the server stopped, saved notes open and take edits, then merge back. ----
+  // Carol (phone) has the shared note open too, so edits on both sides have to merge.
+  await carol.evaluate(() => [...document.querySelectorAll(".tabbar button")].find((b) => b.textContent.includes("Shared")).click());
+  await carol.waitForFunction(() => [...document.querySelectorAll("li button")].some((b) => b.textContent.includes("Groceries")));
+  await carol.evaluate(() => [...document.querySelectorAll("li button")].find((b) => b.textContent.includes("Groceries")).click());
+  await carol.waitForSelector(".cm-content[contenteditable=true]");
+  await alice.waitForFunction(() => !!navigator.serviceWorker?.controller, { timeout: 10000 });
+  // Snapshots are saved a moment after the last change.
+  await new Promise((r) => setTimeout(r, 1200));
+  const stopped = new Promise((r) => server.once("exit", r));
+  server.kill();
+  await stopped;
+  await carol.waitForSelector(".offline-bar", { visible: true, timeout: 5000 });
+  await alice.waitForFunction(() => document.querySelector("nav footer")?.textContent.includes("Offline"), { timeout: 5000 });
+  check(true, "losing the server shows Offline: a strip on the phone, the sidebar footer on desktop");
+  if (process.env.SHOTS) await carol.screenshot({ path: join(process.env.SHOTS, "phone-offline.png") });
+  const typeAtEnd = async (page, words) => {
+    await page.click(".cm-content");
+    await page.keyboard.down("Control");
+    await page.keyboard.press("End");
+    await page.keyboard.up("Control");
+    await page.keyboard.type(words);
+  };
+  await typeAtEnd(carol, "\ncarol offline");
+  // A reload with no server: the app shell comes from the service worker, the account, tree and note from the device.
+  await alice.reload();
+  await alice.waitForFunction(() => document.querySelector(".cm-content[contenteditable=true]")?.innerText.includes("bread"), { timeout: 10000 });
+  check(await alice.evaluate(() => document.querySelector("nav")?.innerText.includes("Groceries")), "with the server stopped, the app reopens with its tree and the saved note, editable");
+  await typeAtEnd(alice, "\nalice offline");
+  await new Promise((r) => setTimeout(r, 1200));
+  // A note made offline gets its id here and waits to be sent.
+  await alice.click(".pane.editor header button[aria-label='New note']");
+  await alice.waitForSelector(".cm-content[contenteditable=true]");
+  await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.trim() === "");
+  await alice.keyboard.type("# Packed offline\nsocks");
+  await alice.waitForFunction(() => document.querySelector("nav")?.innerText.includes("Packed offline"), { timeout: 5000 });
+  check(true, "a note made offline opens for typing and is listed by its title");
+  await new Promise((r) => setTimeout(r, 1200));
+  server = spawn(bin, [], { env, stdio: "inherit" });
+  await waitForServer();
+  // Carol's open note rejoins; Alice's closed one is pushed up in the background; the new note is made with its own id.
+  await carol.waitForFunction(() => document.querySelector(".cm-content").innerText.includes("alice offline"), { timeout: 30000 });
+  const offlineNote = await alice.evaluate(() => location.hash.match(/note\/([0-9a-f-]{36})/)[1]);
+  await alice.waitForFunction(
+    async (id) => (await fetch("/api/tree").then((r) => r.json())).notes.some((n) => n.id === id && n.title === "Packed offline"),
+    { timeout: 30000, polling: 500 },
+    offlineNote,
+  );
+  await alice.click("nav .note-row ::-p-text(Groceries)");
+  await alice.waitForFunction(() => /carol offline[\s\S]*alice offline|alice offline[\s\S]*carol offline/.test(document.querySelector(".cm-content")?.innerText ?? ""), { timeout: 15000 });
+  check(true, "back online, edits made offline on both sides merge, and the note made offline reaches the server");
+  await alice.evaluate(async (id) => {
+    await fetch(`/api/notes/${id}`, { method: "DELETE" });
+    await fetch(`/api/trash/note/${id}`, { method: "DELETE" });
+  }, offlineNote);
+  // ---- end of offline ----
 
   // Beside the text is still the editor: a drag that starts out in the left margin selects from the line's start.
   const title = await (await alice.$(".cm-line")).boundingBox();

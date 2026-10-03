@@ -20,10 +20,11 @@
   import { emojiOnColon } from "./lib/emoji";
   import { tables } from "./lib/tables";
   import { kanban } from "./lib/kanban";
-  import { sync } from "./lib/sync";
+  import { sync, type NoteHandler } from "./lib/sync";
+  import { cache, dropQueued, editing, flush, isQueued, whenCreated } from "./lib/offline";
   import Menu from "./lib/Menu.svelte";
   import StatusPage from "./lib/StatusPage.svelte";
-  import { app, colorFor, composeNote, goBack, navigate, pathOf, trashNote, twoPane, viewTitle, type View } from "./lib/store.svelte";
+  import { app, colorFor, composeNote, goBack, navigate, pathOf, retitle, saveTree, trashNote, twoPane, viewTitle, type View } from "./lib/store.svelte";
   import { bloom, media, scrollEdge } from "./lib/ui.svelte";
   import FormatBar from "./FormatBar.svelte";
   import Recorder from "./Recorder.svelte";
@@ -78,7 +79,15 @@
   /** Phone: space kept between the cursor and whatever covers the bottom of the note. */
   const CURSOR_ROOM = 120;
 
-  const canEdit = $derived(loaded && !lost && role !== null && role !== "viewer");
+  /** Opened from the copy saved on this device, before (or without) the server answering. */
+  let fromCache = $state(false);
+  /** Until the server says, a saved copy edits with the role the saved tree gives. */
+  const effectiveRole = $derived(role ?? (fromCache ? (note?.role ?? null) : null));
+  const canEdit = $derived(loaded && !lost && effectiveRole !== null && effectiveRole !== "viewer");
+  $effect(() => {
+    void canEdit;
+    untrack(refreshEditable);
+  });
 
   const doc = new LoroDoc();
   // Times on each change, so who-wrote-what can say when.
@@ -97,6 +106,41 @@
   const steps = undoCommands(undoManager, refreshHistory);
   const editable = new Compartment();
   let hasData = false;
+
+  // Offline copies (lib/offline.ts): the doc is saved on the device a moment after each change. A note
+  // is "dirty" while it may have edits the server lacks: typed with no connection, or sent just before
+  // one dropped. A dirty note left closed is pushed up on the next reconnect.
+  const ownId = untrack(() => props.noteId);
+  let editedSinceJoin = false;
+  let dirty = false;
+  function markDirty() {
+    if (dirty) return;
+    dirty = true;
+    void cache.markDirty(ownId);
+  }
+  $effect(() => {
+    if (app.status === "offline") untrack(() => editedSinceJoin && markDirty());
+  });
+  let saveTimer: ReturnType<typeof setTimeout> | undefined;
+  function save() {
+    clearTimeout(saveTimer);
+    saveTimer = undefined;
+    if (!hasData || lost) return;
+    void cache.saveNote(ownId, doc);
+    // The server retitles notes as they change; offline, the lists follow here instead.
+    if (app.status !== "online") retitle(ownId, doc.getText("body").toString());
+  }
+
+  /** Content is here, from the server or the device: the note shows and, if allowed, takes typing. */
+  function ready() {
+    if (loaded) return;
+    loaded = true;
+    refreshEditable();
+    if (app.freshNote === ownId && canEdit) {
+      app.freshNote = null;
+      view?.focus();
+    }
+  }
 
   const markdownStyle = HighlightStyle.define([
     { tag: [tags.heading1, tags.heading2, tags.heading3, tags.heading4, tags.heading5, tags.heading6], fontWeight: "inherit" },
@@ -259,39 +303,62 @@
     });
     view = v;
 
-    const offDoc = doc.subscribeLocalUpdates((bytes) => sync.sendUpdate(noteId, bytes));
+    const offDoc = doc.subscribeLocalUpdates((bytes) => {
+      editedSinceJoin = true;
+      if (!sync.sendUpdate(noteId, bytes)) markDirty();
+    });
+    const offSave = doc.subscribe(() => {
+      saveTimer ??= setTimeout(save, 800);
+    });
     const offPresence = ephemeral.subscribeLocalUpdates((bytes) => sync.sendPresence(noteId, bytes));
     const offPeers = ephemeral.subscribe(updatePeers);
 
-    sync.open(noteId, {
+    const handler: NoteHandler = {
       version: () => (hasData ? doc.oplogVersion() : null),
       joined(r: Role, server: VersionVector) {
         setRole(r);
-        // Upload anything typed while disconnected.
+        editedSinceJoin = false;
+        // Upload anything typed while disconnected. It stays dirty until a later join shows the server has it.
         const cmp = doc.oplogVersion().compare(server);
         if (hasData && r !== "viewer" && (cmp === undefined || cmp > 0)) {
           sync.sendUpdate(noteId, doc.export({ mode: "update", from: server }));
+        } else if (dirty) {
+          dirty = false;
+          void cache.clearDirty(noteId);
         }
       },
       update(data) {
         doc.import(data);
         hasData = true;
-        if (loaded) return;
-        loaded = true;
-        refreshEditable();
-        if (app.freshNote === noteId && canEdit) {
-          app.freshNote = null;
-          v.focus();
-        }
+        ready();
       },
       presence: (data) => ephemeral.apply(data),
       role: setRole,
       lost(reason) {
         lost = reason;
         refreshEditable();
+        void cache.forget(noteId);
       },
       outOfSync: () => sync.rejoin(noteId),
-    });
+    };
+
+    // Open from the device's copy first, so the note shows with no network and the join carries its
+    // version. A note made offline waits for the server to have it before joining.
+    editing.add(noteId);
+    let alive = true;
+    void (async () => {
+      const saved = await cache.note(noteId);
+      if (!alive) return;
+      if (saved && !hasData) {
+        doc.import(saved);
+        hasData = fromCache = true;
+      } else if (isQueued(noteId)) {
+        hasData = fromCache = true;
+      }
+      if (hasData) ready();
+      await whenCreated(noteId);
+      if (alive) sync.open(noteId, handler);
+    })();
 
     // Presence expires after 30s without a refresh, so re-announce while the note is open.
     const heartbeat = setInterval(() => {
@@ -318,11 +385,26 @@
       vv?.removeEventListener("resize", onViewport);
       vv?.removeEventListener("scroll", onViewport);
       // Like Apple Notes, a note left blank doesn't stick around.
-      const blank = hasData && !lost && role === "owner" && doc.getText("body").toString().trim() === "";
-      sync.close(noteId);
+      const blank = hasData && !lost && effectiveRole === "owner" && doc.getText("body").toString().trim() === "";
+      alive = false;
+      clearTimeout(saveTimer);
+      if (!blank) save();
+      editing.delete(noteId);
+      sync.close(noteId, handler);
       summaryView?.destroy();
-      if (blank) api.discardNote(noteId).catch(() => {});
+      if (blank && isQueued(noteId)) {
+        void dropQueued(noteId);
+        app.tree.notes = app.tree.notes.filter((n) => n.id !== noteId);
+        saveTree();
+      } else if (blank) {
+        void cache.forget(noteId);
+        api.discardNote(noteId).catch(() => {});
+      } else if (dirty && app.status === "online") {
+        // Left before the server confirmed it has everything: check, and push the rest, without the editor.
+        void flush();
+      }
       offDoc();
+      offSave();
       offPresence();
       offPeers();
       v.destroy();

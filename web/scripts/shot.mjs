@@ -7,6 +7,7 @@
 //   --phone | --desktop   viewport (default: both)
 //   --dark | --light      color scheme (default: dark)
 //   --out <dir>           where PNGs go (default: /tmp/gnotes-shots)
+//   --offline             visit each screen, then stop the server and shoot them offline
 // Env: CHROME (default /usr/bin/chromium).
 import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
@@ -25,6 +26,7 @@ const viewports = [
   ...(flag("--phone") ? [] : [["desktop", { width: 1280, height: 800 }]]),
 ];
 const scheme = flag("--light") ? "light" : "dark";
+const offline = flag("--offline");
 
 const root = resolve(import.meta.dirname, "../..");
 const bin = join(root, "target/debug/gnotes-server");
@@ -90,10 +92,13 @@ async function seed(page) {
   });
 }
 
+let tree;
+
 async function go(page, target) {
   const [kind, ...rest] = target.split(":");
   const arg = rest.join(":");
-  const tree = await page.evaluate(() => fetch("/api/tree").then((r) => r.json()));
+  // Offline there's no /tree to ask, so the last one fetched online names the screens.
+  tree = offline && tree ? tree : await page.evaluate(() => fetch("/api/tree").then((r) => r.json()));
   const hash = {
     home: "#/",
     recent: "#/all",
@@ -128,6 +133,7 @@ try {
   await login(seeder);
   await seed(seeder);
   const cookies = await seeder.browserContext().cookies();
+  const pages = [];
   for (const [name, viewport] of viewports) {
     const page = await browser.newPage();
     await page.browserContext().setCookie(...cookies);
@@ -135,9 +141,21 @@ try {
     await page.emulateMediaFeatures([{ name: "prefers-color-scheme", value: scheme }]);
     await page.goto(base);
     await page.waitForSelector("nav");
+    pages.push([name, page]);
+  }
+  if (offline) {
+    // Opening each screen once saves its notes on the device; then the server goes away.
+    for (const [, page] of pages) for (const target of targets) await go(page, target);
+    await settle(1200);
+    server.kill();
+    await settle(1500);
+  }
+  for (const [name, page] of pages) {
+    // Only the tab in front can be shot.
+    await page.bringToFront();
     for (const target of targets) {
       await go(page, target);
-      const file = join(out, `${name}-${scheme}-${target.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.png`);
+      const file = join(out, `${name}-${scheme}${offline ? "-offline" : ""}-${target.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.png`);
       await page.screenshot({ path: file });
       console.log(file);
     }

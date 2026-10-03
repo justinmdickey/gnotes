@@ -55,6 +55,8 @@ const stroked = {
   grip: "M5.6 4h.8M9.6 4h.8M5.6 8h.8M9.6 8h.8M5.6 12h.8M9.6 12h.8",
   // Hide the on-screen keyboard.
   keyboardhide: "M2.5 3h11v6.5h-11zM5 5.25h.01M8 5.25h.01M11 5.25h.01M5.5 7.5h5M6 11.75l2 2 2-2",
+  // No connection to the server: a cloud, struck through.
+  offline: "M5.25 12h6a2.2 2.2 0 0 0 .2-4.4 3.5 3.5 0 0 0-6.7-.9A2.7 2.7 0 0 0 5.25 12zM3 3l10 10",
   undo: "M5.5 3.5 3 6l2.5 2.5M3 6h6.5a3.5 3.5 0 0 1 0 7H6",
   redo: "M10.5 3.5 13 6l-2.5 2.5M13 6H6.5a3.5 3.5 0 0 0 0 7H10",
   bold: "M4.5 3h4a2.5 2.5 0 0 1 0 5h-4zM4.5 8h4.8a2.5 2.5 0 0 1 0 5H4.5z",

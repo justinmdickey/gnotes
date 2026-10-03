@@ -46,29 +46,46 @@ export class SyncClient {
   private notes = new Map<string, NoteHandler>();
   private retry = 0;
   private stopped = false;
+  private timer: ReturnType<typeof setTimeout> | undefined;
+  private status: Status = "connecting";
 
   onTreeChanged = () => {};
   onStatus = (_: Status) => {};
 
+  constructor() {
+    // A phone back in signal, or a tab brought back, tries right away instead of waiting out the backoff.
+    const wake = () => {
+      if (!this.ws && !this.stopped && document.visibilityState === "visible") {
+        clearTimeout(this.timer);
+        this.connect();
+      }
+    };
+    addEventListener("online", wake);
+    document.addEventListener("visibilitychange", wake);
+  }
+
   connect() {
     this.stopped = false;
-    this.onStatus("connecting");
+    clearTimeout(this.timer);
+    // Retries while offline stay "offline", so the indicator doesn't flicker.
+    if (this.status !== "offline") this.setStatus("connecting");
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
     const ws = new WebSocket(`${proto}//${location.host}/api/ws`);
     ws.binaryType = "arraybuffer";
     ws.onopen = () => {
       this.retry = 0;
-      this.onStatus("online");
+      this.setStatus("online");
       for (const [id, h] of this.notes) this.sendJoin(id, h);
       // Catch up on anything that changed while disconnected.
       this.onTreeChanged();
     };
     ws.onclose = () => {
+      if (this.ws !== ws) return;
       this.ws = null;
-      this.onStatus("offline");
+      this.setStatus("offline");
       if (this.stopped) return;
       const delay = Math.min(10_000, 500 * 2 ** this.retry++);
-      setTimeout(() => this.connect(), delay);
+      this.timer = setTimeout(() => this.connect(), delay);
     };
     ws.onmessage = (ev) => this.receive(ev.data);
     this.ws = ws;
@@ -76,7 +93,16 @@ export class SyncClient {
 
   disconnect() {
     this.stopped = true;
-    this.ws?.close();
+    clearTimeout(this.timer);
+    const ws = this.ws;
+    this.ws = null;
+    ws?.close();
+    this.status = "connecting";
+  }
+
+  private setStatus(s: Status) {
+    this.status = s;
+    this.onStatus(s);
   }
 
   open(id: string, handler: NoteHandler) {
@@ -84,7 +110,9 @@ export class SyncClient {
     this.sendJoin(id, handler);
   }
 
-  close(id: string) {
+  /** With `handler`, only if it's still the one listening (another may have taken the note over). */
+  close(id: string, handler?: NoteHandler) {
+    if (handler && this.notes.get(id) !== handler) return;
     if (!this.notes.delete(id)) return;
     this.sendJson({ t: "leave", note: id });
   }
@@ -95,9 +123,9 @@ export class SyncClient {
     if (h) this.sendJoin(id, h);
   }
 
-  /** Dropped while offline; the rejoin after reconnecting uploads whatever the server is missing. */
-  sendUpdate(id: string, data: Uint8Array) {
-    this.sendFrame(KIND_UPDATE, id, data);
+  /** Dropped while offline (returns false); the rejoin after reconnecting uploads whatever the server is missing. */
+  sendUpdate(id: string, data: Uint8Array): boolean {
+    return this.sendFrame(KIND_UPDATE, id, data);
   }
 
   sendPresence(id: string, data: Uint8Array) {
@@ -117,13 +145,14 @@ export class SyncClient {
     if (this.isOpen) this.ws!.send(JSON.stringify(msg));
   }
 
-  private sendFrame(kind: number, id: string, payload: Uint8Array) {
-    if (!this.isOpen) return;
+  private sendFrame(kind: number, id: string, payload: Uint8Array): boolean {
+    if (!this.isOpen) return false;
     const buf = new Uint8Array(17 + payload.length);
     buf[0] = kind;
     buf.set(uuidBytes(id), 1);
     buf.set(payload, 17);
     this.ws!.send(buf);
+    return true;
   }
 
   private receive(data: string | ArrayBuffer) {

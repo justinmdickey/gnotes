@@ -217,7 +217,8 @@ export const api = {
   moveNote: (id: string, notebook_id: string | null) => request("PATCH", `/notes/${id}`, { notebook_id }),
   deleteNotebook: (id: string) => request("DELETE", `/notebooks/${id}`),
 
-  createNote: (notebook_id: string | null) => request<{ id: string }>("POST", "/notes", { notebook_id }),
+  /** `id` is a client-made UUIDv7, so a note made offline keeps the same id. */
+  createNote: (notebook_id: string | null, id?: string) => request<{ id: string }>("POST", "/notes", { id, notebook_id }),
   deleteNote: (id: string) => request("DELETE", `/notes/${id}`),
   adminSettings: () => request<{ whisper: ServiceSettings; vision: ServiceSettings; summary: ServiceSettings }>("GET", "/admin/settings"),
   saveWhisper: (body: ServiceInput) => request<{ whisper: ServiceSettings }>("PUT", "/admin/settings/whisper", body),
