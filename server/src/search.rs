@@ -78,6 +78,36 @@ pub fn fts_query(input: &str) -> Option<String> {
     (!terms.is_empty()).then(|| terms.join(" "))
 }
 
+/// Words that say nothing about which note is meant: question words, fillers, and talk about notes
+/// themselves ("where is that note about…"). Left out of `question_terms`.
+const STOP_WORDS: &[&str] = &[
+    "a", "about", "again", "all", "also", "am", "an", "and", "any", "are", "as", "at", "be", "been", "but", "by", "can",
+    "could", "did", "do", "does", "doing", "find", "for", "from", "get", "go", "going", "got", "had", "has", "have", "how",
+    "i", "if", "in", "into", "is", "it", "its", "just", "know", "let", "me", "much", "my", "note", "notes", "of", "on",
+    "or", "our", "please", "put", "remember", "s", "said", "say", "show", "should", "so", "some", "stuff", "tell",
+    "than", "that", "the", "their", "them", "then", "there", "these", "they", "thing", "things", "this", "those", "to",
+    "too", "was", "we", "were", "what", "when", "where", "which", "who", "whom", "why", "will", "with", "would",
+    "wrote", "you", "your",
+];
+
+/// The words of a question worth looking for, lowercased, without stop words or single letters.
+pub fn question_terms(input: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for t in input.split(|c: char| !c.is_alphanumeric()).map(str::to_lowercase) {
+        if t.chars().count() > 1 && !STOP_WORDS.contains(&t.as_str()) && !out.contains(&t) {
+            out.push(t);
+        }
+    }
+    out.truncate(MAX_TERMS);
+    out
+}
+
+/// An FTS5 query matching notes with any of `terms` (as prefixes), for questions, where requiring
+/// every word would find nothing. `None` when there are no terms.
+pub fn fts_any(terms: &[String]) -> Option<String> {
+    (!terms.is_empty()).then(|| terms.iter().map(|t| format!("\"{t}\"*")).collect::<Vec<_>>().join(" OR "))
+}
+
 /// Stores a note's current text for search. Called on every edit and for imported notes.
 /// The title is kept apart so snippets show the rest of the note, not the title again.
 pub async fn index<'c>(db: impl sqlx::SqliteExecutor<'c>, note: &str, body: &str) -> sqlx::Result<()> {
@@ -209,6 +239,28 @@ pub async fn search(
         .map(|(note, title, snippet)| SearchResult { note, title, snippet: segments(&snippet), source: "text" })
         .collect();
     Ok(Json(SearchResults { results }))
+}
+
+/// Notes the user can see whose text has any of `terms`, best first, at most `limit`, each with
+/// a snippet around the words found. For Ask (semantic.rs), which mixes these with meaning matches.
+pub async fn any_terms(state: &AppState, user: &str, terms: &[String], limit: i64) -> sqlx::Result<Vec<SearchResult>> {
+    let Some(query) = fts_any(terms) else { return Ok(vec![]) };
+    let rows: Vec<(String, String, String)> = sqlx::query_as(concat!(
+        visible_notes!(),
+        "SELECT n.id, n.title, snippet(note_search, 1, char(2), char(3), '…', 16)
+         FROM note_search
+         JOIN note_text t ON t.id = note_search.rowid
+         JOIN notes n ON n.id = t.note_id
+         WHERE note_search MATCH ?2 AND n.deleted_at IS NULL AND n.id IN (SELECT id FROM visible)
+         ORDER BY bm25(note_search, 4.0, 1.0)
+         LIMIT ?3"
+    ))
+    .bind(user)
+    .bind(&query)
+    .bind(limit)
+    .fetch_all(&state.db)
+    .await?;
+    Ok(rows.into_iter().map(|(note, title, snippet)| SearchResult { note, title, snippet: segments(&snippet), source: "text" }).collect())
 }
 
 #[cfg(test)]

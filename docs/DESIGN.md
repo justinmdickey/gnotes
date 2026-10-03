@@ -16,7 +16,7 @@ Gnotes is a self-hosted Markdown notes app. One server holds a household's accou
 | Speech-to-text | The server forwards voice memos to an external OpenAI-compatible transcription API (e.g. faster-whisper). The note keeps the recording and the transcript. |
 | AI summaries | On demand: a note's Summary tab sends the whole note to an OpenAI-compatible chat API (local or hosted) the first time it's opened, and shows the gist, key points and action items read-only. Kept in `note_summaries` beside the note, not in its text, with a hash of the text it covers so the tab can say when the note has changed. |
 | Text from photos | On demand: Get Text on a photo (on hover, always on touch) sends it to an OpenAI-compatible chat API with a vision model (e.g. Ollama or llama.cpp on local hardware), and the text it reads goes under the photo. |
-| AI search | Optional. Notes are embedded in chunks through an OpenAI-compatible embeddings API, in the background after edits settle. Search adds notes close in meaning; Ask sends the closest chunks of the user's visible notes to the summary chat model and shows its answer with links to those notes. See [AI search](#ai-search). |
+| AI search | Optional. Notes are embedded in chunks through an OpenAI-compatible embeddings API, in the background after edits settle. Search adds notes close in meaning; Ask is a chat that finds notes by words and meaning, shows them, and streams an answer from the summary chat model with links to them. See [AI search](#ai-search). |
 
 **CRDT** (conflict-free replicated data type): a data structure where edits made on different devices, even offline, merge automatically without conflicts.
 
@@ -195,19 +195,57 @@ Both parts are off until an admin sets up Settings → Semantic Search (an OpenA
 - Requests go out one at a time, up to 16 chunks each. If the service fails, the run stops, is logged, and retries after 1 minute, doubling up to an hour. Editing never waits on it.
 - Trashed notes aren't embedded, and keep their chunks for a restore. Deleting a note deletes its chunks.
 
-**`GET /search/meaning?q=`** embeds `q` (3+ letters or digits) and compares it, by cosine similarity, with every chunk of the caller's visible, untrashed notes, using the same visibility as `/search`. That's brute force in Rust, which is plenty for a household. A note's best chunk counts. It must score at least 0.3 and be within 0.15 of the best result; at most 10 come back, as `{"note", "title", "source": "meaning", "snippet": [{"text": "<start of that chunk>", "hit": false}]}`.
+**Query instructions.** Some embedding models are trained to see a prefix on queries, documents or both, and find much less without it. The server adds them by model name (`instructions` in semantic.rs):
 
-**`POST /ask {question}`** finds chunks the same way and sends the closest 6 (about 8,000 characters at most), grouped and numbered by note, to the chat model. The prompt says to answer only from those notes, cite them as `[n]`, keep it short, and reply `NO_ANSWER` when they don't contain the answer.
+| Model name contains | Query prefix | Document prefix |
+|---|---|---|
+| `qwen3` and `embed` | `Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery:` | none |
+| `nomic-embed` | `search_query: ` | `search_document: ` |
+| `e5` (not `e5-mistral`) | `query: ` | `passage: ` |
+| `bge` (not `bge-m3`), `mxbai-embed` | `Represent this sentence for searching relevant passages: ` | none |
 
-```jsonc
-{"answer": "You still need milk and eggs [1].", "sources": [{"n": 1, "note": "<id>", "title": "Groceries"}]}
-{"answer": null, "sources": []}   // nothing close enough, or the model said NO_ANSWER
+A document prefix is part of the embedded text, so its hash changes and those chunks are embedded again once.
+
+**`GET /search/meaning?q=`** embeds `q` (3+ letters or digits) and compares it, by cosine similarity, with every chunk of the caller's visible, untrashed notes, using the same visibility as `/search`. That's brute force in Rust, which is plenty for a household. A note's best chunk counts. It must score at least 0.35 and be within 0.15 of the best result; at most 10 come back, as `{"note", "title", "source": "meaning", "snippet": [{"text": "<start of that chunk>", "hit": false}]}`.
+
+**`POST /ask {messages: [{role, text}]}`** (`server/src/ask.rs`) is the next turn of a conversation. The app sends the conversation so far, ending with the new question (`role: "user"`, 3–1,000 characters); the server keeps none of it. One turn:
+
+1. **Follow-ups.** With earlier turns, the chat model first rewrites the question and the last 6 messages (1,500 characters each, 6,000 in all, citations removed) into one standalone search, e.g. "and the gutters?" after a roof question becomes "gutters Summit Exteriors".
+2. **Hybrid search.** The search's words, without stop words like "where", "is" and "note", go to full-text search as an any-word query (best 10 notes), and the search goes to the embeddings as above (at least 0.35, best 10 notes). The two lists are mixed by reciprocal rank fusion (each note scores the sum of 1 / (60 + rank) over the lists it's in), and the best 5 notes are kept. Visibility and trash rules are the same as search.
+3. **Cards.** Those notes go to the app at once, numbered, each with a snippet: the full-text snippet around the words found, or else the note's closest chunk with the search's words marked.
+4. **Answer.** Each note's closest 2 passages (by meaning, then by shared words; about 8,000 characters in all) go to the chat model as a numbered system message, then the earlier turns, then the question. The prompt says to answer only from those notes, cite them as `[n]`, keep it short, answer a "where is that note…" question with which note it is rather than its content, and reply `NO_ANSWER` when they don't say. The answer is streamed (`stream: true`); a service that ignores that and sends one JSON body works too, as one piece.
+
+The reply is server-sent events:
+
+```
+event: sources   data: {"query": "<what was searched>", "terms": ["gift", "ideas"], "notes": [{"n": 1, "note": "<id>", "title": "Christmas gift ideas", "snippet": [{"text": "…", "hit": false}]}]}
+event: delta     data: {"text": "That's in your note"}          // repeated as the answer is written
+event: done      data: {"answer": "That's in your note \"Christmas gift ideas\" [1].", "cited": [1]}
+event: error     data: {"message": "Couldn't reach the answer service"}
 ```
 
-- `sources` are the notes the answer cites, or every note sent when it cites none. Nothing close means the chat model isn't called.
-- Only notes the caller can see right now are ever sent. Unsharing or trashing a note takes it out of both search and Ask at once.
+- With no notes found, `done` follows `sources` straight away with `"answer": null`, and the chat model isn't called.
+- `answer` is null when the model says `NO_ANSWER`. Text that might still become `NO_ANSWER`, and a leading `<think>…</think>`, is held back rather than streamed; a reasoning model's separate `reasoning` is dropped.
+- `cited` holds only numbers of notes that were sent. Only notes the caller can see right now are ever sent: unsharing or trashing a note takes it out of search and Ask at once.
+- Closing the dialog stops the answer: the server stops reading from the chat service.
 
-**In the app.** With a search typed, a **By Meaning** group lists meaning matches the word search didn't already find, in the folder being searched, under the word matches. An **Ask Your Notes** row with the search text opens the answer in a dialog. The row comes first when the search reads like a question (ends in `?` or starts with a question word), otherwise last. With no matches at all it's the empty page's button. The answer's `[n]` become small numbered links, and the notes it used are listed under it.
+**Measured.** With 30 household notes and 30 questions (finder questions like "where is that note about gift ideas?", follow-ups, exact words like "Stradic" or "policy 44-BX-1912", paraphrases like "which contractor is doing the shingles?") against qwen3-embedding:
+
+| Retrieval | Right note first | In top 3 | Wanted notes in top 5 |
+|---|---|---|---|
+| Full text, all words (as `/search`) | 14 | 14 | 43% |
+| Full text, any word without stop words | 26 | 26 | 87% |
+| Embeddings, no query instruction | 26 | 27 | 97% |
+| Embeddings, qwen3 query instruction | 27 | 29 | 97% |
+| Mixed, as Ask does | 27 | 30 | 100% |
+
+With the instruction, the note a question was about scored 0.48 (median), and the best match of an unrelated question 0.16–0.40. For "By Meaning", a 0.35 floor made 72% of listed notes right ones, against 52% at 0.3.
+
+**In the app.** With a search typed, a **By Meaning** group lists meaning matches the word search didn't already find, in the folder being searched, under the word matches. An **Ask Your Notes** row with the search text opens the conversation in a dialog (a bottom sheet on phones) and asks it. The row comes first when the search reads like a question (ends in `?` or starts with a question word), otherwise last. With no matches at all it's the empty page's button.
+
+- Each turn shows the question as a bubble, then the found notes as cards (number, title, the snippet with matched words marked, and where the note lives) while the answer streams in above them. Once done, only the cited cards stay; if the notes don't say, the cards are listed as the closest ones.
+- The answer's `[n]` become small numbered links. A card or link opens the note and closes the dialog.
+- A field at the bottom asks follow-ups. The conversation lasts until the dialog closes.
 
 ## Websocket protocol
 
@@ -287,5 +325,5 @@ docker run -v gnotes-data:/data -p 8080:8080 gnotes
 ## Decided
 
 - **Search:** the server does full-text search (SQLite FTS5). Offline, the app falls back to matching titles and previews of the notes it has cached.
-- **AI search:** optional, set up by an admin like Speech-to-Text. Semantic search finds notes by meaning through an OpenAI-compatible embeddings endpoint; Ask writes an answer from the matching notes and links them.
+- **AI search:** optional, set up by an admin like Speech-to-Text. Semantic search finds notes by meaning through an OpenAI-compatible embeddings endpoint; Ask is a conversation that finds notes by words and meaning and writes answers from them, linking them. The app keeps the conversation; the server stores none of it.
 - **Accounts:** sign-up is by admin-made invite link only. Letting anyone with an email at an allowed domain join is planned after 1.0; it needs email addresses and a way to verify them.

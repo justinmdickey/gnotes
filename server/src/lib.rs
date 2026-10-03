@@ -1,4 +1,5 @@
 pub mod account;
+pub mod ask;
 pub mod attachments;
 pub mod authors;
 pub mod auth;
@@ -207,7 +208,7 @@ pub fn router(state: AppState) -> Router {
         .route("/notes/{id}/authors", get(authors::list_authors))
         .route("/search", get(search::search))
         .route("/search/meaning", get(semantic::search))
-        .route("/ask", post(semantic::ask))
+        .route("/ask", post(ask::ask))
         .route("/attachments/{id}/text", post(attachments::photo_text))
         .route("/ws", get(ws::handler))
         .fallback(|| async { error::AppError::NotFound });

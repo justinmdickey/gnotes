@@ -1,4 +1,4 @@
-//! Semantic search and Ask, through an admin's OpenAI-compatible embeddings service (`/embeddings`).
+//! Semantic search, through an admin's OpenAI-compatible embeddings service (`/embeddings`).
 //! See "AI search" in docs/DESIGN.md.
 //!
 //! Each note's search text (`note_text`, kept by search.rs) is cut into chunks of a few paragraphs,
@@ -9,8 +9,11 @@
 //! Editing never waits on it.
 //!
 //! Searching embeds the query and compares it with every chunk of the notes the user can see
-//! (brute force, which is plenty for a household). Ask sends the best few of those chunks, and
-//! nothing else, to the chat model that writes summaries.
+//! (brute force, which is plenty for a household). Ask (ask.rs) mixes these matches with full-text ones.
+//!
+//! Some models want an instruction in front of queries or documents (`instructions`); measured with
+//! qwen3-embedding on a set of household notes, its query instruction ranked the right note in the
+//! top 3 for 29 of 30 questions, against 27 without it.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -22,7 +25,6 @@ use axum::{
     Json,
     extract::{Query, State},
 };
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tokio::sync::Notify;
@@ -44,24 +46,15 @@ const RETRY: Duration = Duration::from_secs(60);
 const CHUNK_CHARS: usize = 1000;
 /// Chunks per `/embeddings` request. One request at a time, so a small local server isn't swamped.
 const BATCH: usize = 16;
-/// Cosine similarity a chunk needs to count as related at all.
-const MIN_SCORE: f32 = 0.3;
+/// Cosine similarity a chunk needs to count as related at all. With qwen3-embedding and its query
+/// instruction, the note a question is about scored 0.48 (median) and unrelated questions' best
+/// matches 0.16–0.40; at 0.35, 72% of the notes listed "By meaning" were right ones (52% at 0.3).
+pub(crate) const MIN_SCORE: f32 = 0.35;
 /// Results also have to be about as close as the best one; embedding models differ in how far apart
 /// unrelated text lands, so a fixed cutoff alone lets in noise from some models.
 const SPREAD: f32 = 0.15;
 /// Notes "By meaning" shows at most.
 const MAX_RESULTS: usize = 10;
-/// Chunks Ask sends to the chat model at most, and how much text that may be.
-const ASK_CHUNKS: usize = 6;
-const ASK_CHARS: usize = 8000;
-/// The model replies with exactly this when the notes don't answer the question.
-const NO_ANSWER: &str = "NO_ANSWER";
-
-const ASK_PROMPT: &str = "Answer the question using only the notes below. They are excerpts from the user's own notes, numbered.
-- Cite the notes you use by number in square brackets, like [1] or [1][2], right after what they support.
-- If the notes don't contain the answer, reply with exactly NO_ANSWER and nothing else. Don't guess and don't use outside knowledge.
-- Keep it short: a few sentences, or a short list with \"- \" items. Plain text, no headings. Reply in the question's language.
-";
 
 /// What the background task still has to look at.
 struct Dirty {
@@ -161,6 +154,23 @@ pub fn spawn(state: AppState) {
     });
 }
 
+/// What an embedding model wants in front of a query and in front of the text it searches, by its
+/// name. Models trained with these find much less without them.
+fn instructions(model: &str) -> (&'static str, &'static str) {
+    let m = model.to_lowercase();
+    if m.contains("qwen3") && m.contains("embed") {
+        ("Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery:", "")
+    } else if m.contains("nomic-embed") {
+        ("search_query: ", "search_document: ")
+    } else if !m.contains("mistral") && (m.starts_with("e5") || m.contains("/e5") || m.contains("-e5")) {
+        ("query: ", "passage: ")
+    } else if (m.contains("bge") && !m.contains("m3")) || m.contains("mxbai-embed") {
+        ("Represent this sentence for searching relevant passages: ", "")
+    } else {
+        ("", "")
+    }
+}
+
 /// Brings the chunks of the notes in `work` up to date. Returns how many notes were re-embedded.
 async fn update(state: &AppState, cfg: &ChatConfig, work: &Dirty) -> anyhow::Result<usize> {
     let ids: Vec<String> = if work.all {
@@ -188,7 +198,7 @@ fn hash(text: &str) -> String {
 
 /// A note's search text in chunks of about `CHUNK_CHARS`, split between lines where possible.
 /// Each is (the chunk's text, what's embedded: the title, then the chunk), so every chunk knows its note.
-fn chunks(title: &str, body: &str) -> Vec<(String, String)> {
+pub(crate) fn chunks(title: &str, body: &str) -> Vec<(String, String)> {
     if body.trim().is_empty() {
         return if title.trim().is_empty() { vec![] } else { vec![(title.to_owned(), title.to_owned())] };
     }
@@ -235,7 +245,8 @@ async fn embed_note(state: &AppState, cfg: &ChatConfig, id: &str) -> anyhow::Res
     .fetch_optional(&state.db)
     .await?;
     let Some((title, body)) = row else { return Ok(false) };
-    let pieces = chunks(&title, &body);
+    let doc = instructions(&cfg.model).1;
+    let pieces: Vec<(String, String)> = chunks(&title, &body).into_iter().map(|(text, input)| (text, format!("{doc}{input}"))).collect();
     let hashes: Vec<String> = pieces.iter().map(|(_, input)| hash(input)).collect();
     let have: Vec<(String, String)> = sqlx::query_as("SELECT hash, model FROM note_chunks WHERE note_id = ? ORDER BY idx")
         .bind(id)
@@ -330,7 +341,7 @@ fn to_bytes(v: &[f32]) -> Vec<u8> {
 }
 
 /// Dot product of a stored vector with the query, or None when their sizes differ.
-fn similarity(stored: &[u8], query: &[f32]) -> Option<f32> {
+pub(crate) fn similarity(stored: &[u8], query: &[f32]) -> Option<f32> {
     if stored.len() != query.len() * 4 {
         return None;
     }
@@ -338,19 +349,22 @@ fn similarity(stored: &[u8], query: &[f32]) -> Option<f32> {
 }
 
 /// A chunk that matched, from a note the user can see.
-struct Match {
-    note: String,
-    title: String,
-    text: String,
-    score: f32,
+pub(crate) struct Match {
+    pub note: String,
+    pub title: String,
+    pub text: String,
+    pub score: f32,
 }
 
-/// The chunks of the user's visible, untrashed notes that are close to `query`, best first.
-async fn matches(state: &AppState, user: &str, cfg: &ChatConfig, query: &str) -> ApiResult<Vec<Match>> {
-    let q = embed(state, cfg, &[query.to_owned()]).await.map_err(|e| {
+/// The chunks of the user's visible, untrashed notes scoring at least `MIN_SCORE` against `query`,
+/// best first, and the query's embedding.
+pub(crate) async fn matches(state: &AppState, user: &str, cfg: &ChatConfig, query: &str) -> ApiResult<(Vec<f32>, Vec<Match>)> {
+    let input = format!("{}{query}", instructions(&cfg.model).0);
+    let mut q = embed(state, cfg, &[input]).await.map_err(|e| {
         tracing::warn!("semantic search query failed: {e:#}");
         AppError::Conflict("Couldn't reach the semantic search service".into())
     })?;
+    let q = q.remove(0);
     let rows: Vec<(String, String, String, Vec<u8>)> = sqlx::query_as(concat!(
         visible_notes!(),
         "SELECT c.note_id, n.title, c.text, c.embedding FROM note_chunks c JOIN notes n ON n.id = c.note_id
@@ -363,20 +377,17 @@ async fn matches(state: &AppState, user: &str, cfg: &ChatConfig, query: &str) ->
     let mut found: Vec<Match> = rows
         .into_iter()
         .filter_map(|(note, title, text, emb)| {
-            let score = similarity(&emb, &q[0])?;
+            let score = similarity(&emb, &q)?;
             (score >= MIN_SCORE).then_some(Match { note, title, text, score })
         })
         .collect();
     found.sort_by(|a, b| b.score.total_cmp(&a.score));
-    if let Some(best) = found.first().map(|m| m.score) {
-        found.retain(|m| m.score >= best - SPREAD);
-    }
-    Ok(found)
+    Ok((q, found))
 }
 
 /// The start of a chunk, for a result's snippet: about 160 characters, ending at a word.
 /// Table borders (`|`, `---`) are left out, so a table reads as its cells.
-fn excerpt(text: &str) -> String {
+pub(crate) fn excerpt(text: &str) -> String {
     let words = text.split_whitespace().filter(|w| !w.chars().all(|c| matches!(c, '|' | '-' | ':')));
     let flat = words.collect::<Vec<_>>().join(" ");
     if flat.chars().count() <= 160 {
@@ -388,7 +399,7 @@ fn excerpt(text: &str) -> String {
 }
 
 /// Something worth embedding: a word or two, not a stray letter.
-fn worth_asking(q: &str) -> bool {
+pub(crate) fn worth_asking(q: &str) -> bool {
     q.chars().filter(|c| c.is_alphanumeric()).count() >= 3
 }
 
@@ -407,96 +418,15 @@ pub async fn search(
         return Ok(Json(SearchResults { results: vec![] }));
     }
     let mut seen = HashSet::new();
-    let results = matches(&state, &me.id, &cfg, q)
-        .await?
+    let (_, found) = matches(&state, &me.id, &cfg, q).await?;
+    let best = found.first().map_or(0.0, |m| m.score);
+    let results = found
         .into_iter()
-        .filter(|m| seen.insert(m.note.clone()))
+        .filter(|m| m.score >= best - SPREAD && seen.insert(m.note.clone()))
         .take(MAX_RESULTS)
         .map(|m| SearchResult { note: m.note, title: m.title, snippet: vec![Segment { text: excerpt(&m.text), hit: false }], source: "meaning" })
         .collect();
     Ok(Json(SearchResults { results }))
-}
-
-#[derive(Deserialize)]
-pub struct AskBody {
-    question: String,
-}
-
-/// A note an answer was written from. `n` is its number in the answer's [n] citations.
-#[derive(Serialize)]
-pub struct Source {
-    n: usize,
-    note: String,
-    title: String,
-}
-
-/// The numbers cited as `[1]`, `[2][3]` or `[1, 2]`, in order, once each.
-fn citations(answer: &str) -> Vec<usize> {
-    let mut out = Vec::new();
-    for part in answer.split('[').skip(1) {
-        let Some((inside, _)) = part.split_once(']') else { continue };
-        let nums: Vec<Option<usize>> = inside.split(',').map(|n| n.trim().parse().ok()).collect();
-        for n in nums.into_iter().flatten() {
-            if !out.contains(&n) {
-                out.push(n);
-            }
-        }
-    }
-    out
-}
-
-fn is_no_answer(answer: &str) -> bool {
-    answer.trim_matches(|c: char| !c.is_alphanumeric() && c != '_').eq_ignore_ascii_case(NO_ANSWER)
-}
-
-/// `POST /ask {question}` — a short answer written from the user's own notes, with the notes it
-/// came from. Only the closest chunks of notes the user can see go to the chat model.
-/// `answer` is null when the notes don't say.
-pub async fn ask(State(state): State<AppState>, CurrentUser(me): CurrentUser, Json(body): Json<AskBody>) -> ApiResult<Json<Value>> {
-    let (Some(embed_cfg), Some(chat_cfg)) = (state.embed.read().await.clone(), state.summary.read().await.clone()) else {
-        return Err(AppError::Conflict("Ask isn't set up on this server".into()));
-    };
-    let question = body.question.trim();
-    if !worth_asking(question) {
-        return Err(AppError::BadRequest("Type a question first".into()));
-    }
-    if question.chars().count() > 1000 {
-        return Err(AppError::BadRequest("That question is too long".into()));
-    }
-    let nothing = || Ok(Json(json!({ "answer": null, "sources": [] })));
-    // The closest chunks, grouped by note in order of their best chunk.
-    let mut notes: Vec<(String, String, Vec<String>)> = Vec::new();
-    let mut chars = 0;
-    for m in matches(&state, &me.id, &embed_cfg, question).await?.into_iter().take(ASK_CHUNKS) {
-        chars += m.text.chars().count();
-        if chars > ASK_CHARS && !notes.is_empty() {
-            break;
-        }
-        match notes.iter_mut().find(|(id, _, _)| *id == m.note) {
-            Some((_, _, texts)) => texts.push(m.text),
-            None => notes.push((m.note, m.title, vec![m.text])),
-        }
-    }
-    if notes.is_empty() {
-        return nothing();
-    }
-    let mut prompt = format!("{ASK_PROMPT}\nNotes:\n");
-    for (i, (_, title, texts)) in notes.iter().enumerate() {
-        prompt.push_str(&format!("\n[{}] {}\n{}\n", i + 1, if title.is_empty() { "Untitled" } else { title }, texts.join("\n…\n")));
-    }
-    prompt.push_str(&format!("\nQuestion: {question}"));
-    let answer = crate::summary::clean(&crate::chat::complete(&state, &chat_cfg, json!(prompt), "answer").await?);
-    if answer.is_empty() || is_no_answer(&answer) {
-        return nothing();
-    }
-    let cited: Vec<usize> = citations(&answer).into_iter().filter(|n| (1..=notes.len()).contains(n)).collect();
-    // A model that forgot to cite still answered from these notes, so list them all.
-    let used: Vec<usize> = if cited.is_empty() { (1..=notes.len()).collect() } else { cited };
-    let sources: Vec<Source> = used
-        .into_iter()
-        .map(|n| Source { n, note: notes[n - 1].0.clone(), title: notes[n - 1].1.clone() })
-        .collect();
-    Ok(Json(json!({ "answer": answer, "sources": sources })))
 }
 
 #[cfg(test)]
@@ -517,10 +447,12 @@ mod tests {
     }
 
     #[test]
-    fn citations_and_no_answer() {
-        assert_eq!(citations("Milk [2], eggs [1][2] and [3, 1]. [x] [12"), vec![2, 1, 3]);
-        assert!(is_no_answer(" NO_ANSWER."));
-        assert!(!is_no_answer("No answer here, but [1] says milk"));
+    fn query_instructions_by_model() {
+        assert!(instructions("qwen3-embedding:0.6b").0.starts_with("Instruct: "));
+        assert_eq!(instructions("nomic-embed-text"), ("search_query: ", "search_document: "));
+        assert_eq!(instructions("intfloat/multilingual-e5-large").1, "passage: ");
+        assert_eq!(instructions("bge-m3"), ("", ""));
+        assert_eq!(instructions("text-embedding-3-small"), ("", ""));
     }
 
     #[test]

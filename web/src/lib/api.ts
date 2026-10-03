@@ -130,11 +130,34 @@ export interface SearchResult {
   source: string;
 }
 
-/** Ask's reply. `answer` cites notes as [n]; it's null when the notes don't say. */
-export interface AskAnswer {
+/** One message of an Ask conversation. */
+export interface AskMessage {
+  role: "user" | "assistant";
+  text: string;
+}
+
+/** A note Ask found for a question; `n` is its number in the answer's [n] citations. */
+export interface AskNote {
+  n: number;
+  note: string;
+  title: string;
+  /** The passage that matched, with the question's words as hits. */
+  snippet: SnippetPart[];
+}
+
+/** The notes Ask found, which come before the answer. */
+export interface AskSources {
+  /** What was searched: the question, or a follow-up rewritten to stand on its own. */
+  query: string;
+  /** Its words, lowercased, for marking them in titles. */
+  terms: string[];
+  notes: AskNote[];
+}
+
+/** Ask's finished answer, with [n] citations; null when the notes don't say. `cited` are numbers of notes it was given. */
+export interface AskDone {
   answer: string | null;
-  /** The notes the answer was written from, by their [n] number. */
-  sources: { n: number; note: string; title: string }[];
+  cited: number[];
 }
 
 /** A note's AI summary. `summary` is null until someone asks for one. */
@@ -205,6 +228,51 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return data as T;
 }
 
+/**
+ * The next turn of an Ask conversation (`messages` ends with the new question). The server streams
+ * it: `onSources` gets the notes found, `onText` each piece of the answer as it's written, and the
+ * promise resolves with the whole answer.
+ */
+async function ask(
+  messages: AskMessage[],
+  on: { onSources: (s: AskSources) => void; onText: (piece: string) => void },
+  signal?: AbortSignal,
+): Promise<AskDone> {
+  const res = await fetch("/api/ask", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ messages }),
+    credentials: "same-origin",
+    signal,
+  });
+  if (!res.ok || !res.body) {
+    const data = await res.json().catch(() => ({}));
+    throw new ApiError(res.status, data.error ?? "unknown", data.message ?? res.statusText);
+  }
+  // Server-sent events: blocks of "event: <name>" and "data: <json>" lines, a blank line apart.
+  const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+  let buffer = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += value;
+    let end;
+    while ((end = buffer.indexOf("\n\n")) >= 0) {
+      const block = buffer.slice(0, end);
+      buffer = buffer.slice(end + 2);
+      const name = /^event: ?(.*)$/m.exec(block)?.[1];
+      const data = /^data: ?(.*)$/m.exec(block)?.[1];
+      if (!name || data === undefined) continue;
+      const body = JSON.parse(data);
+      if (name === "sources") on.onSources(body);
+      else if (name === "delta") on.onText(body.text);
+      else if (name === "done") return body;
+      else if (name === "error") throw new ApiError(409, "conflict", body.message);
+    }
+  }
+  throw new ApiError(0, "unknown", "The answer stopped partway");
+}
+
 export const api = {
   me: () => request<User>("GET", "/me"),
   login: (username: string, password: string) => request<User>("POST", "/auth/login", { username, password }),
@@ -224,7 +292,7 @@ export const api = {
   search: (q: string) => request<{ results: SearchResult[] }>("GET", `/search?q=${encodeURIComponent(q)}`),
   /** Notes about what `q` means, even without its words. Empty when semantic search is off. */
   searchMeaning: (q: string) => request<{ results: SearchResult[] }>("GET", `/search/meaning?q=${encodeURIComponent(q)}`),
-  ask: (question: string) => request<AskAnswer>("POST", "/ask", { question }),
+  ask,
 
   createNotebook: (name: string, parent_id: string | null) =>
     request<{ id: string }>("POST", "/notebooks", { name, parent_id }),

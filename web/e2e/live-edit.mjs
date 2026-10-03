@@ -16,8 +16,9 @@ const port = 18000 + Math.floor(Math.random() * 1000);
 const base = `http://127.0.0.1:${port}`;
 // A stand-in speech-to-text service: answers every transcription request the same way.
 // It's also the chat model: a photo always reads as a short shopping list, a note (text only)
-// summarizes to a fixed summary, and a question (Ask) gets a one-line answer citing note [1], each a
-// moment later. And the embedding model: dairy words land together; any other word is its own
+// summarizes to a fixed summary, and a question (Ask) gets a one-line answer citing note [1],
+// streamed a few characters at a time, each a moment later. A follow-up is rewritten as the first
+// question plus the follow-up. And the embedding model: dairy words land together; any other word is its own
 // direction (hashed), so texts only come close when they share a word or are both about dairy.
 const whisper = createServer((req, res) => {
   const chunks = [];
@@ -27,11 +28,21 @@ const whisper = createServer((req, res) => {
     if (req.url.endsWith("/chat/completions")) {
       const body = JSON.parse(Buffer.concat(chunks).toString());
       const photo = Array.isArray(body.messages[0].content);
-      const question = !photo && body.messages[0].content.includes("\nQuestion: ");
+      const last = body.messages.at(-1).content;
+      if (body.messages[0].role === "system") {
+        const content = last.includes("cheese") ? "Cheese is on your list too [1]." : "You have milk and cheese on your list [1].";
+        res.setHeader("content-type", "text/event-stream");
+        const pieces = content.match(/.{1,6}/g).map((text) => `data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\n`);
+        let i = 0;
+        const next = () => (i < pieces.length ? (res.write(pieces[i++]), setTimeout(next, 60)) : res.end("data: [DONE]\n\n"));
+        setTimeout(next, 800);
+        return;
+      }
+      const followUp = !photo && last.split("\nLast message: ");
       const content = photo
         ? "SHOPPING LIST\nOat milk"
-        : question
-          ? "You have milk and cheese on your list [1]."
+        : followUp.length === 2
+          ? `${followUp[0].split("\n").find((l) => l.startsWith("User: ")).slice(6)} ${followUp[1]}`
           : "Things to buy this week.\n\n## Key points\n- **Milk** and eggs\n\n## Action items\n- [ ] Buy bread";
       setTimeout(() => res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content } }] })), 800);
     } else if (req.url.endsWith("/embeddings")) {
@@ -627,16 +638,45 @@ try {
   // The results slide in, moving Ask down; let them settle before tapping it.
   await new Promise((r) => setTimeout(r, 400));
   await alice.click(".pane.list .ask button");
-  await alice.waitForSelector("dialog .answer .cite", { timeout: 5000 });
+  // The notes found show as cards first; the answer streams in under the question after.
+  await alice.waitForSelector("dialog .turn .card", { timeout: 5000 });
   check(
-    await alice.evaluate(() => document.querySelector("dialog .answer").textContent.includes("milk and cheese") && document.querySelector("dialog .source")?.textContent.includes("Groceries")),
-    "Ask answers from your notes and lists the note it used",
+    await alice.evaluate(
+      () => !document.querySelector("dialog .answer") && document.querySelector("dialog .card").textContent.includes("Groceries") && !!document.querySelector("dialog .card .snippet"),
+    ),
+    "Ask shows the notes it found as cards before the answer",
   );
+  await alice.waitForSelector("dialog .turn[aria-busy=true] .answer", { timeout: 5000 });
+  check(true, "the answer shows while it's still being written");
+  await alice.waitForSelector("dialog .turn[aria-busy=false] .answer", { timeout: 5000 });
+  check(await alice.evaluate(() => document.querySelector("dialog .answer").textContent.includes("milk and cheese on your list")), "the answer comes from the notes found");
+  check(await alice.evaluate(() => !!document.querySelector("dialog .answer .cite")), "Ask streams an answer from your notes with a numbered link");
   if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-ask.png") });
-  await alice.click("dialog .source");
+  // A follow-up builds on the question before; both stay in the conversation.
+  await alice.type("dialog .composer input", "and the cheese?");
+  await alice.keyboard.press("Enter");
+  await alice.waitForSelector("dialog .turn:nth-child(2)[aria-busy=false]", { timeout: 8000 });
+  check(
+    await alice.evaluate(() => {
+      const [first, second] = document.querySelectorAll("dialog .turn");
+      const cards = second.querySelectorAll(".card");
+      return (
+        first.querySelector(".answer").textContent.includes("milk and cheese") &&
+        second.querySelector(".question").textContent === "and the cheese?" &&
+        second.querySelector(".answer").textContent.includes("Cheese is on your list too") &&
+        // Once answered, only the note it cites is left, with the word asked about marked.
+        cards.length === 1 &&
+        cards[0].textContent.includes("Groceries") &&
+        cards[0].querySelector(".snippet mark")?.textContent === "cheese"
+      );
+    }),
+    "a follow-up is answered from the notes the conversation is about, under the first answer",
+  );
+  if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-ask-follow-up.png") });
+  await alice.click("dialog .turn:last-child .card");
   await closed(alice);
   await alice.waitForFunction(() => location.hash.includes("/note/") && document.querySelector(".cm-content")?.innerText.includes("cheese"));
-  check(true, "an Ask source opens its note");
+  check(true, "an Ask card opens its note");
   // The list may be covered by the note now, so clear the search without a real click.
   await alice.evaluate(() => document.querySelector(".pane.list .search .clear")?.click());
 

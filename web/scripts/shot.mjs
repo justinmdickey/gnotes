@@ -3,7 +3,7 @@
 //
 // Usage: npm run build && cargo build -p gnotes-server && node scripts/shot.mjs [options] [screen...]
 //   screens: home recent shared account trash notebook:<name> note:<title> edit:<title> search:<query>
-//            ask:<question> (with --ai) service:<form> (a Settings service form, e.g. service:embed)
+//            ask:<question>[|<follow-up>...] (with --ai) service:<form> (a Settings service form, e.g. service:embed)
 //            (default: home notebook:Kitchen note:Groceries account)
 //   --phone | --desktop   viewport (default: both)
 //   --dark | --light      color scheme (default: dark)
@@ -38,7 +38,8 @@ const port = 19000 + Math.floor(Math.random() * 1000);
 const base = `http://127.0.0.1:${port}`;
 const env = { ...process.env, GNOTES_DATA_DIR: data, GNOTES_BIND: `127.0.0.1:${port}`, GNOTES_WEB_DIR: join(root, "web/dist") };
 // --ai: stand-in summary, embeddings and chat services, so search by meaning and Ask have something to show.
-// Embeddings know a few topics ("dairy" lands on milk); the chat model answers about groceries.
+// Embeddings know a few topics ("dairy" lands on milk); the chat model answers Ask from the notes it's
+// given, streamed a few words at a time.
 let ai;
 if (flag("--ai")) {
   const topics = [
@@ -65,10 +66,25 @@ if (flag("--ai")) {
       if (req.url.endsWith("/embeddings")) {
         res.end(JSON.stringify({ data: body.input.map((t, index) => ({ index, embedding: embedding(t) })) }));
       } else if (req.url.endsWith("/chat/completions")) {
-        const prompt = body.messages[0].content;
-        const content = prompt.includes("Question:")
-          ? `You still need milk, eggs and bread [1].${prompt.includes("\n[2] ") ? " Rice, beans and flour are in the pantry [2]." : ""}`
-          : "A shopping list.\n\n## Key points\n- Milk, eggs and bread";
+        const [first] = body.messages;
+        const last = body.messages.at(-1).content;
+        if (first.role === "system") {
+          // Ask: a sentence for each note it knows, cited by its number.
+          const lines = { Groceries: "You still need milk, eggs and bread", Pantry: "Rice, beans and flour are in the pantry" };
+          const said = [...first.content.matchAll(/^\[(\d+)\] (\w+)$/gm)].filter((m) => lines[m[2]]).map((m) => `${lines[m[2]]} [${m[1]}].`);
+          res.setHeader("content-type", "text/event-stream");
+          for (const text of (said.join(" ") || "NO_ANSWER").match(/.{1,8}/g)) {
+            res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\n`);
+          }
+          res.end("data: [DONE]\n\n");
+          return;
+        }
+        // A follow-up stands on its own as the first question plus the follow-up.
+        const followUp = last.split("\nLast message: ");
+        const content =
+          followUp.length === 2
+            ? `${followUp[0].split("\n").find((l) => l.startsWith("User: ")).slice(6)} ${followUp[1]}`
+            : "A shopping list.\n\n## Key points\n- Milk, eggs and bread";
         res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content } }] }));
       } else res.end(JSON.stringify({ data: [] }));
     });
@@ -170,14 +186,22 @@ async function go(page, target) {
     // Start from an empty field, whatever the screen before left.
     await page.$eval(".pane.list .search input", (el) => el.select());
     await page.keyboard.press("Backspace");
-    await page.type(".pane.list .search input", arg);
+    await page.type(".pane.list .search input", kind === "ask" ? arg.split("|")[0] : arg);
     // Meaning matches come a moment after the word matches.
     if (flag("--ai")) await page.waitForSelector(".pane.list .meaning", { timeout: 5000 }).catch(() => {});
   }
   if (kind === "ask") {
     await settle(400);
     await page.click(".pane.list .ask button, .pane.list .status button");
-    await page.waitForSelector("dialog .answer, dialog .status, dialog .error", { timeout: 5000 });
+    // Each follow-up after "|" is typed in once the answer before it is done.
+    const done = (n) =>
+      page.waitForFunction((n) => document.querySelectorAll("dialog .turn").length === n && !document.querySelector("dialog .turn[aria-busy=true]"), { timeout: 8000 }, n);
+    await done(1);
+    for (const [i, text] of arg.split("|").slice(1).entries()) {
+      await page.type("dialog .composer input", text);
+      await page.keyboard.press("Enter");
+      await done(i + 2);
+    }
   }
   if (kind === "service") {
     await page.waitForSelector(`.service.${arg}`);
