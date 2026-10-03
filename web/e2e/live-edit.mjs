@@ -638,6 +638,8 @@ try {
   const grip = await (await alice.$(".cm-drag-grip")).boundingBox();
   check(Math.abs(grip.y + grip.height / 2 - (two.y + two.h / 2)) < 4 && grip.x + grip.width <= two.x + 30, "pointing at a list item shows a grip beside it");
   const one = await lineBox("one");
+  // Edits less than a second apart undo together, so let the typing settle into its own step.
+  await new Promise((r) => setTimeout(r, 1100));
   await alice.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
   await alice.mouse.down();
   for (let i = 1; i <= 8; i++) await alice.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2 + ((one.y + 2 - grip.y - grip.height / 2) * i) / 8);
@@ -646,6 +648,13 @@ try {
   await alice.mouse.up();
   const order = await alice.$$eval(".cm-line", (ls) => ls.map((l) => l.textContent.replace("•", "").trim()).filter((t) => ["one", "two", "two child", "three"].includes(t)).join(","));
   check(order === "two,two child,one,three", `dragging a list item's grip moves it with its nested item (${order})`);
+  await alice.click(".cm-content");
+  await alice.keyboard.down("Control");
+  await alice.keyboard.press("z");
+  await alice.keyboard.up("Control");
+  await alice.evaluate(() => document.activeElement?.blur());
+  const undone = await alice.$$eval(".cm-line", (ls) => ls.map((l) => l.textContent.replace("•", "").trim()).filter((t) => ["one", "two", "two child", "three"].includes(t)).join(","));
+  check(undone === "one,two,two child,three", `one Ctrl+Z puts a dragged block back (${undone})`);
   // The note covers the folder's page; Back returns to it.
   await alice.goBack();
   await alice.waitForSelector(".list header button[aria-label='New note']", { visible: true });
