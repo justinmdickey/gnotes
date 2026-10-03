@@ -13,6 +13,7 @@
   import Icon from "./lib/Icon.svelte";
   import { codeBlocks } from "./lib/codeBlocks";
   import { livePreview } from "./lib/livePreview";
+  import { slashMenu } from "./lib/slash";
   import { sync } from "./lib/sync";
   import Menu from "./lib/Menu.svelte";
   import StatusPage from "./lib/StatusPage.svelte";
@@ -206,6 +207,7 @@
           syntaxHighlighting(markdownStyle),
           livePreview,
           codeBlocks,
+          slashMenu({ photo: () => pickPhoto(), record: () => startRecording() }),
           recordingMarker,
           dropImages,
           EditorView.lineWrapping,
@@ -975,8 +977,10 @@
     transition: opacity 220ms ease;
   }
 
+  /* The room under the text is inside the editor, so menus at the cursor count as on screen. */
   .page {
-    padding: 28px 0 40vh;
+    --room: 40vh;
+    padding-top: 28px;
   }
 
   .page.with-chip {
@@ -1090,7 +1094,7 @@
 
   .page :global(.cm-content) {
     caret-color: var(--accent);
-    padding: 0 max(var(--gutter), calc((100% - var(--measure)) / 2));
+    padding: 0 max(var(--gutter), calc((100% - var(--measure)) / 2)) var(--room);
   }
 
   .page :global(.cm-line) {
@@ -1169,6 +1173,57 @@
     background: var(--accent-bg)
       url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 8.5l2.5 2.5L12 5.5' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
       center / 80% no-repeat;
+  }
+
+  /* The "/" menu: a popover of styles and things to add, under the cursor. */
+  .page :global(.cm-tooltip.cm-slash) {
+    overflow: hidden;
+    border: none;
+    border-radius: var(--radius-md);
+    background: var(--popover-bg);
+    box-shadow: var(--shadow-lg);
+  }
+
+  .page :global(.cm-slash > ul) {
+    min-width: 220px;
+    max-height: min(320px, 40vh) !important;
+    padding: 6px !important;
+    font-family: inherit !important;
+  }
+
+  .page :global(.cm-slash completion-section) {
+    display: block;
+    padding: 8px 12px 4px;
+    border: none !important;
+    color: var(--dim-fg);
+    font-size: var(--text-xs);
+    font-weight: 700;
+  }
+
+  .page :global(.cm-slash li) {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 38px;
+    padding: 0 12px !important;
+    border-radius: var(--radius-sm);
+    color: var(--fg);
+    font-size: var(--text-md);
+  }
+
+  .page :global(.cm-slash li svg) {
+    flex: none;
+    color: var(--dim-fg);
+  }
+
+  .page :global(.cm-slash li[aria-selected]) {
+    background: var(--active);
+    color: var(--fg);
+  }
+
+  .page :global(.cm-slash .cm-completionMatchedText) {
+    text-decoration: none;
+    font-weight: 700;
   }
 
   /* Fenced code: a tinted block in a monospace face, its language picker on the first row. */
@@ -1300,7 +1355,8 @@
     }
 
     .page {
-      padding: 20px 0 50vh;
+      --room: 50vh;
+      padding-top: 20px;
     }
 
     .page.with-chip {

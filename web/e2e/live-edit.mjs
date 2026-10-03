@@ -555,6 +555,37 @@ try {
   // The picker is drawn from the text, so a new selection that sticks means the fence changed.
   check(await alice.$eval(".cm-code-lang select", (s) => s.options[s.selectedIndex].text === "Python"), "the language picker sets the block's language");
   if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-code-block.png") });
+  // "/" opens a menu of styles and things to add; typing narrows it and Enter picks.
+  await alice.click(".cm-content");
+  await alice.keyboard.down("Control");
+  await alice.keyboard.press("End");
+  await alice.keyboard.up("Control");
+  await alice.keyboard.type("\n/");
+  await alice.waitForSelector(".cm-slash li");
+  if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-slash-menu.png") });
+  await alice.keyboard.type("subh");
+  await alice.waitForFunction(() => document.querySelector(".cm-slash li[aria-selected]")?.textContent === "Subheading");
+  // The menu ignores Enter for a moment after it changes, so a fast typist doesn't pick by accident.
+  await new Promise((r) => setTimeout(r, 150));
+  await alice.keyboard.press("Enter");
+  await alice.keyboard.type("Later");
+  await alice.waitForFunction(() => [...document.querySelectorAll(".cm-line.cm-h3")].some((l) => l.textContent.includes("Later")));
+  check(await alice.evaluate(() => !document.querySelector(".cm-slash") && !document.querySelector(".cm-content").innerText.includes("/")), "the slash menu turns the line into a subheading and takes the slash with it");
+  await alice.keyboard.type(" /code");
+  await alice.waitForFunction(() => document.querySelector(".cm-slash li[aria-selected]")?.textContent === "Code Block");
+  await new Promise((r) => setTimeout(r, 150));
+  await alice.keyboard.press("Enter");
+  await alice.keyboard.type("SELECT 1 FROM t;");
+  await alice.evaluate(() => document.activeElement?.blur());
+  await alice.waitForFunction(() => document.querySelectorAll(".cm-code-lang").length === 2);
+  check(await alice.$$eval(".cm-code-lang select", (s) => s[1].options[s[1].selectedIndex].text === "SQL (guess)"), "the slash menu adds a code block under the line, ready to type into");
+  const sql = await alice.evaluateHandle(() => [...document.querySelectorAll(".cm-code")].find((l) => l.textContent.includes("SELECT")));
+  await sql.click();
+  await alice.keyboard.press("End");
+  await alice.keyboard.type(" /");
+  await new Promise((r) => setTimeout(r, 300));
+  check(!(await alice.$(".cm-slash")), "a slash inside code is just a slash");
+  for (let i = 0; i < 2; i++) await alice.keyboard.press("Backspace");
   // The note covers the folder's page; Back returns to it.
   await alice.goBack();
   await alice.waitForSelector(".list header button[aria-label='New note']", { visible: true });
@@ -824,6 +855,11 @@ try {
     await alice.tap("button[aria-label='Text styles']");
     await shot("phone-editing-styles");
     await alice.tap("button[aria-label='Text styles']");
+    await alice.keyboard.type("\n/");
+    await alice.waitForSelector(".cm-slash li");
+    await shot("phone-slash-menu");
+    await alice.keyboard.press("Escape");
+    for (let i = 0; i < 2; i++) await alice.keyboard.press("Backspace");
     // The keyboard bar has its own way out, so Done at the top isn't the only one.
     await alice.tap("button[aria-label='Hide keyboard']");
     await alice.waitForSelector(".tabbar");
