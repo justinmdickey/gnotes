@@ -355,10 +355,22 @@ async fn live_sync_presence_and_persistence() {
     assert!(merged.contains("milk") && merged.contains("eggs"), "merged: {merged:?}");
     assert_eq!(bob_doc.get_text("body").to_string(), merged);
 
-    // Each editing session is put down to the person whose connection sent it.
-    let authors = bob.get(&format!("/notes/{note}/authors")).await;
-    let name_of = |doc: &LoroDoc| authors["peers"][doc.peer_id().to_string()]["name"].clone();
-    assert_eq!((name_of(&alice_doc), name_of(&bob_doc)), (json!("alice"), json!("bob")), "authors: {authors}");
+    // Each editing session is put down to the person whose connection sent it. Updates are passed on
+    // before they're saved, so Alice can see Bob's edit a moment before his session is recorded.
+    let name_of = |authors: &Value, doc: &LoroDoc| authors["peers"][doc.peer_id().to_string()]["name"].clone();
+    let mut authors = Value::Null;
+    for _ in 0..50 {
+        authors = bob.get(&format!("/notes/{note}/authors")).await;
+        if !name_of(&authors, &bob_doc).is_null() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(
+        (name_of(&authors, &alice_doc), name_of(&authors, &bob_doc)),
+        (json!("alice"), json!("bob")),
+        "authors: {authors}"
+    );
 
     // Everything survives a restart.
     tokio::time::sleep(Duration::from_millis(100)).await;
