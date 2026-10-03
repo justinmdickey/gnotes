@@ -103,6 +103,9 @@ const closed = (page) => page.waitForFunction(() => !document.querySelector("dia
 
 const text = (page) => page.$eval(".cm-content", (el) => el.innerText);
 
+/** The note with a table, for screenshots. */
+let plansId;
+
 /** Sidebar rows lit as drop targets at the end of the last drag. */
 let dragLit = [];
 
@@ -268,6 +271,41 @@ try {
   await alice.$eval(".cm-checkbox", (el) => el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })));
   await bob.waitForSelector(".cm-checkbox.checked", { timeout: 5000 });
   check(true, "checklist item created and ticked live");
+
+  // ---- Tables (lib/tables.ts) ----
+  // Alice builds one in a new note; Bob, who can only view it, watches it change live.
+  const markdown = (page) => page.evaluate(() => document.querySelector(".cm-content").cmTile.root.view.state.doc.toString());
+  await alice.click(".pane.editor header button[aria-label='New note']");
+  await alice.waitForFunction(() => document.querySelector(".editor .headerbar .title strong")?.textContent === "New Note" && document.activeElement?.matches(".cm-content[contenteditable=true]"));
+  await alice.keyboard.type("Plans\n");
+  plansId = await alice.evaluate(() => location.hash.split("/note/")[1]);
+  await alice.evaluate((id) => fetch("/api/shares", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ resource_type: "note", resource_id: id, username: "bob", role: "viewer" }) }), plansId);
+  await bob.waitForFunction((id) => fetch("/api/tree").then((r) => r.json()).then((t) => t.notes.some((n) => n.id === id)), {}, plansId);
+  await bob.evaluate((id) => (location.hash = `#/shared/note/${id}`), plansId);
+  await bob.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("Plans"));
+
+  await alice.click("button[aria-label='Insert table']");
+  await alice.waitForSelector(".cm-table-cell[data-r='-1'][data-c='0']:focus");
+  await alice.keyboard.type("Item");
+  await alice.click(".cm-table-cell[data-r='0'][data-c='0']");
+  await alice.keyboard.type("Milk");
+  await alice.keyboard.press("Tab");
+  await alice.keyboard.type("2");
+  await alice.waitForFunction(() => document.querySelector(".cm-content").cmTile.root.view.state.doc.toString().includes("| Milk | 2 |  |"));
+  check((await markdown(alice)).includes("| Item | Column 2 | Column 3 |\n| --- | --- | --- |\n| Milk | 2 |  |\n"), "typing in table cells writes them into the Markdown table");
+  await alice.click(".cm-table-tools button[aria-label='Add row']");
+  await alice.keyboard.type("6");
+  await alice.waitForFunction(() => document.querySelector(".cm-content").cmTile.root.view.state.doc.toString().includes("|  | 6 |  |"));
+  const tableLines = (await markdown(alice)).split("\n").filter((l) => l.startsWith("|"));
+  check(tableLines.length === 5 && tableLines[3] === "|  | 6 |  |", `Add row puts a row under the cell being edited (${JSON.stringify(tableLines)})`);
+  await bob.waitForFunction(() => document.querySelector(".cm-table-cell[data-r='1'][data-c='1']")?.textContent === "6", { timeout: 5000 });
+  check(await bob.evaluate(() => !document.querySelector(".cm-table-widget [contenteditable]") && !document.querySelector(".cm-table-tools")), "a viewer sees the table live, without editing tools");
+  if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-table-editing.png") });
+  await alice.keyboard.press("Escape");
+
+  for (const p of [alice, bob]) await p.goBack();
+  for (const p of [alice, bob]) await p.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("jam"));
+  // ---- end of tables ----
 
   // Revoking removes access live.
   await alice.click("button[aria-label='Share']");
@@ -1023,6 +1061,14 @@ try {
     await alice.evaluate(() => [...document.querySelectorAll(".tabbar button")].find((b) => b.textContent.includes("Recent")).click());
     await alice.waitForFunction(() => !document.querySelector(".tab-page") && document.querySelector(".hero h1")?.textContent === "Recent");
     check(true, "another tab leaves Account");
+
+    // ---- Tables on a phone ----
+    await alice.evaluate((id) => (location.hash = `#/all/note/${id}`), plansId);
+    await alice.waitForSelector(".cm-table-cell");
+    await shot("phone-table-dark");
+    await alice.emulateMediaFeatures([]);
+    await alice.tap(".cm-table-cell[data-r='0'][data-c='0']");
+    await shot("phone-table-editing");
   }
   console.log("all checks passed");
 } finally {

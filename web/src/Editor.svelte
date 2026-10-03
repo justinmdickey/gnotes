@@ -16,6 +16,7 @@
   import { slashMenu } from "./lib/slash";
   import { dragHandles } from "./lib/dragHandles";
   import { undoCommands } from "./lib/undo";
+  import { tables } from "./lib/tables";
   import { sync } from "./lib/sync";
   import Menu from "./lib/Menu.svelte";
   import StatusPage from "./lib/StatusPage.svelte";
@@ -158,6 +159,7 @@
             syntaxHighlighting(markdownStyle),
             livePreview,
             codeBlocks,
+            tables,
             EditorView.lineWrapping,
             EditorView.editable.of(false),
             EditorState.readOnly.of(true),
@@ -215,6 +217,7 @@
           codeBlocks,
           slashMenu({ photo: () => pickPhoto(), record: () => startRecording() }),
           dragHandles,
+          tables,
           recordingMarker,
           dropImages,
           EditorView.lineWrapping,
@@ -1391,6 +1394,107 @@
   .page :global(.cm-task-done) {
     color: var(--dim-fg);
     text-decoration: line-through;
+  }
+
+  /* Tables (lib/tables.ts): drawn from their Markdown, scrolling sideways inside when wide. */
+  .page :global(.cm-table-widget) {
+    /* Its content never widens the note; it scrolls instead. */
+    contain: inline-size;
+    padding: 6px 0;
+    font-size: var(--text-md);
+    line-height: 1.4;
+    white-space: normal;
+    cursor: default;
+  }
+
+  .page :global(.cm-table-scroll) {
+    width: fit-content;
+    max-width: 100%;
+    overflow-x: auto;
+    border-radius: var(--radius-md);
+    box-shadow: 0 0 0 1px var(--border);
+  }
+
+  .page :global(.cm-table) {
+    border-collapse: collapse;
+  }
+
+  .page :global(.cm-table th),
+  .page :global(.cm-table td) {
+    padding: 0;
+    border: 1px solid var(--border);
+    vertical-align: top;
+    text-align: left;
+  }
+
+  .page :global(.cm-table tr:first-child > *) {
+    border-top: none;
+  }
+
+  .page :global(.cm-table tr:last-child > *) {
+    border-bottom: none;
+  }
+
+  .page :global(.cm-table tr > :first-child) {
+    border-left: none;
+  }
+
+  .page :global(.cm-table tr > :last-child) {
+    border-right: none;
+  }
+
+  .page :global(.cm-table th) {
+    background: var(--hover);
+    font-weight: 700;
+  }
+
+  .page :global(.cm-table-cell) {
+    min-width: 6em;
+    max-width: 18em;
+    min-height: calc(1.4em + 16px);
+    padding: 8px 12px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    outline: none;
+  }
+
+  .page :global(.cm-table-widget.editable .cm-table-cell) {
+    cursor: text;
+  }
+
+  .page :global(.cm-table-cell:focus) {
+    box-shadow: inset 0 0 0 2px var(--accent-bg);
+  }
+
+  /* Row and column tools, under the table while a cell is being edited. */
+  .page :global(.cm-table-tools) {
+    display: none;
+    gap: 4px;
+    margin-top: 8px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .page :global(.cm-table-widget:focus-within .cm-table-tools) {
+    display: flex;
+    animation: rise 160ms var(--ease-out) both;
+  }
+
+  .page :global(.cm-table-tools button) {
+    flex: none;
+    min-height: 32px;
+    padding: 0 10px;
+    border-radius: var(--radius-pill);
+    font-size: var(--text-sm);
+  }
+
+  .page :global(.cm-table-tools button[aria-label^="Delete"]) {
+    color: var(--destructive);
+  }
+
+  .page :global(.cm-table-tools button:disabled) {
+    opacity: 0.45;
+    cursor: default;
   }
 
   /* Phone: the formatting bar floats on top of the keyboard while typing. */

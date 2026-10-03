@@ -2,6 +2,7 @@
   import type { EditorView } from "@codemirror/view";
   import { setBlock, toggleInline, type Block, type Inline } from "./lib/format";
   import Icon from "./lib/Icon.svelte";
+  import { insertTable } from "./lib/tables";
 
   let {
     view,
@@ -86,6 +87,7 @@
   <button class="flat icon extra" class:active={block === "quote"} title="Quote" aria-label="Quote" aria-pressed={block === "quote"} onclick={() => setBlock(view, "quote")}>
     <Icon name="quote" />
   </button>
+  <button class="flat icon extra" title="Table" aria-label="Insert table" onclick={() => insertTable(view)}><Icon name="table" /></button>
   <span class="sep"></span>
 
   <button class="flat icon main attach" title="Add photo" aria-label="Add photo" onclick={onphoto}><Icon name="camera" /></button>
