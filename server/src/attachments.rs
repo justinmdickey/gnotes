@@ -39,7 +39,7 @@ pub struct Attachment {
     sha256: String,
 }
 
-fn blob_path(data_dir: &Path, sha: &str) -> PathBuf {
+pub(crate) fn blob_path(data_dir: &Path, sha: &str) -> PathBuf {
     data_dir.join("blobs").join(&sha[..2]).join(sha)
 }
 

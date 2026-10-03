@@ -4,6 +4,7 @@ pub mod authors;
 pub mod auth;
 pub mod chat;
 pub mod error;
+pub mod export;
 pub mod import;
 pub mod invites;
 pub mod live;
@@ -122,6 +123,8 @@ pub struct AppState {
     pub vision: Arc<tokio::sync::RwLock<Option<ChatConfig>>>,
     /// The note-summary service in use right now.
     pub summary: Arc<tokio::sync::RwLock<Option<ChatConfig>>>,
+    /// Keeps the plain Markdown copies under `data/export` up to date.
+    pub export: Arc<export::Exporter>,
 }
 
 impl AppState {
@@ -228,13 +231,16 @@ pub async fn build(config: Config) -> anyhow::Result<AppState> {
         config: Arc::new(config),
         rooms: Default::default(),
         hub: Default::default(),
+        export: Default::default(),
         http: reqwest::Client::builder().timeout(Duration::from_secs(300)).build()?,
     })
 }
 
-/// Runs until the listener fails. Also purges old trash hourly.
+/// Runs until the listener fails. Also purges old trash hourly and keeps the Markdown copies.
 pub async fn serve(state: AppState, listener: tokio::net::TcpListener) -> anyhow::Result<()> {
+    export::spawn(state.clone());
     let db = state.db.clone();
+    let exporter = state.export.clone();
     tokio::spawn(async move {
         let mut hourly = tokio::time::interval(Duration::from_secs(60 * 60));
         loop {
@@ -242,6 +248,7 @@ pub async fn serve(state: AppState, listener: tokio::net::TcpListener) -> anyhow
             if let Err(e) = tree::purge_trash(&db).await {
                 tracing::error!("purging trash: {e:#}");
             }
+            exporter.changed();
         }
     });
     axum::serve(listener, router(state)).await?;

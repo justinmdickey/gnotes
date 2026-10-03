@@ -315,6 +315,7 @@ pub async fn update_notebook(
         state.recheck_access().await;
     }
     state.hub.tree_changed();
+    state.export.changed();
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -351,6 +352,7 @@ pub async fn delete_notebook(
     tx.commit().await?;
     state.recheck_access().await;
     state.hub.tree_changed();
+    state.export.changed();
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -426,6 +428,7 @@ pub async fn update_note(
             .await?;
         state.recheck_access().await;
         state.hub.tree_changed();
+        state.export.changed();
     }
     Ok(Json(json!({ "ok": true })))
 }
@@ -459,6 +462,7 @@ pub async fn delete_note(
     }
     state.recheck_access().await;
     state.hub.tree_changed();
+    state.export.changed();
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -555,6 +559,7 @@ pub async fn restore(
     }
     tx.commit().await?;
     state.hub.tree_changed();
+    state.export.changed();
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -619,6 +624,7 @@ pub async fn delete_forever(
     drop_dangling_shares(&mut *tx).await?;
     tx.commit().await?;
     state.hub.tree_changed();
+    state.export.changed();
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -632,6 +638,7 @@ pub async fn empty_trash(State(state): State<AppState>, CurrentUser(me): Current
     drop_dangling_shares(&mut *tx).await?;
     tx.commit().await?;
     state.hub.tree_changed();
+    state.export.changed();
     Ok(Json(json!({ "deleted": items.len() })))
 }
 

@@ -1021,3 +1021,112 @@ async fn notes_are_summarized_on_request() {
     let res = alice.send(reqwest::Method::POST, &format!("/notes/{}/summary", note("Short")), json!({})).await;
     assert_eq!(res.status(), 400);
 }
+
+/// Every file under `data/export`, relative and sorted.
+fn exported(dir: &TempDir) -> Vec<String> {
+    let root = dir.path().join("export");
+    let mut files = Vec::new();
+    let mut todo = vec![root.clone()];
+    while let Some(d) = todo.pop() {
+        let Ok(entries) = std::fs::read_dir(&d) else { continue };
+        for entry in entries.flatten() {
+            if entry.file_type().unwrap().is_dir() {
+                todo.push(entry.path());
+            } else {
+                files.push(entry.path().strip_prefix(&root).unwrap().to_string_lossy().into_owned());
+            }
+        }
+    }
+    files.sort();
+    files
+}
+
+/// Waits for the Markdown copies to become `want`, since they're written a moment after each change.
+async fn export_settles(dir: &TempDir, want: &[&str]) {
+    let mut want = want.to_vec();
+    want.sort();
+    for _ in 0..100 {
+        if exported(dir) == want {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(exported(dir), want);
+}
+
+#[tokio::test]
+async fn notes_are_copied_to_plain_markdown() {
+    let dir = TempDir::new().unwrap();
+    let server = start(&dir).await;
+    let alice = user(&server, "alice").await;
+    let bob = user(&server, "bob").await;
+    let kitchen = alice.post("/notebooks", json!({ "name": "Kitchen" })).await["id"].as_str().unwrap().to_owned();
+    let note = alice.post("/notes", json!({ "notebook_id": kitchen })).await["id"].as_str().unwrap().to_owned();
+    let short = &note[note.len() - 8..];
+    let read = |path: &str| std::fs::read_to_string(dir.path().join("export").join(path)).unwrap();
+
+    // A blank note has no copy; typing makes one, under the owner even when someone else types.
+    alice
+        .post("/shares", json!({ "resource_type": "note", "resource_id": note, "username": "bob", "role": "editor" }))
+        .await;
+    let mut ws = bob.ws().await;
+    let doc = LoroDoc::new();
+    ws.join_and_sync(&note, None).await;
+    ws.send_frame(0x01, &note, &edit(&doc, 0, "# Groceries\nmilk\n")).await;
+    let copy = format!("alice/Kitchen/Groceries ({short}).md");
+    export_settles(&dir, &[&copy]).await;
+    assert_eq!(read(&copy), "# Groceries\nmilk\n");
+
+    // Attachments are copied next to the note, and links point at them.
+    let res = upload(&alice, &note, "shelf photo.png", "image/png", b"\x89PNG fake".to_vec()).await;
+    let att = res.json::<Value>().await.unwrap()["id"].as_str().unwrap().to_owned();
+    let att_short = &att[att.len() - 8..];
+    ws.send_frame(0x01, &note, &edit(&doc, 17, &format!("![Shelf](att:{att})\n"))).await;
+    let photo = format!("alice/Kitchen/attachments/shelf photo ({att_short}).png");
+    export_settles(&dir, &[&photo, &copy]).await;
+    let linked = format!("# Groceries\nmilk\n![Shelf](attachments/shelf%20photo%20%28{att_short}%29.png)\n");
+    for _ in 0..50 {
+        if read(&copy) == linked {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(read(&copy), linked);
+    assert_eq!(std::fs::read(dir.path().join("export").join(&photo)).unwrap(), b"\x89PNG fake");
+
+    // Renaming the note or its notebook, or moving it, leaves no old copy behind.
+    ws.send_frame(0x01, &note, &edit(&doc, 2, "Weekly ")).await;
+    let copy = format!("alice/Kitchen/Weekly Groceries ({short}).md");
+    export_settles(&dir, &[&photo, &copy]).await;
+    alice.send(reqwest::Method::PATCH, &format!("/notebooks/{kitchen}"), json!({ "name": "Pantry: dry/cold" })).await;
+    let photo = format!("alice/Pantry dry cold/attachments/shelf photo ({att_short}).png");
+    let copy = format!("alice/Pantry dry cold/Weekly Groceries ({short}).md");
+    export_settles(&dir, &[&photo, &copy]).await;
+    alice.send(reqwest::Method::PATCH, &format!("/notes/{note}"), json!({ "notebook_id": null })).await;
+    let photo = format!("alice/attachments/shelf photo ({att_short}).png");
+    let copy = format!("alice/Weekly Groceries ({short}).md");
+    export_settles(&dir, &[&copy, &photo]).await;
+
+    // Trashing removes the copy; restoring brings it back; deleting for good removes it.
+    alice.send(reqwest::Method::DELETE, &format!("/notes/{note}"), json!({})).await;
+    export_settles(&dir, &[]).await;
+    alice.post(&format!("/trash/note/{note}/restore"), json!({})).await;
+    export_settles(&dir, &[&copy, &photo]).await;
+    assert!(read(&copy).starts_with("# Weekly Groceries\nmilk\n"), "{}", read(&copy));
+    alice.send(reqwest::Method::DELETE, &format!("/notes/{note}"), json!({})).await;
+    alice.send(reqwest::Method::DELETE, &format!("/trash/note/{note}"), json!({})).await;
+    export_settles(&dir, &[]).await;
+
+    // Notes from before the upgrade get copies at startup.
+    let other = alice.post("/notes", json!({})).await["id"].as_str().unwrap().to_owned();
+    let mut ws = alice.ws().await;
+    ws.join_and_sync(&other, None).await;
+    ws.send_frame(0x01, &other, &edit(&LoroDoc::new(), 0, "Old note")).await;
+    let old = format!("alice/Old note ({}).md", &other[other.len() - 8..]);
+    export_settles(&dir, &[&old]).await;
+    server.task.abort();
+    drop(server);
+    std::fs::remove_dir_all(dir.path().join("export")).unwrap();
+    let _server = start(&dir).await;
+    export_settles(&dir, &[&old]).await;
+}

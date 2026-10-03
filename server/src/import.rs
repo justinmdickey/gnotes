@@ -379,6 +379,7 @@ pub async fn import(
     }
     tx.commit().await?;
     state.hub.tree_changed();
+    state.export.changed();
     Ok(Json(result))
 }
 
