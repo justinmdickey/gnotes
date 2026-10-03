@@ -1771,7 +1771,17 @@
     }
 
     .note-head {
-      padding: 14px 12px 0;
+      padding: 14px 12px 0 calc(var(--gutter-left) - 6px);
+    }
+
+    /* A wider left margin keeps the drag grip clear of the screen edge, where swipes go back. */
+    .column {
+      --gutter-left: 40px;
+    }
+
+    .page :global(.cm-content),
+    .summary-state {
+      padding-left: var(--gutter-left);
     }
   }
 
