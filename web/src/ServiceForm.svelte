@@ -21,6 +21,7 @@
     save,
     saved,
     off,
+    reindex,
   }: {
     /** For the form's class, which tests and styles find it by. */
     name: string;
@@ -38,6 +39,8 @@
     /** Toasts after saving, and after turning it off. */
     saved: string;
     off: string;
+    /** Offers Re-index while the service is on: makes its whole index again. */
+    reindex?: () => Promise<string>;
   } = $props();
 
   let url = $state(settings.url);
@@ -78,44 +81,58 @@
     testing = false;
   }
 
+  /** Puts the form back to what's saved. */
+  function reset() {
+    url = settings.url;
+    model = settings.model;
+    liveUrl = settings.realtime_url ?? "";
+    key = "";
+    clearKey = false;
+    result = null;
+  }
+
+  /** On opens the form, and turns a service that was switched off back on with its saved settings.
+   * Off stops the service but keeps them. */
   async function toggle() {
     if (!open) {
       open = true;
+      if (settings.url && !settings.enabled) await apply({ url: settings.url, model: settings.model, realtime_url: settings.realtime_url, enabled: true });
       return;
     }
     if (settings.enabled) {
-      const ok = await ask({ title: `Turn Off ${title}?`, body: "Its settings are cleared.", confirm: "Turn Off", destructive: true });
-      if (!ok) return;
-      url = "";
-      if (!(await apply())) return;
-    } else {
-      url = settings.url;
-      model = settings.model;
-      liveUrl = settings.realtime_url ?? "";
-      key = "";
-      clearKey = false;
-      result = null;
+      const body: ServiceInput = { url: settings.url, model: settings.model, enabled: false };
+      if (live) body.realtime_url = settings.realtime_url;
+      if (!(await apply(body))) return;
     }
+    reset();
     open = false;
+  }
+
+  async function runReindex() {
+    const ok = await ask({
+      title: "Re-index All Notes?",
+      body: "Every note is sent to the service again. Search by meaning is incomplete until it finishes.",
+      confirm: "Re-index",
+    });
+    if (!ok || !reindex) return;
+    try {
+      toast(await reindex());
+    } catch (err) {
+      result = failure(err);
+    }
   }
 
   async function submit(e: SubmitEvent) {
     e.preventDefault();
-    if (await apply()) open = settings.enabled;
+    if (await apply(input())) open = settings.enabled;
   }
 
-  /** Saves what's in the form. An empty URL turns the service off. */
-  async function apply() {
-    const turningOff = !url.trim();
+  /** Saves a body, and shows what the server kept. An empty URL clears the service. */
+  async function apply(body: ServiceInput) {
     try {
-      settings = await save(input());
-      url = settings.url;
-      model = settings.model;
-      liveUrl = settings.realtime_url ?? "";
-      key = "";
-      clearKey = false;
-      result = null;
-      toast(turningOff ? off : saved);
+      settings = await save(body);
+      reset();
+      toast(settings.enabled ? saved : off);
       return true;
     } catch (err) {
       result = failure(err);
@@ -176,6 +193,12 @@
     <button type="button" disabled={!url.trim() || testing} onclick={runTest}>Test</button>
     <button type="submit" class="suggested" disabled={!dirty}>Save</button>
   </div>
+  {#if reindex && settings.enabled}
+    <div class="reindex">
+      <span class="dim">Changed the model behind the same name? Build the index again.</span>
+      <button type="button" onclick={runReindex}>Re-index</button>
+    </div>
+  {/if}
   {/if}
 </form>
 
@@ -295,6 +318,21 @@
     gap: 8px;
     margin-top: 10px;
     padding: 0 4px;
+  }
+
+  .reindex {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 12px;
+    padding: 12px 4px 0;
+    border-top: 1px solid var(--border);
+    font-size: var(--text-sm);
+  }
+
+  .reindex span {
+    flex: 1;
+    min-width: 0;
   }
 
   .status {

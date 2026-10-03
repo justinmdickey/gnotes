@@ -179,6 +179,8 @@ export interface ServiceInput {
   model: string;
   key?: string | null;
   realtime_url?: string;
+  /** False switches the service off but keeps what's filled in. */
+  enabled?: boolean;
 }
 
 export class ApiError extends Error {
@@ -243,6 +245,8 @@ export const api = {
     request<Record<K, ServiceSettings>>("PUT", `/admin/settings/${kind}`, body).then((r) => r[kind]),
   testChat: (kind: "vision" | "summary" | "embed", body: ServiceInput) =>
     request<{ ok: boolean; message: string }>("POST", `/admin/settings/${kind}/test`, body),
+  /** Embeds every note again, for a model swapped under the same name. */
+  reindexEmbed: () => request<{ notes: number }>("POST", "/admin/semantic/reindex"),
   summary: (noteId: string) => request<NoteSummary>("GET", `/notes/${noteId}/summary`),
   /** Whose editing session each Loro peer was, for showing who wrote what. */
   authors: (noteId: string) => request<{ peers: Record<string, { user_id: string | null; name: string | null }> }>("GET", `/notes/${noteId}/authors`),

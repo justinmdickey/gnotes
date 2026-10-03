@@ -550,12 +550,22 @@ try {
   await alice.click(".embed button[type=submit]");
   await alice.waitForFunction(() => document.body.innerText.includes("Semantic search saved"));
   check(true, "admin sets up semantic search in settings");
-  // Switching a running service off asks first, and Cancel leaves it on.
+  // Switching a running service off folds it away but keeps its settings; switching it back on restores them.
   await alice.click(".vision .switch");
+  await alice.waitForFunction(() => document.body.innerText.includes("Text from photos turned off") && !document.querySelector(".vision input"));
+  await alice.click(".vision .switch");
+  await alice.waitForFunction(() => document.querySelector(".vision .status")?.textContent.includes("On"));
+  check(
+    await alice.$eval(".vision input[type=url]", (i, url) => i.value === url, `http://127.0.0.1:${port + 1}/v1`),
+    "switching a service off and on keeps its settings",
+  );
+  // Re-index asks first, then starts over.
+  await alice.evaluate(() => [...document.querySelectorAll(".embed button")].find((b) => b.textContent === "Re-index").click());
   await alice.waitForSelector("dialog[open]");
-  await alice.evaluate(() => [...document.querySelectorAll("dialog[open] button")].find((b) => b.textContent.trim() === "Cancel").click());
+  await alice.evaluate(() => [...document.querySelectorAll("dialog[open] button")].find((b) => b.textContent.trim() === "Re-index").click());
   await closed(alice);
-  check(await alice.$eval(".vision .switch", (b) => b.getAttribute("aria-checked") === "true" && !!document.querySelector(".vision input")), "turning a service off asks first");
+  await alice.waitForFunction(() => /Re-indexing \d+ notes?/.test(document.body.innerText));
+  check(true, "Re-index embeds every note again");
   if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-settings.png") });
   await alice.click(".settings-layer .back");
   await alice.waitForFunction(() => !document.querySelector(".settings-layer"));

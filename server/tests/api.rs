@@ -1456,6 +1456,13 @@ async fn semantic_search_and_ask_follow_meaning_and_sharing() {
     tokio::time::sleep(Duration::from_secs(4)).await;
     assert_eq!(seen.embedded.load(std::sync::atomic::Ordering::SeqCst), embedded);
 
+    // Re-indexing, for a model swapped under the same name, embeds every note again.
+    assert_eq!(alice.send(reqwest::Method::POST, "/admin/semantic/reindex", json!({})).await.status(), 403);
+    let reindexed = root.post("/admin/semantic/reindex", json!({})).await;
+    assert_eq!(reindexed["notes"], 4);
+    meaning_settles(&alice, "vehicle", &[&car, &tires]).await;
+    assert!(seen.embedded.load(std::sync::atomic::Ordering::SeqCst) >= embedded + 4);
+
     // Ask answers from the closest notes only, and links them.
     let answer = alice.post("/ask", json!({ "question": "What dairy do I need?" })).await;
     assert_eq!(answer["answer"], "From your notes: you wrote it down [1].");
@@ -1485,4 +1492,40 @@ async fn semantic_search_and_ask_follow_meaning_and_sharing() {
     // Trashed notes drop out.
     alice.send(reqwest::Method::DELETE, &format!("/notes/{groceries}"), json!({})).await;
     assert!(by_meaning(&alice, "dairy").await.is_empty());
+}
+
+#[tokio::test]
+async fn switching_a_service_off_keeps_its_settings() {
+    let dir = TempDir::new().unwrap();
+    let server = start(&dir).await;
+    auth::create_user(&server.state.db, "root", "", "password123", true).await.unwrap();
+    let root = login(&server.base, "root").await;
+    let put = |body: Value| root.send(reqwest::Method::PUT, "/admin/settings/summary", body);
+
+    assert!(put(json!({ "url": "http://ai:11434/v1", "model": "llama3.1", "key": "k" })).await.status().is_success());
+    assert_eq!(root.get("/features").await["summaries"], true);
+
+    // Off: the service stops, but what was filled in stays, key included.
+    assert!(put(json!({ "url": "http://ai:11434/v1", "model": "llama3.1", "enabled": false })).await.status().is_success());
+    assert_eq!(root.get("/features").await["summaries"], false);
+    let s = root.get("/admin/settings").await["summary"].clone();
+    assert_eq!(s, json!({ "enabled": false, "url": "http://ai:11434/v1", "model": "llama3.1", "has_key": true, "from_env": false }));
+
+    // Still off after a restart.
+    drop(server);
+    let server = start(&dir).await;
+    let root = login(&server.base, "root").await;
+    assert_eq!(root.get("/features").await["summaries"], false);
+    assert_eq!(root.get("/admin/settings").await["summary"]["url"], "http://ai:11434/v1");
+
+    // Back on with the same settings, and the key wasn't lost.
+    let res = root.send(reqwest::Method::PUT, "/admin/settings/summary", json!({ "url": "http://ai:11434/v1", "model": "llama3.1" })).await;
+    assert!(res.status().is_success());
+    assert_eq!(root.get("/features").await["summaries"], true);
+    assert_eq!(root.get("/admin/settings").await["summary"]["has_key"], true);
+
+    // An empty URL still clears it.
+    let res = root.send(reqwest::Method::PUT, "/admin/settings/summary", json!({ "url": "" })).await;
+    assert!(res.status().is_success());
+    assert_eq!(root.get("/admin/settings").await["summary"]["url"], "");
 }

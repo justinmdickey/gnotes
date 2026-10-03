@@ -1,7 +1,7 @@
 //! Server-wide settings admins change from the app. Stored values override the env defaults.
 
 use axum::{Json, extract::State};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::{
@@ -13,20 +13,39 @@ use crate::{
 
 const WHISPER_KEY: &str = "whisper";
 
-/// Loads a saved setting. `None` means nothing is saved, so the env default applies.
-async fn load<T: serde::de::DeserializeOwned>(db: &sqlx::SqlitePool, key: &str) -> anyhow::Result<Option<Option<T>>> {
+/// A service as saved. A switched-off service keeps its URL, model and key so it can come back on.
+#[derive(Serialize, Deserialize)]
+struct Stored<T> {
+    #[serde(flatten)]
+    config: T,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    off: bool,
+}
+
+/// Loads a saved setting as stored. `None` means nothing is saved, so the env default applies;
+/// `Some(None)` means it was cleared.
+async fn load_stored<T: serde::de::DeserializeOwned>(db: &sqlx::SqlitePool, key: &str) -> anyhow::Result<Option<Option<Stored<T>>>> {
     let raw: Option<String> = sqlx::query_scalar("SELECT value FROM settings WHERE key = ?")
         .bind(key)
         .fetch_optional(db)
         .await?;
     Ok(match raw {
         None => None,
-        // Saved as null when an admin turned it off.
         Some(raw) => Some(serde_json::from_str(&raw)?),
     })
 }
 
-async fn save<T: serde::Serialize>(db: &sqlx::SqlitePool, key: &str, value: &Option<T>) -> anyhow::Result<()> {
+/// Loads a saved setting as it applies: `Some(None)` when it's cleared or switched off.
+async fn load<T: serde::de::DeserializeOwned>(db: &sqlx::SqlitePool, key: &str) -> anyhow::Result<Option<Option<T>>> {
+    Ok(load_stored::<T>(db, key).await?.map(|s| s.and_then(|s| (!s.off).then_some(s.config))))
+}
+
+/// The settings a switched-off service had, for showing and for turning it back on.
+async fn load_off<T: serde::de::DeserializeOwned>(db: &sqlx::SqlitePool, key: &str) -> anyhow::Result<Option<T>> {
+    Ok(load_stored::<T>(db, key).await?.flatten().and_then(|s| s.off.then_some(s.config)))
+}
+
+async fn save<T: serde::Serialize>(db: &sqlx::SqlitePool, key: &str, value: &Option<Stored<T>>) -> anyhow::Result<()> {
     sqlx::query("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
         .bind(key)
         .bind(serde_json::to_string(value)?)
@@ -141,25 +160,28 @@ async fn check_models(state: &AppState, url: &str, key: Option<&String>, model: 
     }
 }
 
-fn describe_chat(v: Option<&ChatConfig>, saved: bool) -> Value {
+/// `on` is the running service; `off` what a switched-off one had, shown so it can come back on.
+fn describe_chat(on: Option<&ChatConfig>, off: Option<&ChatConfig>, saved: bool) -> Value {
+    let v = on.or(off);
     json!({
-        "enabled": v.is_some(),
+        "enabled": on.is_some(),
         "url": v.map(|v| v.url.as_str()).unwrap_or(""),
         "model": v.map(|v| v.model.as_str()).unwrap_or(""),
         "has_key": v.is_some_and(|v| v.key.is_some()),
-        "from_env": !saved && v.is_some(),
+        "from_env": !saved && on.is_some(),
     })
 }
 
-fn describe(w: Option<&WhisperConfig>, saved: bool) -> Value {
+fn describe(on: Option<&WhisperConfig>, off: Option<&WhisperConfig>, saved: bool) -> Value {
+    let w = on.or(off);
     json!({
-        "enabled": w.is_some(),
+        "enabled": on.is_some(),
         "url": w.map(|w| w.url.as_str()).unwrap_or(""),
         "model": w.map(|w| w.model.as_str()).unwrap_or("whisper-1"),
         // The key is never sent back; the app only learns whether one is set.
         "has_key": w.is_some_and(|w| w.key.is_some()),
         "realtime_url": w.and_then(|w| w.realtime_url.as_deref()).unwrap_or(""),
-        "from_env": !saved && w.is_some(),
+        "from_env": !saved && on.is_some(),
     })
 }
 
@@ -167,10 +189,12 @@ fn describe(w: Option<&WhisperConfig>, saved: bool) -> Value {
 pub async fn get_settings(State(state): State<AppState>, CurrentUser(me): CurrentUser) -> ApiResult<Json<Value>> {
     require_admin(&me)?;
     let saved = load_whisper(&state.db).await?.is_some();
-    let mut out = json!({ "whisper": describe(state.whisper.read().await.as_ref(), saved) });
+    let off = load_off::<WhisperConfig>(&state.db, WHISPER_KEY).await?;
+    let mut out = json!({ "whisper": describe(state.whisper.read().await.as_ref(), off.as_ref(), saved) });
     for chat in [Chat::Vision, Chat::Summary, Chat::Embed] {
         let saved = load_chat(&state.db, chat).await?.is_some();
-        out[chat.key()] = describe_chat(chat.slot(&state).read().await.as_ref(), saved);
+        let off = load_off::<ChatConfig>(&state.db, chat.key()).await?;
+        out[chat.key()] = describe_chat(chat.slot(&state).read().await.as_ref(), off.as_ref(), saved);
     }
     Ok(Json(out))
 }
@@ -187,6 +211,13 @@ pub struct WhisperBody {
     /// Empty turns live transcription off.
     #[serde(default)]
     realtime_url: String,
+    /// False switches it off but keeps what's filled in.
+    #[serde(default = "yes")]
+    enabled: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 impl WhisperBody {
@@ -215,10 +246,18 @@ pub async fn put_whisper(
 ) -> ApiResult<Json<Value>> {
     require_admin(&me)?;
     let mut whisper = state.whisper.write().await;
-    let next = body.resolve(whisper.as_ref())?;
-    save(&state.db, WHISPER_KEY, &next).await?;
-    *whisper = next;
-    Ok(Json(json!({ "whisper": describe(whisper.as_ref(), true) })))
+    let off = load_off::<WhisperConfig>(&state.db, WHISPER_KEY).await?;
+    let enabled = body.enabled;
+    let next = body.resolve(whisper.as_ref().or(off.as_ref()))?;
+    let stored = next.map(|config| Stored { config, off: !enabled });
+    save(&state.db, WHISPER_KEY, &stored).await?;
+    let (on, off) = match stored {
+        Some(Stored { config, off: false }) => (Some(config), None),
+        Some(Stored { config, off: true }) => (None, Some(config)),
+        None => (None, None),
+    };
+    *whisper = on;
+    Ok(Json(json!({ "whisper": describe(whisper.as_ref(), off.as_ref(), true) })))
 }
 
 /// `POST /admin/settings/whisper/test`: checks the service answers, before saving it.
@@ -228,7 +267,10 @@ pub async fn test_whisper(
     Json(body): Json<WhisperBody>,
 ) -> ApiResult<Json<Value>> {
     require_admin(&me)?;
-    let current = state.whisper.read().await.clone();
+    let current = match state.whisper.read().await.clone() {
+        Some(w) => Some(w),
+        None => load_off(&state.db, WHISPER_KEY).await?,
+    };
     let Some(w) = body.resolve(current.as_ref())? else {
         return Err(AppError::BadRequest("Enter the service URL first".into()));
     };
@@ -252,6 +294,9 @@ pub struct ChatBody {
     /// Absent keeps the saved key, null or "" clears it.
     #[serde(default, deserialize_with = "crate::util::double_option")]
     key: Option<Option<String>>,
+    /// False switches it off but keeps what's filled in.
+    #[serde(default = "yes")]
+    enabled: bool,
 }
 
 impl ChatBody {
@@ -277,14 +322,22 @@ pub async fn put_chat(
     require_admin(&me)?;
     let chat = Chat::from_path(&name)?;
     let mut slot = chat.slot(&state).write().await;
-    let next = body.resolve(chat, slot.as_ref())?;
-    save(&state.db, chat.key(), &next).await?;
-    *slot = next;
+    let off = load_off::<ChatConfig>(&state.db, chat.key()).await?;
+    let enabled = body.enabled;
+    let next = body.resolve(chat, slot.as_ref().or(off.as_ref()))?;
+    let stored = next.map(|config| Stored { config, off: !enabled });
+    save(&state.db, chat.key(), &stored).await?;
+    let (on, off) = match stored {
+        Some(Stored { config, off: false }) => (Some(config), None),
+        Some(Stored { config, off: true }) => (None, Some(config)),
+        None => (None, None),
+    };
+    *slot = on;
     if let Chat::Embed = chat {
         // A new service or model: embed whatever it hasn't seen yet.
         state.embedder.refresh_all();
     }
-    Ok(Json(json!({ chat.key(): describe_chat(slot.as_ref(), true) })))
+    Ok(Json(json!({ chat.key(): describe_chat(slot.as_ref(), off.as_ref(), true) })))
 }
 
 /// `POST /admin/settings/{vision|summary|embed}/test`
@@ -296,10 +349,26 @@ pub async fn test_chat(
 ) -> ApiResult<Json<Value>> {
     require_admin(&me)?;
     let chat = Chat::from_path(&name)?;
-    let current = chat.slot(&state).read().await.clone();
+    let current = match chat.slot(&state).read().await.clone() {
+        Some(c) => Some(c),
+        None => load_off(&state.db, chat.key()).await?,
+    };
     let Some(c) = body.resolve(chat, current.as_ref())? else {
         return Err(AppError::BadRequest("Enter the service URL first".into()));
     };
     let (ok, message) = check_models(&state, &c.url, c.key.as_ref(), &c.model).await;
     Ok(Json(json!({ "ok": ok, "message": message })))
+}
+
+/// `POST /admin/semantic/reindex`: throws away every note's embeddings and makes them again, for when
+/// the model behind the same name changed. Meaning search is thin until the background run catches up.
+pub async fn reindex_embed(State(state): State<AppState>, CurrentUser(me): CurrentUser) -> ApiResult<Json<Value>> {
+    require_admin(&me)?;
+    if state.embed.read().await.is_none() {
+        return Err(AppError::Conflict("Semantic search isn't set up on this server".into()));
+    }
+    sqlx::query("DELETE FROM note_chunks").execute(&state.db).await?;
+    state.embedder.refresh_all();
+    let notes: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM notes WHERE deleted_at IS NULL").fetch_one(&state.db).await?;
+    Ok(Json(json!({ "notes": notes })))
 }
