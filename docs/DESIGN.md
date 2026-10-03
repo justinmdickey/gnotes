@@ -227,7 +227,7 @@ event: error     data: {"message": "Couldn't reach the answer service"}
 - With no notes found, `done` follows `sources` straight away with `"answer": null`, and the chat model isn't called.
 - `answer` is null when the model says `NO_ANSWER`. Text that might still become `NO_ANSWER`, and a leading `<think>…</think>`, is held back rather than streamed; a reasoning model's separate `reasoning` is dropped.
 - `cited` holds only numbers of notes that were sent. Only notes the caller can see right now are ever sent: unsharing or trashing a note takes it out of search and Ask at once.
-- Closing the dialog stops the answer: the server stops reading from the chat service.
+- Ending the conversation (New Chat, logging out) stops the answer: the server stops reading from the chat service.
 
 **Measured.** With 30 household notes and 30 questions (finder questions like "where is that note about gift ideas?", follow-ups, exact words like "Stradic" or "policy 44-BX-1912", paraphrases like "which contractor is doing the shingles?") against qwen3-embedding:
 
@@ -241,11 +241,12 @@ event: error     data: {"message": "Couldn't reach the answer service"}
 
 With the instruction, the note a question was about scored 0.48 (median), and the best match of an unrelated question 0.16–0.40. For "By Meaning", a 0.35 floor made 72% of listed notes right ones, against 52% at 0.3.
 
-**In the app.** With a search typed, a **By Meaning** group lists meaning matches the word search didn't already find, in the folder being searched, under the word matches. An **Ask Your Notes** row with the search text opens the conversation in a dialog (a bottom sheet on phones) and asks it. The row comes first when the search reads like a question (ends in `?` or starts with a question word), otherwise last. With no matches at all it's the empty page's button.
+**In the app.** Ask is a place of its own, merged with search: the phone's Ask tab and the top row of the desktop sidebar (`#/ask`). One field, "Search or ask…", sits at the bottom with a send button. Typing lists matching notes, by their words and then **By Meaning**; sending starts a conversation about it, and the same field then asks follow-ups. With no AI services set up it's a plain **Search** tab and row (search icon, "Search notes…", no send button). The empty page is one line saying what it does.
 
 - Each turn shows the question as a bubble, then the found notes as cards (number, title, the snippet with matched words marked, and where the note lives) while the answer streams in above them. Once done, only the cited cards stay; if the notes don't say, the cards are listed as the closest ones.
-- The answer's `[n]` become small numbered links. A card or link opens the note and closes the dialog.
-- A field at the bottom asks follow-ups. The conversation lasts until the dialog closes.
+- The answer's `[n]` become small numbered links. A card or link opens the note; Back returns to the conversation.
+- What's typed and the conversation stay while you visit other tabs, until **New Chat** or logging out; leaving doesn't stop an answer.
+- A note list's search still searches inside its folder, with its own By Meaning group. Its **Ask Your Notes** row opens Ask with the search text and asks it. The row comes first when the search reads like a question (ends in `?` or starts with a question word), otherwise last. With no matches at all it's the empty page's button.
 
 ## Websocket protocol
 
@@ -294,7 +295,7 @@ A client opens one websocket to `/api/ws` (authenticated by the session cookie) 
 
 ## PWA
 
-- **Views:** notebook tree, note list, editor, "Shared with me", trash, share dialog, settings. The layout adapts from a phone (one pane) to a desktop (sidebar, list and editor side by side), the same way libadwaita's split views do.
+- **Views:** notebook tree, note list, editor, "Shared with me", Ask (search), trash, share dialog, settings. Phones have one bottom tab bar: Notes, Recent, + (a new note), Ask, Shared; Account is the avatar at the top right of each tab's headerbar. The layout adapts from a phone (one pane) to a desktop (sidebar, list and editor side by side), the same way libadwaita's split views do.
 - **Editor:** CodeMirror 6 with Markdown highlighting and in-place styling instead of a separate preview pane. `LoroExtensions(doc, {ephemeral, user}, undoManager, doc => doc.getText("body"))` handles sync, cursors and undo.
 - **Offline:** each opened note's Loro snapshot is saved in IndexedDB a moment after every change, along with a cached copy of `/tree`, in one database per account. With no server the app opens as the last signed-in account (kept in `localStorage`), shows the saved tree and notes, and edits them; phones and tablets show a quiet Offline strip, wide screens the sidebar footer. On reconnect the client rejoins open notes with its saved version, so offline edits merge on their own; notes edited offline and since closed are marked dirty and pushed the same way in the background. Creating a note offline gives it a client-made UUIDv7 id; it's queued and sent with `POST /notes {id}` on reconnect (at the top level if its notebook is gone). Log Out deletes the account's database; being signed out by the server keeps it, since it may hold unsent edits. Notes never opened on the device aren't available offline.
 - **Voice notes:** recorded with MediaRecorder (Opus in WebM on Chrome and Firefox, AAC in MP4 on Safari), uploaded as an attachment, and linked into the note. When the server has speech-to-text, the transcript goes on the line under the player. Recording needs HTTPS. Recording shows a small floating bar, not a dialog, so the note stays readable.

@@ -8,6 +8,7 @@
   import StatusPage from "./lib/StatusPage.svelte";
   import { addableView, app, closeDrawer, composeNote, goBack, importable, importNotes, parentView, readHash, startSession, twoPane, viewTitle } from "./lib/store.svelte";
   import { fadeIn, media, page, standalone, toast } from "./lib/ui.svelte";
+  import Ask from "./Ask.svelte";
   import Editor from "./Editor.svelte";
   import Join from "./Join.svelte";
   import Login from "./Login.svelte";
@@ -241,7 +242,7 @@
         {#if p === "sidebar"}
           <Sidebar />
         {:else if p === "list"}
-          {#if app.view.kind === "trash"}<Trash />{:else}<NoteList />{/if}
+          {#if app.view.kind === "trash"}<Trash />{:else if app.view.kind === "ask"}<Ask />{:else}<NoteList />{/if}
         {:else if shownNote}
           {#key shownNote}
             <div class="note-swap" in:fadeIn={{ duration: 160 }}>
@@ -274,7 +275,7 @@
     ></div>
   </div>
   {#if app.settings && media.phone}
-    <!-- On phones Account is a tab like the others: it fills the page area and the tab bar stays. -->
+    <!-- On phones Account, opened from the avatar, fills the page area like a tab, and the tab bar stays. -->
     <div class="tab-page" in:fadeIn={{ duration: 140 }}>
       <Settings tab />
     </div>

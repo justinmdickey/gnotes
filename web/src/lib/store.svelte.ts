@@ -2,6 +2,7 @@ import { api, ApiError, type Features, type Tree, type TreeNote, type User } fro
 import { sync, type Status } from "./sync";
 import { cache, closeCache, flush, isQueued, loadQueue, openCache, queueNote, unreachable, uuidv7 } from "./offline";
 import { media, toast } from "./ui.svelte";
+import { endChat, startChat } from "./ask.svelte";
 
 /** What the note list shows. */
 export type View =
@@ -9,7 +10,9 @@ export type View =
   | { kind: "all" }
   | { kind: "notebook"; id: string }
   | { kind: "shared-notes" }
-  | { kind: "trash" };
+  | { kind: "trash" }
+  /** Search and Ask in one screen: Ask once AI search is set up, plain Search before. */
+  | { kind: "ask" };
 
 export const app = $state({
   user: null as User | null,
@@ -23,7 +26,7 @@ export const app = $state({
   freshNote: null as string | null,
   /** The Settings screen covers the whole app while open. */
   settings: false,
-  /** The note editor has focus, so the phone's tab bar steps aside for the keyboard bar. */
+  /** The note editor or Ask's field has focus, so the phone's tab bar steps aside for the keyboard. */
   typing: false,
   /** Tablet only: the notebooks sidebar is pulled out over the list. */
   drawer: false,
@@ -45,12 +48,13 @@ export function viewTitle(view: View, tree: Tree): string {
   if (view.kind === "all") return "Recent";
   if (view.kind === "shared-notes") return "Shared with Me";
   if (view.kind === "trash") return "Trash";
+  if (view.kind === "ask") return app.features.ask ? "Ask" : "Search";
   return tree.notebooks.find((n) => n.id === view.id)?.name ?? "Notes";
 }
 
 /** Where new notes from `view` go: Shared, Trash and view-only notebooks can't take them, so the top folder does. */
 export function addableView(view: View): View {
-  if (view.kind === "shared-notes" || view.kind === "trash") return { kind: "root" };
+  if (view.kind === "shared-notes" || view.kind === "trash" || view.kind === "ask") return { kind: "root" };
   if (view.kind === "notebook") {
     const id = view.id;
     if (app.tree.notebooks.find((n) => n.id === id)?.role === "viewer") return { kind: "root" };
@@ -192,6 +196,7 @@ export async function endSession() {
   await api.logout().catch(() => {});
   // Nothing of this account stays on the device for the next person.
   await closeCache(true);
+  endChat();
   app.user = null;
   app.tree = { notebooks: [], notes: [], shared: [] };
   app.settings = false;
@@ -203,12 +208,14 @@ export async function endSession() {
 //   #/                                the top folder: top-level notebooks and loose notes
 //   #/all  #/shared  #/nb/<id>        Recent, Shared with Me, a notebook
 //   #/trash                           deleted notes and notebooks
+//   #/ask                             Ask (Search without AI): find notes and ask about them
 //   #/note/<id>  #/nb/<id>/note/<id>  a note, remembering the list it came from
 
 function viewPath(view: View): string {
   if (view.kind === "notebook") return `nb/${view.id}`;
   if (view.kind === "root") return "";
   if (view.kind === "trash") return "trash";
+  if (view.kind === "ask") return "ask";
   return view.kind === "shared-notes" ? "shared" : "all";
 }
 
@@ -236,6 +243,12 @@ export function navigate(view: View | null, noteId: string | null = null, replac
 
 export function openNote(id: string) {
   navigate(app.view, id);
+}
+
+/** Goes to Ask; with a question, starts a new conversation about it. */
+export function openAsk(question?: string) {
+  navigate({ kind: "ask" });
+  if (question) startChat(question);
 }
 
 export function openSettings() {
@@ -320,6 +333,7 @@ export function readHash() {
   else if (base === "shared") view = { kind: "shared-notes" };
   else if (base === "all") view = { kind: "all" };
   else if (base === "trash") view = { kind: "trash" };
+  else if (base === "ask") view = { kind: "ask" };
   apply(view, note);
 }
 
@@ -339,6 +353,7 @@ export function notesFor(view: View, tree: Tree): TreeNote[] {
       return tree.notes.filter((n) => direct.has(n.id));
     }
     case "trash":
+    case "ask":
       return [];
   }
 }

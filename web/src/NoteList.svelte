@@ -1,14 +1,15 @@
 <script lang="ts">
   import { slide } from "svelte/transition";
   import { cubicOut } from "svelte/easing";
-  import { api, type SearchResult, type TreeNote, type TreeNotebook } from "./lib/api";
+  import { api, type TreeNote, type TreeNotebook } from "./lib/api";
+  import AccountButton from "./lib/AccountButton.svelte";
   import Dialog from "./lib/Dialog.svelte";
   import Icon from "./lib/Icon.svelte";
   import Menu from "./lib/Menu.svelte";
   import StatusPage from "./lib/StatusPage.svelte";
-  import { app, composeNote, drag, goBack, navigate, notesFor, openNote, parentView, pathOf, subtree, trashNotebook, viewTitle } from "./lib/store.svelte";
+  import { liveSearch, matchingNotes } from "./lib/search.svelte";
+  import { app, composeNote, drag, goBack, navigate, notesFor, openAsk, openNote, parentView, pathOf, subtree, trashNotebook, viewTitle } from "./lib/store.svelte";
   import { media, scrollEdge } from "./lib/ui.svelte";
-  import AskDialog from "./AskDialog.svelte";
   import FolderList from "./FolderList.svelte";
   import MoveDialog from "./MoveDialog.svelte";
   import NewNotebookDialog from "./NewNotebookDialog.svelte";
@@ -131,60 +132,20 @@
   let newName = $state("");
   let sharing = $state(false);
 
-  /** The server's full-text matches for `q`, once they arrive. Offline, search has titles and previews only. */
-  let found = $state<{ q: string; results: Map<string, SearchResult> } | null>(null);
-  $effect(() => {
-    const text = q;
-    void app.tree; // Edits that change the list can change what matches, too.
-    if (!text) return;
-    const timer = setTimeout(async () => {
-      try {
-        const { results } = await api.search(text);
-        if (q === text) found = { q: text, results: new Map(results.map((r) => [r.note, r])) };
-      } catch {
-        // Offline or the server is down: the title and preview matches below are all there is.
-      }
-    }, 150);
-    return () => clearTimeout(timer);
-  });
-  const hits = $derived(found?.q === q ? found.results : new Map<string, SearchResult>());
-
-  /** Notes about what was typed, from semantic search, once they arrive. Each embeds the query, so it waits for a pause. */
-  let meant = $state<{ q: string; results: SearchResult[] } | null>(null);
-  $effect(() => {
-    const text = q;
-    void app.tree; // As above: edits change what matches.
-    if (!text || !app.features.semantic_search) return;
-    const timer = setTimeout(async () => {
-      try {
-        const { results } = await api.searchMeaning(text);
-        if (q === text) meant = { q: text, results };
-      } catch {
-        // Offline, or the service is down: the word matches are still there.
-      }
-    }, 400);
-    return () => clearTimeout(timer);
-  });
-  /** Ask's row: first when the search reads like a question, otherwise after the results. */
+  /** The server's matches for `q`, once they arrive. Offline, search has titles and previews only. */
+  const search = liveSearch(() => q);
+  const hits = $derived(search.hits);
+  /** Ask's row: first when the search reads like a question, otherwise after the results. It opens the Ask screen. */
   const asking = $derived(!!q && !!app.features.ask);
   const questionLike = $derived(/\?$|^(who|what|when|where|why|how|which|whose|is|are|was|were|do|does|did|can|could|should|would|will|have|has)\b/i.test(q));
-  let question = $state<string | null>(null);
 
-  const notes = $derived.by(() => {
-    if (!q) return notesFor(app.view, app.tree);
-    // Best full-text matches first, then anything whose title or preview contains the text.
-    const order = [...hits.keys()];
-    const rank = (n: TreeNote) => (hits.has(n.id) ? order.indexOf(n.id) : order.length);
-    return app.tree.notes
-      .filter((n) => scope(n.notebook_id, n.role) && (hits.has(n.id) || `${n.title}\n${n.preview}`.toLowerCase().includes(q)))
-      .toSorted((a, b) => rank(a) - rank(b) || b.updated_at - a.updated_at);
-  });
+  const notes = $derived(q ? matchingNotes(q, hits, (n) => scope(n.notebook_id, n.role)) : notesFor(app.view, app.tree));
 
   /** Meaning matches the word search didn't already list, in the folder being searched, best first. */
   const meaningNotes = $derived.by(() => {
-    if (!q || meant?.q !== q) return [];
+    if (!q) return [];
     const listed = new Set(notes.map((n) => n.id));
-    return meant.results.flatMap((r) => {
+    return search.meaning.flatMap((r) => {
       const note = app.tree.notes.find((n) => n.id === r.note);
       if (!note || listed.has(note.id) || !scope(note.notebook_id, note.role)) return [];
       return [{ note, snippet: r.snippet.map((p) => p.text).join("") }];
@@ -271,6 +232,10 @@
       <button class="suggested icon new wide-only" title="New note" aria-label="New note" onclick={() => composeNote()}>
         <Icon name="compose" />
       </button>
+    {/if}
+    {#if !up}
+      <!-- The top of each phone tab: your avatar opens Account, at the far right. -->
+      <AccountButton class="phone-only" />
     {/if}
     </div>
   </header>
@@ -359,7 +324,7 @@
     {#snippet askRow(first: boolean)}
       <ul class="boxed-list ask" class:first transition:reveal>
         <li>
-          <button class="flat place-row" onclick={() => (question = query.trim())}>
+          <button class="flat place-row" onclick={() => openAsk(query.trim())}>
             <Icon name="sparkle" />
             <span class="name">Ask Your Notes<span class="dim sub">“{query.trim()}”</span></span>
             <span class="dim chev"><Icon name="next" /></span>
@@ -384,7 +349,7 @@
         <!-- The results below are enough; no empty state over them. -->
       {:else if query && asking && !questionLike}
         <StatusPage icon="search" title="No Results" description="No note has the words “{query}”." tone="neutral">
-          <button class="pill" onclick={() => (question = query.trim())}><Icon name="sparkle" />Ask Your Notes</button>
+          <button class="pill" onclick={() => openAsk(query.trim())}><Icon name="sparkle" />Ask Your Notes</button>
         </StatusPage>
       {:else if query}
         <StatusPage icon="search" title="No Results" description="Nothing matches “{query}”." tone="neutral" />
@@ -433,10 +398,6 @@
       <button class="suggested" type="submit" form="rename-notebook" disabled={!newName.trim()}>Rename</button>
     {/snippet}
   </Dialog>
-{/if}
-
-{#if question}
-  <AskDialog {question} onclose={() => (question = null)} />
 {/if}
 
 {#if creatingFolder}

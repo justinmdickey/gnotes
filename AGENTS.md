@@ -39,7 +39,7 @@ Add an e2e check for each new UI behavior, in the flow where it naturally happen
 
 Tests prove behavior, not looks. After a visual change, take screenshots and look at them:
 
-- `node web/scripts/shot.mjs [--phone|--desktop] [--light] [screen...]` starts a throwaway server with demo data (Home › Kitchen and Garage, Personal, a shared notebook, three notes: Groceries, Pantry and Snippets with code blocks), logs in, and writes PNGs to `/tmp/gnotes-shots`. Screens: `home recent shared account notebook:<name> note:<title> search:<query>`. Build `web/dist` first.
+- `node web/scripts/shot.mjs [--phone|--desktop] [--light] [screen...]` starts a throwaway server with demo data (Home › Kitchen and Garage, Personal, a shared notebook, three notes: Groceries, Pantry and Snippets with code blocks), logs in, and writes PNGs to `/tmp/gnotes-shots`. Screens: `home recent shared account ask find:<query> notebook:<name> note:<title> search:<query>`; `--ai` adds stand-in AI services for `ask:<question>|<follow-up>`. Build `web/dist` first.
 - `SHOTS=/some/dir npm run e2e` also saves screenshots from inside the e2e flow (phone editing, keyboard bar, dialogs).
 - `magick a.png b.png +append side.png` puts shots side by side, to compare before/after or neighboring screens.
 - `node web/scripts/icon-sheet.mjs` renders every icon over its grid; check a new icon against its neighbors there.
@@ -53,7 +53,7 @@ The look is GNOME Adwaita. Keep it one system:
 - **Tokens only.** Colors, `--text-*` sizes, `--radius-*` and `--icon-touch` live in `web/src/app.css`, with dark values under `prefers-color-scheme`. Add a token when a new value is needed.
 - **One icon set.** Icons come from `web/src/lib/icons.ts` through `<Icon>` (or `iconSvg()` in plain DOM): 16px grid, 1.5 round strokes, drawn inside 2.5–13.5.
 - **Blue means primary or here.** Accent color marks the main action (the tab bar +, Done, suggested buttons) and the current place (active tab, crumbs, folder icons in lists). Headerbar tools are plain foreground, all the same touch size on phones. Yellow `--shared` is the shared badge.
-- **Phone layout.** One bottom tab bar on every screen: Notes, Recent, +, Shared, Account. + makes a note in one tap in the current folder. New Notebook lives in the headerbar. Every folder level looks and works the same, with breadcrumbs showing depth.
+- **Phone layout.** One bottom tab bar on every screen: Notes, Recent, +, Ask, Shared. Ask is Search + Ask in one screen (plain Search, with the search icon, until AI search is set up). Account is your avatar at the top right of each tab's headerbar. + makes a note in one tap in the current folder. New Notebook lives in the headerbar. Every folder level looks and works the same, with breadcrumbs showing depth.
 - **Shared pieces.** Popups use `lib/Dialog.svelte` (a bottom sheet on phones) and `lib/Menu.svelte`; feedback uses `toast()`; confirmations use `ask()`; empty states use `lib/StatusPage.svelte`. Visibility helpers: `.phone-only`, `.wide-only`, `.tablet-only`.
 
 ## Gotchas

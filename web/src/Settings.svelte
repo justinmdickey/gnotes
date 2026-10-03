@@ -7,7 +7,7 @@
   import { app, colorFor, endSession, goBack, importable, importNotes } from "./lib/store.svelte";
   import { ask, scrollEdge, toast } from "./lib/ui.svelte";
 
-  /** Shown as the phone's Account tab rather than a full screen with Back. */
+  /** Shown on phones as a page over the tabs, like them but with a back chevron, rather than a full screen with Back. */
   let { tab = false }: { tab?: boolean } = $props();
 
   let name = $state(app.user?.display_name ?? "");
@@ -128,6 +128,9 @@
       <div class="side"><button class="flat back" onclick={goBack}><Icon name="back" /><span>Back</span></button></div>
       <strong class="heading">Settings</strong>
       <div class="side"></div>
+    {:else}
+      <!-- Opened from your avatar, so no tab is lit: the chevron goes back to where you were. -->
+      <button class="flat icon circular back-icon" title="Back" aria-label="Back" onclick={goBack}><Icon name="back" /></button>
     {/if}
   </header>
 
@@ -407,7 +410,7 @@
     background: var(--window-bg);
   }
 
-  /* As a tab it matches the note lists: same background, empty headerbar, big title. */
+  /* On a phone it matches the note lists: same background, a bare back chevron, big title. */
   .page.tab,
   .page.tab .headerbar {
     background: var(--view-bg);

@@ -1,12 +1,16 @@
 <script lang="ts">
   import Icon, { type IconName } from "./lib/Icon.svelte";
-  import { app, colorFor, composeNote, navigate, openSettings, type View } from "./lib/store.svelte";
+  import { app, composeNote, navigate, type View } from "./lib/store.svelte";
 
-  /** Which tab the current screen belongs to. Shared notebooks count as Shared, wherever you are in them; Trash is in Notes. */
+  /**
+   * Which tab the current screen belongs to. Shared notebooks count as Shared, wherever you are in them;
+   * Trash is in Notes. Account, opened from the avatar in the headerbar, isn't a tab.
+   */
   const active = $derived.by(() => {
-    if (app.settings) return "account";
+    if (app.settings) return null;
     const v = app.view;
     if (v.kind === "all") return "recent";
+    if (v.kind === "ask") return "ask";
     if (v.kind === "shared-notes") return "shared";
     if (v.kind === "notebook" && app.tree.notebooks.find((n) => n.id === v.id)?.role !== "owner") return "shared";
     return "notes";
@@ -17,7 +21,13 @@
     { key: "notes", label: "Notes", icon: "folder", view: { kind: "root" } },
     { key: "recent", label: "Recent", icon: "clock", view: { kind: "all" } },
   ];
-  const right: Tab[] = [{ key: "shared", label: "Shared", icon: "people", view: { kind: "shared-notes" } }];
+  // Ask is plain Search until AI search is set up.
+  const right: Tab[] = $derived([
+    app.features.ask
+      ? { key: "ask", label: "Ask", icon: "sparkle", view: { kind: "ask" } }
+      : { key: "ask", label: "Search", icon: "search", view: { kind: "ask" } },
+    { key: "shared", label: "Shared", icon: "people", view: { kind: "shared-notes" } },
+  ]);
 </script>
 
 <!-- The phone's one bottom bar, the same on every screen. Tapping a tab goes to its top; Notes also clears a search. -->
@@ -43,10 +53,6 @@
     </button>
   </div>
   {#each right as tab (tab.key)}{@render tabButton(tab)}{/each}
-  <button class="flat tab" class:on={active === "account"} onclick={openSettings}>
-    <span class="ind"><span class="avatar tiny {colorFor(app.user?.id ?? '')}">{app.user?.display_name.slice(0, 1).toUpperCase()}</span></span>
-    <span>Account</span>
-  </button>
 </nav>
 
 <style>
@@ -112,11 +118,5 @@
   .tab.on .ind {
     background: var(--accent-soft);
     color: var(--accent);
-  }
-
-  .avatar.tiny {
-    width: 22px;
-    height: 22px;
-    font-size: 0.7rem;
   }
 </style>

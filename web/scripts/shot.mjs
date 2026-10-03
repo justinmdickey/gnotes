@@ -3,6 +3,7 @@
 //
 // Usage: npm run build && cargo build -p gnotes-server && node scripts/shot.mjs [options] [screen...]
 //   screens: home recent shared account trash notebook:<name> note:<title> edit:<title> search:<query>
+//            ask (the Ask tab, empty; Search without --ai) find:<query> (typed in Ask's field, not sent)
 //            ask:<question>[|<follow-up>...] (with --ai) service:<form> (a Settings service form, e.g. service:embed)
 //            (default: home notebook:Kitchen note:Groceries account)
 //   --phone | --desktop   viewport (default: both)
@@ -168,7 +169,8 @@ async function go(page, target) {
     account: "#/settings",
     trash: "#/trash",
     search: "#/",
-    ask: "#/",
+    ask: "#/ask",
+    find: "#/ask",
     service: "#/settings",
     notebook: `#/nb/${tree.notebooks.find((n) => n.name === arg)?.id}`,
     note: `#/note/${tree.notes.find((n) => n.title === arg)?.id}`,
@@ -181,26 +183,36 @@ async function go(page, target) {
     await page.waitForFunction(() => !document.querySelector("dialog"));
   }
   await page.evaluate((h) => (location.hash = h), hash);
-  if (kind === "search" || kind === "ask") {
+  if (kind === "search") {
     await page.waitForSelector(".pane.list .search input");
     // Start from an empty field, whatever the screen before left.
     await page.$eval(".pane.list .search input", (el) => el.select());
     await page.keyboard.press("Backspace");
-    await page.type(".pane.list .search input", kind === "ask" ? arg.split("|")[0] : arg);
+    await page.type(".pane.list .search input", arg);
     // Meaning matches come a moment after the word matches.
     if (flag("--ai")) await page.waitForSelector(".pane.list .meaning", { timeout: 5000 }).catch(() => {});
   }
-  if (kind === "ask") {
-    await settle(400);
-    await page.click(".pane.list .ask button, .pane.list .status button");
-    // Each follow-up after "|" is typed in once the answer before it is done.
+  if (kind === "ask" || kind === "find") {
+    // Start from a new conversation and an empty field, whatever the screen before left.
+    await page.waitForSelector(".pane.list .composer input");
+    if (await page.$(".pane.list .new-chat")) await page.click(".pane.list .new-chat");
+    await page.$eval(".pane.list .composer input", (el) => el.select());
+    await page.keyboard.press("Backspace");
+  }
+  if (kind === "find") {
+    await page.type(".pane.list .composer input", arg);
+    if (flag("--ai")) await page.waitForSelector(".pane.list .meaning", { timeout: 5000 }).catch(() => {});
+  }
+  // Shot as you'd see it with the keyboard down.
+  if (kind === "ask" || kind === "find") await page.evaluate(() => document.activeElement?.blur());
+  if (kind === "ask" && arg) {
+    // The question, then each follow-up after "|" once the answer before it is done.
     const done = (n) =>
-      page.waitForFunction((n) => document.querySelectorAll("dialog .turn").length === n && !document.querySelector("dialog .turn[aria-busy=true]"), { timeout: 8000 }, n);
-    await done(1);
-    for (const [i, text] of arg.split("|").slice(1).entries()) {
-      await page.type("dialog .composer input", text);
+      page.waitForFunction((n) => document.querySelectorAll(".pane.list .turn").length === n && !document.querySelector(".pane.list .turn[aria-busy=true]"), { timeout: 8000 }, n);
+    for (const [i, text] of arg.split("|").entries()) {
+      await page.type(".pane.list .composer input", text);
       await page.keyboard.press("Enter");
-      await done(i + 2);
+      await done(i + 1);
     }
   }
   if (kind === "service") {
