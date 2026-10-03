@@ -34,15 +34,15 @@ use crate::{
 };
 
 /// Notes found per turn: shown as cards and sent to the chat model.
-const NOTES: usize = 5;
+const NOTES: usize = 8;
 /// Candidates taken from each of the full-text and meaning searches before mixing them.
-const CANDIDATES: usize = 10;
+const CANDIDATES: usize = 20;
 /// Reciprocal rank fusion's constant: a note's score is the sum of 1 / (K + rank) over the lists
 /// it's in. 60 is the usual choice; 10 ranked the same on the test notes.
 const RRF_K: f32 = 60.0;
 /// Passages sent per note at most, and how much text all of them may be.
-const PASSAGES: usize = 2;
-const CONTEXT_CHARS: usize = 8000;
+const PASSAGES: usize = 3;
+const CONTEXT_CHARS: usize = 16000;
 /// Limits on what the app sends: the question, and the earlier turns kept for context.
 const MAX_QUESTION: usize = 1000;
 const HISTORY_TURNS: usize = 6;
