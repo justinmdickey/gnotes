@@ -721,6 +721,18 @@ try {
     await alice.waitForSelector(widget, { timeout: 5000 });
   }
   check(true, "the slash menu adds a table and a board");
+  // Emoji by name: ":tac" opens a list, and a whole ":thumbsup:" turns into the emoji as you type it.
+  await alice.evaluate(() => document.activeElement?.blur());
+  await (await alice.evaluateHandle(() => [...document.querySelectorAll(".cm-line")].find((l) => l.textContent === "end"))).click();
+  await alice.keyboard.press("End");
+  await alice.keyboard.type(" :tac");
+  await alice.waitForFunction(() => document.querySelector(".cm-slash li[aria-selected]")?.textContent.includes(":taco:"), { timeout: 5000 });
+  if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-emoji.png") });
+  await new Promise((r) => setTimeout(r, 150));
+  await alice.keyboard.press("Enter");
+  await alice.keyboard.type(" :thumbsup: at 10:30");
+  await alice.waitForFunction(() => [...document.querySelectorAll(".cm-line")].some((l) => l.textContent === "end 🌮 👍 at 10:30"), { timeout: 3000 });
+  check(true, "emoji come from :name, and a whole :name: turns into one, leaving times alone");
   // Pointing at a block shows a grip beside it; dragging the grip moves the block, nested items and all.
   await alice.keyboard.down("Control");
   await alice.keyboard.press("End");

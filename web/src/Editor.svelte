@@ -17,6 +17,7 @@
   import { dragHandles } from "./lib/dragHandles";
   import { undoCommands } from "./lib/undo";
   import { blame } from "./lib/blame";
+  import { emojiOnColon } from "./lib/emoji";
   import { tables } from "./lib/tables";
   import { kanban } from "./lib/kanban";
   import { sync } from "./lib/sync";
@@ -229,6 +230,7 @@
           slashMenu({ photo: () => pickPhoto(), record: () => startRecording() }),
           dragHandles,
           blame(doc, noteId, () => shared),
+          emojiOnColon,
           tables,
           kanban,
           recordingMarker,
@@ -1304,6 +1306,7 @@
 
   .page :global(.cm-slash > ul) {
     min-width: 220px;
+    max-width: min(360px, 85vw);
     max-height: min(320px, 40vh) !important;
     padding: 6px !important;
     font-family: inherit !important;
@@ -1337,6 +1340,31 @@
   .page :global(.cm-slash li[aria-selected]) {
     background: var(--active);
     color: var(--fg);
+  }
+
+  .page :global(.cm-slash .cm-emoji-glyph) {
+    flex: none;
+    width: 16px;
+    font-size: 1.15em;
+    line-height: 1;
+    text-align: center;
+  }
+
+  /* An emoji's name next to it, then what it is in plain words. */
+  .page :global(.cm-slash .cm-completionLabel) {
+    flex: none;
+  }
+
+  .page :global(.cm-slash .cm-completionDetail) {
+    min-width: 0;
+    margin-left: auto;
+    padding-left: 12px;
+    color: var(--dim-fg);
+    font-size: var(--text-sm);
+    font-style: normal;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .page :global(.cm-slash .cm-completionMatchedText) {

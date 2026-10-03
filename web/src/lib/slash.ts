@@ -4,6 +4,7 @@ import { autocompletion, type Completion, type CompletionContext, type Completio
 import { syntaxTree } from "@codemirror/language";
 import { EditorSelection } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
+import { emojiSource, startEmoji, type EmojiOption } from "./emoji";
 import { setBlock, type Block } from "./format";
 import { iconSvg, type IconName } from "./icons";
 import { insertBoard } from "./kanban";
@@ -61,6 +62,7 @@ function items(actions: SlashActions): SlashItem[] {
     { label: "Code Block", icon: "code", apply: pick(codeBlock), section: ADD },
     { label: "Table", icon: "table", apply: pick(insertTable), section: ADD },
     { label: "Board", icon: "board", apply: pick(insertBoard), section: ADD },
+    { label: "Emoji", icon: "emoji", apply: pick(startEmoji), section: ADD },
     { label: "Photo", icon: "camera", apply: pick(actions.photo), section: ADD },
     { label: "Voice Memo", icon: "mic", apply: pick(actions.record), section: ADD },
   ];
@@ -84,11 +86,23 @@ export function slashMenu(actions: SlashActions) {
     return { from: match.from + match.text.indexOf("/") + 1, options, validFor: /^(\w+( \w*)?)?$/ };
   };
   return autocompletion({
-    override: [source],
+    override: [source, emojiSource],
     icons: false,
     activateOnTyping: true,
     closeOnBlur: true,
     tooltipClass: () => "cm-slash",
-    addToOptions: [{ render: (c) => iconSvg((c as SlashItem).icon), position: 20 }],
+    addToOptions: [
+      {
+        // A style's icon, or the emoji itself.
+        render: (c) => {
+          if (!("emoji" in c)) return iconSvg((c as SlashItem).icon);
+          const glyph = document.createElement("span");
+          glyph.className = "cm-emoji-glyph";
+          glyph.textContent = (c as EmojiOption).emoji;
+          return glyph;
+        },
+        position: 20,
+      },
+    ],
   });
 }

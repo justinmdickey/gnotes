@@ -30,6 +30,7 @@
     "@codemirror/state": "^6.7.6",
     "@codemirror/view": "^6.43.13",
     "@lezer/highlight": "^1.2.3",
+    "gemoji": "^8.1.0",
     "loro-codemirror": "^0.3.3",
     "loro-crdt": "^1.16.3"
   }

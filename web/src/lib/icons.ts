@@ -49,6 +49,8 @@ const stroked = {
   sparkle: "M8 2.5c.4 2.9 2.6 5.1 5.5 5.5-2.9.4-5.1 2.6-5.5 5.5-.4-2.9-2.6-5.1-5.5-5.5 2.9-.4 5.1-2.6 5.5-5.5z",
   // Fold every folder: two chevrons pointing in.
   collapse: "M5 3l3 3 3-3M5 13l3-3 3 3",
+  // Insert an emoji.
+  emoji: "M8 2.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11zM6 6.75h.01M10 6.75h.01M5.75 9.5c.5.9 1.3 1.4 2.25 1.4s1.75-.5 2.25-1.4",
   // Drag to move, beside a block in a note.
   grip: "M5.6 4h.8M9.6 4h.8M5.6 8h.8M9.6 8h.8M5.6 12h.8M9.6 12h.8",
   // Hide the on-screen keyboard.
