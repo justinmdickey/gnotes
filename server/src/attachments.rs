@@ -318,6 +318,9 @@ pub async fn features(State(state): State<AppState>, CurrentUser(_): CurrentUser
         "live_transcription": whisper.as_ref().is_some_and(|w| w.realtime_url.is_some()),
         "photo_text": state.vision.read().await.is_some(),
         "summaries": state.summary.read().await.is_some(),
+        "semantic_search": state.embed.read().await.is_some(),
+        // Ask needs both: embeddings to find the notes, the summary chat model to write the answer.
+        "ask": state.embed.read().await.is_some() && state.summary.read().await.is_some(),
         "max_upload": MAX_UPLOAD,
         "version": crate::VERSION,
     }))

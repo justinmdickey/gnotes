@@ -118,30 +118,50 @@ pub async fn backfill(state: &AppState) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Notes the user bound as `?1` can see, as in /tree: their own, shared with them directly, or inside
+/// a notebook shared with them. A `WITH` clause defining `visible(id)`; callers still drop trashed notes.
+macro_rules! visible_notes {
+    () => {
+        "WITH RECURSIVE shared_nb(id) AS (
+            SELECT s.resource_id FROM shares s JOIN notebooks nb ON nb.id = s.resource_id
+            WHERE s.user_id = ?1 AND s.resource_type = 'notebook' AND nb.deleted_at IS NULL
+            UNION
+            SELECT nb.id FROM notebooks nb JOIN shared_nb ON nb.parent_id = shared_nb.id
+            WHERE nb.deleted_at IS NULL
+         ),
+         visible(id) AS (
+            SELECT id FROM notes WHERE owner_id = ?1
+            UNION SELECT resource_id FROM shares WHERE user_id = ?1 AND resource_type = 'note'
+            UNION SELECT id FROM notes WHERE notebook_id IN (SELECT id FROM shared_nb)
+         ) "
+    };
+}
+pub(crate) use visible_notes;
+
 #[derive(Deserialize)]
 pub struct SearchParams {
-    q: String,
+    pub q: String,
 }
 
 /// A piece of a snippet; `hit` pieces are the words that matched.
 #[derive(Serialize)]
 pub struct Segment {
-    text: String,
-    hit: bool,
+    pub text: String,
+    pub hit: bool,
 }
 
 #[derive(Serialize)]
 pub struct SearchResult {
-    note: String,
-    title: String,
-    snippet: Vec<Segment>,
-    /// Which search found it. Only "text" for now; other kinds of search can add their own.
-    source: &'static str,
+    pub note: String,
+    pub title: String,
+    pub snippet: Vec<Segment>,
+    /// Which search found it: "text" here, "meaning" from semantic search (semantic.rs).
+    pub source: &'static str,
 }
 
 #[derive(Serialize)]
 pub struct SearchResults {
-    results: Vec<SearchResult>,
+    pub results: Vec<SearchResult>,
 }
 
 fn segments(snippet: &str) -> Vec<Segment> {
@@ -169,28 +189,16 @@ pub async fn search(
     let Some(query) = fts_query(&params.q) else {
         return Ok(Json(SearchResults { results: vec![] }));
     };
-    // Visible notes, as in /tree: my own, shared with me directly, or inside a notebook shared with me.
-    let rows: Vec<(String, String, String)> = sqlx::query_as(
-        "WITH RECURSIVE shared_nb(id) AS (
-            SELECT s.resource_id FROM shares s JOIN notebooks nb ON nb.id = s.resource_id
-            WHERE s.user_id = ?1 AND s.resource_type = 'notebook' AND nb.deleted_at IS NULL
-            UNION
-            SELECT nb.id FROM notebooks nb JOIN shared_nb ON nb.parent_id = shared_nb.id
-            WHERE nb.deleted_at IS NULL
-         ),
-         visible(id) AS (
-            SELECT id FROM notes WHERE owner_id = ?1
-            UNION SELECT resource_id FROM shares WHERE user_id = ?1 AND resource_type = 'note'
-            UNION SELECT id FROM notes WHERE notebook_id IN (SELECT id FROM shared_nb)
-         )
-         SELECT n.id, n.title, snippet(note_search, 1, char(2), char(3), '…', 12)
+    let rows: Vec<(String, String, String)> = sqlx::query_as(concat!(
+        visible_notes!(),
+        "SELECT n.id, n.title, snippet(note_search, 1, char(2), char(3), '…', 12)
          FROM note_search
          JOIN note_text t ON t.id = note_search.rowid
          JOIN notes n ON n.id = t.note_id
          WHERE note_search MATCH ?2 AND n.deleted_at IS NULL AND n.id IN (SELECT id FROM visible)
          ORDER BY bm25(note_search, 4.0, 1.0)
-         LIMIT ?3",
-    )
+         LIMIT ?3"
+    ))
     .bind(&me.id)
     .bind(&query)
     .bind(MAX_RESULTS)

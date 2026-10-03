@@ -24,6 +24,7 @@ async fn start_with(dir: &TempDir, whisper: Option<WhisperConfig>) -> Server {
     let config = Config {
         vision: None,
         summary: None,
+        embed: None,
         data_dir: dir.path().to_path_buf(),
         bind: "127.0.0.1:0".parse().unwrap(),
         web_dir: dir.path().join("web"),
@@ -1246,4 +1247,185 @@ async fn search_follows_sharing() {
     alice.send(reqwest::Method::DELETE, &format!("/shares/{direct}"), json!({})).await;
     assert!(search(&bob, "rhubarb").await.is_empty());
     assert_eq!(search(&alice, "rhubarb").await.len(), 2);
+}
+
+/// What the stand-in AI services saw: every prompt sent to the chat model, and how many texts were embedded.
+#[derive(Clone, Default)]
+struct FakeAi {
+    prompts: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    embedded: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+/// A stand-in embedding model that knows a few synonyms: each word adds to the topic it belongs to,
+/// so "dairy" lands next to "milk" without sharing a word. Every text also gets a little of an
+/// "anything" direction, so unrelated texts sit far apart but never at zero.
+fn fake_embedding(text: &str) -> Vec<f32> {
+    const TOPICS: [&[&str]; 3] = [
+        &["milk", "dairy", "cheese", "yogurt"],
+        &["car", "vehicle", "oil", "tire", "tires"],
+        &["passport", "trip", "travel", "flight"],
+    ];
+    let mut v = vec![0.1, 0.0, 0.0, 0.0];
+    for word in text.to_lowercase().split(|c: char| !c.is_alphanumeric()) {
+        if let Some(t) = TOPICS.iter().position(|words| words.contains(&word)) {
+            v[t + 1] += 1.0;
+        }
+    }
+    v
+}
+
+/// The embeddings and chat services Ask and semantic search use. The chat model answers from the
+/// first note it's given, or says NO_ANSWER when asked about brands.
+async fn fake_ai() -> (String, FakeAi) {
+    let seen = FakeAi::default();
+    let (prompts, embedded) = (seen.prompts.clone(), seen.embedded.clone());
+    let fake = axum::Router::new()
+        .route("/v1/models", axum::routing::get(|| async { axum::Json(json!({ "data": [{ "id": "fake-embed" }, { "id": "fake-chat" }] })) }))
+        .route(
+            "/v1/embeddings",
+            axum::routing::post(move |axum::Json(body): axum::Json<Value>| async move {
+                assert_eq!(body["model"], "fake-embed");
+                let inputs = body["input"].as_array().unwrap();
+                embedded.fetch_add(inputs.len(), std::sync::atomic::Ordering::SeqCst);
+                let data: Vec<Value> =
+                    inputs.iter().enumerate().map(|(i, t)| json!({ "index": i, "embedding": fake_embedding(t.as_str().unwrap()) })).collect();
+                axum::Json(json!({ "data": data }))
+            }),
+        )
+        .route(
+            "/v1/chat/completions",
+            axum::routing::post(move |axum::Json(body): axum::Json<Value>| async move {
+                assert_eq!(body["model"], "fake-chat");
+                let prompt = body["messages"][0]["content"].as_str().unwrap().to_owned();
+                let content = if prompt.contains("brand") { "NO_ANSWER" } else { "From your notes: you wrote it down [1]." };
+                prompts.lock().unwrap().push(prompt);
+                axum::Json(json!({ "choices": [{ "message": { "role": "assistant", "content": content } }] }))
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/v1", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, fake).await });
+    (url, seen)
+}
+
+/// Semantic search results for `q` as note ids, best first.
+async fn by_meaning(user: &User, q: &str) -> Vec<String> {
+    let url = reqwest::Url::parse_with_params(&user.url("/search/meaning"), &[("q", q)]).unwrap();
+    let body: Value = user.http.get(url).send().await.unwrap().json().await.unwrap();
+    body["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| {
+            assert_eq!(r["source"], "meaning");
+            r["note"].as_str().unwrap().to_owned()
+        })
+        .collect()
+}
+
+/// Waits for the embeddings to catch up, since they're made a few seconds after edits settle.
+/// Compares the notes found in any order.
+async fn meaning_settles(user: &User, q: &str, want: &[&str]) {
+    let mut want: Vec<String> = want.iter().map(|s| s.to_string()).collect();
+    want.sort();
+    let found = async || {
+        let mut found = by_meaning(user, q).await;
+        found.sort();
+        found
+    };
+    for _ in 0..150 {
+        if found().await == want {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(found().await, want, "searching {q:?} by meaning");
+}
+
+#[tokio::test]
+async fn semantic_search_and_ask_follow_meaning_and_sharing() {
+    let (fake_url, seen) = fake_ai().await;
+    let dir = TempDir::new().unwrap();
+    let server = start(&dir).await;
+    auth::create_user(&server.state.db, "root", "", "password123", true).await.unwrap();
+    let root = login(&server.base, "root").await;
+    let alice = user(&server, "alice").await;
+    let bob = user(&server, "bob").await;
+
+    let mut ws = alice.ws().await;
+    let mut notes = Vec::new();
+    for text in ["# Groceries\nbuy milk and eggs", "# Car\nchange the oil soon", "# Trip\nrenew the passport"] {
+        let id = alice.post("/notes", json!({})).await["id"].as_str().unwrap().to_owned();
+        ws.join_and_sync(&id, None).await;
+        ws.send_frame(0x01, &id, &edit(&LoroDoc::new(), 0, text)).await;
+        notes.push(id);
+    }
+    let [groceries, car, trip] = <[String; 3]>::try_from(notes).unwrap();
+
+    // Off: nothing shows, nothing breaks.
+    let features = alice.get("/features").await;
+    assert_eq!((features["semantic_search"].clone(), features["ask"].clone()), (json!(false), json!(false)));
+    assert!(by_meaning(&alice, "dairy").await.is_empty());
+    assert_eq!(alice.send(reqwest::Method::POST, "/ask", json!({ "question": "what dairy?" })).await.status(), 409);
+
+    // Setting it up embeds the notes already there. Ask also needs the chat model.
+    let res = alice.send(reqwest::Method::PUT, "/admin/settings/embed", json!({ "url": fake_url, "model": "fake-embed" })).await;
+    assert_eq!(res.status(), 403, "admins only");
+    let tested = root.post("/admin/settings/embed/test", json!({ "url": fake_url, "model": "fake-embed" })).await;
+    assert_eq!(tested["ok"], true, "{tested}");
+    let saved = root.send(reqwest::Method::PUT, "/admin/settings/embed", json!({ "url": fake_url, "model": "fake-embed", "key": "k" })).await;
+    assert!(saved.status().is_success());
+    let settings = root.get("/admin/settings").await;
+    assert_eq!((settings["embed"]["model"].clone(), settings["embed"]["has_key"].clone()), (json!("fake-embed"), json!(true)));
+    assert!(settings["embed"].get("key").is_none(), "the key is never sent back");
+    assert_eq!(alice.get("/features").await["semantic_search"], true);
+    assert_eq!(alice.get("/features").await["ask"], false);
+    root.send(reqwest::Method::PUT, "/admin/settings/summary", json!({ "url": fake_url, "model": "fake-chat" })).await;
+    assert_eq!(alice.get("/features").await["ask"], true);
+
+    // A synonym finds the note, where full-text search finds nothing.
+    meaning_settles(&alice, "dairy", &[&groceries]).await;
+    assert!(search(&alice, "dairy").await.is_empty());
+    assert_eq!(by_meaning(&alice, "vehicle").await, vec![car.clone()]);
+    assert!(by_meaning(&alice, "x").await.is_empty(), "too short to mean anything");
+
+    // Edits are embedded once they settle; unchanged notes aren't embedded again.
+    let tires = alice.post("/notes", json!({})).await["id"].as_str().unwrap().to_owned();
+    ws.join_and_sync(&tires, None).await;
+    ws.send_frame(0x01, &tires, &edit(&LoroDoc::new(), 0, "# Garage\ncheck the tire pressure")).await;
+    meaning_settles(&alice, "vehicle", &[&car, &tires]).await;
+    let embedded = seen.embedded.load(std::sync::atomic::Ordering::SeqCst);
+    server.state.embedder.refresh_all();
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    assert_eq!(seen.embedded.load(std::sync::atomic::Ordering::SeqCst), embedded);
+
+    // Ask answers from the closest notes only, and links them.
+    let answer = alice.post("/ask", json!({ "question": "What dairy do I need?" })).await;
+    assert_eq!(answer["answer"], "From your notes: you wrote it down [1].");
+    assert_eq!(answer["sources"], json!([{ "n": 1, "note": groceries, "title": "Groceries" }]));
+    let prompt = seen.prompts.lock().unwrap().last().unwrap().clone();
+    assert!(prompt.contains("[1] Groceries\nbuy milk and eggs") && prompt.contains("NO_ANSWER"), "{prompt}");
+    assert!(!prompt.contains("oil") && !prompt.contains("passport"), "only matching notes are sent: {prompt}");
+    // When the notes don't say, the answer is empty; with nothing close, the model isn't asked at all.
+    assert!(alice.post("/ask", json!({ "question": "Which dairy brand?" })).await["answer"].is_null());
+    let asked = seen.prompts.lock().unwrap().len();
+    let none = alice.post("/ask", json!({ "question": "What's the weather like?" })).await;
+    assert_eq!((none["answer"].clone(), none["sources"].clone()), (Value::Null, json!([])));
+    assert_eq!(seen.prompts.lock().unwrap().len(), asked);
+
+    // Sharing: bob finds and asks about the trip only while it's shared with him.
+    assert!(by_meaning(&bob, "travel").await.is_empty());
+    let share = alice.post("/shares", json!({ "resource_type": "note", "resource_id": trip, "username": "bob", "role": "viewer" })).await;
+    assert_eq!(by_meaning(&bob, "travel").await, vec![trip.clone()]);
+    let answer = bob.post("/ask", json!({ "question": "When do I travel?" })).await;
+    assert_eq!(answer["sources"][0]["note"], json!(trip));
+    alice.send(reqwest::Method::DELETE, &format!("/shares/{}", share["id"].as_str().unwrap()), json!({})).await;
+    assert!(by_meaning(&bob, "travel").await.is_empty());
+    let asked = seen.prompts.lock().unwrap().len();
+    assert!(bob.post("/ask", json!({ "question": "When do I travel?" })).await["answer"].is_null());
+    assert_eq!(seen.prompts.lock().unwrap().len(), asked, "an unshared note is never sent");
+
+    // Trashed notes drop out.
+    alice.send(reqwest::Method::DELETE, &format!("/notes/{groceries}"), json!({})).await;
+    assert!(by_meaning(&alice, "dairy").await.is_empty());
 }
