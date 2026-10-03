@@ -1175,9 +1175,16 @@
     --marker: 1.75em;
   }
 
+  /* A marker plus its real space (1ch of a monospace face) is exactly --marker wide. */
+  .page :global(.cm-marker-space),
+  .page :global(.cm-bullet),
+  .page :global(.cm-checkbox) {
+    font-family: "Adwaita Mono", "Source Code Pro", monospace;
+  }
+
   .page :global(.cm-bullet) {
     display: inline-block;
-    width: 1.4em;
+    width: calc(1.4em - 1ch);
     text-indent: 0;
     color: var(--dim-fg);
   }
@@ -1186,7 +1193,7 @@
     display: inline-block;
     width: 1.15em;
     height: 1.15em;
-    margin-right: 0.6em;
+    margin-right: calc(0.6em - 1ch);
     vertical-align: -0.2em;
     border: 1.5px solid var(--dim-fg);
     border-radius: 50%;

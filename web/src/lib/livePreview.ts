@@ -303,6 +303,12 @@ const headingLines = [1, 2, 3, 4, 5, 6].map((n) => lineClass(`cm-h${Math.min(n, 
 const quoteLine = lineClass("cm-quote");
 const doneText = Decoration.mark({ class: "cm-task-done" });
 const embedLine = lineClass("cm-embed-line");
+/**
+ * The space after a bullet or checkbox stays real text, so on an empty item the cursor sits in a line
+ * of text instead of against the drawn marker, which put it too low and too far left. It's set in a
+ * monospace face so its width is a known 1ch, which the marker's own width makes up to --marker.
+ */
+const markerSpace = Decoration.mark({ class: "cm-marker-space" });
 // List items whose wrapped lines hang under the text rather than under the bullet.
 const itemLine = lineClass("cm-item");
 
@@ -326,6 +332,8 @@ function build(view: EditorView): { decorations: DecorationSet; atomic: Decorati
   const { state } = view;
   const active = activeLines(view);
   const decos: Range<Decoration>[] = [];
+  /** Ranges the cursor steps over without them being replaced. */
+  const stepOver: Range<Decoration>[] = [];
   const lineAt = (pos: number) => state.doc.lineAt(pos);
   let firstLineIsHeading = false;
 
@@ -395,13 +403,24 @@ function build(view: EditorView): { decorations: DecorationSet; atomic: Decorati
             // can hang under it. Nested items keep their leading spaces, so only top-level ones hang.
             if (lineAt(node.from).from === node.from) decos.push(itemLine.range(node.from));
             if (item.getChild("Task")) decos.push(hidden.range(node.from, withSpace(state, node.to)));
-            else decos.push(bullet.range(node.from, withSpace(state, node.to)));
+            else {
+              decos.push(bullet.range(node.from, node.to));
+              const space = withSpace(state, node.to);
+              if (space > node.to) {
+                decos.push(markerSpace.range(node.to, space));
+                stepOver.push(markerSpace.range(node.to, space));
+              }
+            }
             break;
           }
           case "TaskMarker": {
             const checked = /x/i.test(state.sliceDoc(node.from, node.to));
             const textFrom = withSpace(state, node.to);
-            decos.push(Decoration.replace({ widget: new CheckboxWidget(checked, node.from) }).range(node.from, textFrom));
+            decos.push(Decoration.replace({ widget: new CheckboxWidget(checked, node.from) }).range(node.from, node.to));
+            if (textFrom > node.to) {
+              decos.push(markerSpace.range(node.to, textFrom));
+              stepOver.push(markerSpace.range(node.to, textFrom));
+            }
             const lineEnd = lineAt(node.from).to;
             if (checked && lineEnd > textFrom) decos.push(doneText.range(textFrom, lineEnd));
             break;
@@ -414,8 +433,8 @@ function build(view: EditorView): { decorations: DecorationSet; atomic: Decorati
   if (!firstLineIsHeading) decos.push(headingLines[0].range(0));
   return {
     decorations: Decoration.set(decos, true),
-    // Only replaced ranges (hidden marks, bullets, checkboxes) are skipped by the cursor.
-    atomic: Decoration.set(decos.filter((d) => d.value.point), true),
+    // Replaced ranges (hidden marks, bullets, checkboxes) and the spaces after markers are skipped by the cursor.
+    atomic: Decoration.set([...decos.filter((d) => d.value.point), ...stepOver], true),
   };
 }
 
