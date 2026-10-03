@@ -334,6 +334,10 @@
             }}
             saved="Semantic search saved"
             off="Semantic search turned off"
+            reindex={async () => {
+              const { notes } = await api.reindexEmbed();
+              return `Re-indexing ${notes} ${notes === 1 ? "note" : "notes"}`;
+            }}
           />
         {/if}
 

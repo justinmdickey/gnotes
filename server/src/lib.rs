@@ -202,6 +202,7 @@ pub fn router(state: AppState) -> Router {
         .route("/admin/settings/whisper/test", post(settings::test_whisper))
         .route("/admin/settings/{chat}", axum::routing::put(settings::put_chat))
         .route("/admin/settings/{chat}/test", post(settings::test_chat))
+        .route("/admin/semantic/reindex", post(settings::reindex_embed))
         .route("/notes/{id}/summary", get(summary::get_summary).post(summary::summarize))
         .route("/notes/{id}/authors", get(authors::list_authors))
         .route("/search", get(search::search))
