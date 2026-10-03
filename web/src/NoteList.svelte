@@ -28,6 +28,13 @@
   $effect(() => {
     if (app.listReset) query = "";
   });
+  let searchField = $state<HTMLInputElement>();
+  $effect(() => {
+    if (app.findNotes && searchField) {
+      app.findNotes = false;
+      searchField.focus();
+    }
+  });
   /** The big title has scrolled away, so the headerbar shows the name instead. */
   let compact = $state(false);
   /** The phone's top folder shows the app's name in the headerbar, as the sidebar does on desktop. */
@@ -140,17 +147,6 @@
   const questionLike = $derived(/\?$|^(who|what|when|where|why|how|which|whose|is|are|was|were|do|does|did|can|could|should|would|will|have|has)\b/i.test(q));
 
   const notes = $derived(q ? matchingNotes(q, hits, (n) => scope(n.notebook_id, n.role)) : notesFor(app.view, app.tree));
-
-  /** Meaning matches the word search didn't already list, in the folder being searched, best first. */
-  const meaningNotes = $derived.by(() => {
-    if (!q) return [];
-    const listed = new Set(notes.map((n) => n.id));
-    return search.meaning.flatMap((r) => {
-      const note = app.tree.notes.find((n) => n.id === r.note);
-      if (!note || listed.has(note.id) || !scope(note.notebook_id, note.role)) return [];
-      return [{ note, snippet: r.snippet.map((p) => p.text).join("") }];
-    });
-  });
 
   /** Apple Notes-style buckets: Today, Yesterday, Previous 7 Days, Previous 30 Days, then by month. */
   const groups = $derived.by(() => {
@@ -279,13 +275,13 @@
 
     <label class="search">
       <Icon name="search" />
-      <input type="search" placeholder={searchHint} aria-label={searchHint} bind:value={query} />
+      <input bind:this={searchField} type="search" placeholder={searchHint} aria-label={searchHint} bind:value={query} />
       {#if query}
         <button class="flat icon circular clear" aria-label="Clear search" onclick={() => (query = "")}><Icon name="close" /></button>
       {/if}
     </label>
 
-    {#snippet noteRow(note: TreeNote, meaning?: string)}
+    {#snippet noteRow(note: TreeNote)}
       <!-- On desktop a note drags onto a notebook in the sidebar to move there. -->
       <button
         class="flat note"
@@ -305,10 +301,7 @@
         </span>
         <span class="meta">
           <span class="time">{when(note.updated_at)}</span>
-          {#if meaning}
-            <!-- The passage closest in meaning, which may share no words with the search. -->
-            <span class="dim snippet">{meaning}</span>
-          {:else if hits.get(note.id)?.snippet.some((p) => p.hit)}
+          {#if hits.get(note.id)?.snippet.some((p) => p.hit)}
             <!-- Where the words matched, which may be far down the note. -->
             <span class="dim snippet">{#each hits.get(note.id)!.snippet as part, i (i)}{#if part.hit}<mark>{part.text}</mark>{:else}{part.text}{/if}{/each}</span>
           {:else}
@@ -345,8 +338,8 @@
         {/each}
       </ul>
     {:else}
-      {#if folders.length || meaningNotes.length}
-        <!-- The results below are enough; no empty state over them. -->
+      {#if folders.length}
+        <!-- The folders above are enough; no empty state over them. -->
       {:else if query && asking && !questionLike}
         <StatusPage icon="search" title="No Results" description="No note has the words “{query}”." tone="neutral">
           <button class="pill" onclick={() => openAsk(query.trim())}><Icon name="sparkle" />Ask Your Notes</button>
@@ -361,15 +354,7 @@
         <StatusPage icon="note" title="No Notes Yet" description="Start one with the pencil button up top." />
       {/if}
     {/each}
-    {#if meaningNotes.length}
-      <h3 class="group-title">By Meaning</h3>
-      <ul class="boxed-list meaning">
-        {#each meaningNotes as m (m.note.id)}
-          <li transition:reveal>{@render noteRow(m.note, m.snippet)}</li>
-        {/each}
-      </ul>
-    {/if}
-    {#if asking && !questionLike && (groups.length || folders.length || meaningNotes.length)}{@render askRow(false)}{/if}
+    {#if asking && !questionLike && (groups.length || folders.length)}{@render askRow(false)}{/if}
     {/key}
     {#if media.phone && app.view.kind === "root" && !q}
       <!-- Last, where the desktop sidebar keeps it too. -->

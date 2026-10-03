@@ -21,7 +21,7 @@ export interface Turn {
 }
 
 export const chat = $state({
-  /** What's typed in the field: a search, or the next question. */
+  /** What's typed in the field: the next question. */
   draft: "",
   turns: [] as Turn[],
   busy: false,

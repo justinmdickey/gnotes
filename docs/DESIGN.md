@@ -17,7 +17,7 @@ Gnotes is a self-hosted Markdown notes app. One server holds a household's accou
 | AI summaries | On demand: a note's Summary tab sends the whole note to an OpenAI-compatible chat API (local or hosted) the first time it's opened, and shows the gist, key points and action items read-only. Kept in `note_summaries` beside the note, not in its text, with a hash of the text it covers so the tab can say when the note has changed. |
 | AI Tidy Up | On demand, from the note menu or `/tidy`: the summary chat model improves a note's structure and formatting (headings, grouping, lists, tables, fenced code with its language). It may move and add, never remove: the server refuses any result that lost something, and the app shows the result for the user to apply. See [Tidy Up](#tidy-up). |
 | Text from photos | On demand: Get Text on a photo (on hover, always on touch) sends it to an OpenAI-compatible chat API with a vision model (e.g. Ollama or llama.cpp on local hardware), and the text it reads goes under the photo. |
-| AI search | Optional. Notes are embedded in chunks through an OpenAI-compatible embeddings API, in the background after edits settle. Search adds notes close in meaning; Ask is a chat that finds notes by words and meaning, shows them, and streams an answer from the summary chat model with links to them. See [AI search](#ai-search). |
+| AI search | Optional. Notes are embedded in chunks through an OpenAI-compatible embeddings API, in the background after edits settle. Ask is a chat that finds notes by words and meaning, shows them, and streams an answer from the summary chat model with links to them. See [AI search](#ai-search). |
 
 **CRDT** (conflict-free replicated data type): a data structure where edits made on different devices, even offline, merge automatically without conflicts.
 
@@ -213,9 +213,9 @@ A document prefix is part of the embedded text, so its hash changes and those ch
 **`POST /ask {messages: [{role, text}]}`** (`server/src/ask.rs`) is the next turn of a conversation. The app sends the conversation so far, ending with the new question (`role: "user"`, 3–1,000 characters); the server keeps none of it. One turn:
 
 1. **Follow-ups.** With earlier turns, the chat model first rewrites the question and the last 6 messages (1,500 characters each, 6,000 in all, citations removed) into one standalone search, e.g. "and the gutters?" after a roof question becomes "gutters Summit Exteriors".
-2. **Hybrid search.** The search's words, without stop words like "where", "is" and "note", go to full-text search as an any-word query (best 10 notes), and the search goes to the embeddings as above (at least 0.35, best 10 notes). The two lists are mixed by reciprocal rank fusion (each note scores the sum of 1 / (60 + rank) over the lists it's in), and the best 5 notes are kept. Visibility and trash rules are the same as search.
+2. **Hybrid search.** The search's words, without stop words like "where", "is" and "note", go to full-text search as an any-word query (best 20 notes), and the search goes to the embeddings as above (at least 0.35, best 20 notes). The two lists are mixed by reciprocal rank fusion (each note scores the sum of 1 / (60 + rank) over the lists it's in), and the best 8 notes are kept. Visibility and trash rules are the same as search.
 3. **Cards.** Those notes go to the app at once, numbered, each with a snippet: the full-text snippet around the words found, or else the note's closest chunk with the search's words marked.
-4. **Answer.** Each note's closest 2 passages (by meaning, then by shared words; about 8,000 characters in all) go to the chat model as a numbered system message, then the earlier turns, then the question. The prompt says to answer only from those notes, cite them as `[n]`, keep it short, answer a "where is that note…" question with which note it is rather than its content, and reply `NO_ANSWER` when they don't say. The answer is streamed (`stream: true`); a service that ignores that and sends one JSON body works too, as one piece.
+4. **Answer.** Each note's closest 3 passages (by meaning, then by shared words; about 16,000 characters in all) go to the chat model as a numbered system message, then the earlier turns, then the question. The prompt says to answer only from those notes, cite them as `[n]`, keep it short, answer a "where is that note…" question with which note it is rather than its content, and reply `NO_ANSWER` when they don't say. The answer is streamed (`stream: true`); a service that ignores that and sends one JSON body works too, as one piece.
 
 The reply is server-sent events:
 
@@ -241,14 +241,14 @@ event: error     data: {"message": "Couldn't reach the answer service"}
 | Embeddings, qwen3 query instruction | 27 | 29 | 97% |
 | Mixed, as Ask does | 27 | 30 | 100% |
 
-With the instruction, the note a question was about scored 0.48 (median), and the best match of an unrelated question 0.16–0.40. For "By Meaning", a 0.35 floor made 72% of listed notes right ones, against 52% at 0.3.
+With the instruction, the note a question was about scored 0.48 (median), and the best match of an unrelated question 0.16–0.40. For meaning matches, a 0.35 floor made 72% of listed notes right ones, against 52% at 0.3.
 
-**In the app.** Ask is a place of its own, merged with search: the phone's Ask tab and the top row of the desktop sidebar (`#/ask`). One field, "Search or ask…", sits at the bottom with a send button. Typing lists matching notes, by their words and then **By Meaning**; sending starts a conversation about it, and the same field then asks follow-ups. With no AI services set up it's a plain **Search** tab and row (search icon, "Search notes…", no send button). The empty page is one line saying what it does.
+**In the app.** Ask is the app's AI search, a place of its own: the phone's Ask tab and the top row of the desktop sidebar (`#/ask`). One field, "Ask your notes…", sits at the bottom with a send button. Sending starts a conversation, and the same field then asks follow-ups; nothing is listed while typing. Plain word search is the field at the top of each notes list. With no AI services set up the tab and row are **Search** (search icon), which open Notes with the cursor in its search field. The empty page is one line saying what it does.
 
 - Each turn shows the question as a bubble, then the found notes as cards (number, title, the snippet with matched words marked, and where the note lives) while the answer streams in above them. Once done, only the cited cards stay; if the notes don't say, the cards are listed as the closest ones.
 - The answer's `[n]` become small numbered links. A card or link opens the note; Back returns to the conversation.
 - What's typed and the conversation stay while you visit other tabs, until **New Chat** or logging out; leaving doesn't stop an answer.
-- A note list's search still searches inside its folder, with its own By Meaning group. Its **Ask Your Notes** row opens Ask with the search text and asks it. The row comes first when the search reads like a question (ends in `?` or starts with a question word), otherwise last. With no matches at all it's the empty page's button.
+- A note list's search finds notes inside its folder by their words only. Its **Ask Your Notes** row opens Ask with the search text and asks it. The row comes first when the search reads like a question (ends in `?` or starts with a question word), otherwise last. With no matches at all it's the empty page's button.
 
 ### Tidy Up
 

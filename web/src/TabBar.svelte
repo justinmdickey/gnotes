@@ -16,16 +16,16 @@
     return "notes";
   });
 
-  type Tab = { key: string; label: string; icon: IconName; view: View };
+  type Tab = { key: string; label: string; icon: IconName; view: View; find?: boolean };
   const left: Tab[] = [
     { key: "notes", label: "Notes", icon: "folder", view: { kind: "root" } },
     { key: "recent", label: "Recent", icon: "clock", view: { kind: "all" } },
   ];
-  // Ask is plain Search until AI search is set up.
+  // Until AI search is set up, Ask's place is Search: the Notes list, with the cursor in its search field.
   const right: Tab[] = $derived([
     app.features.ask
       ? { key: "ask", label: "Ask", icon: "sparkle", view: { kind: "ask" } }
-      : { key: "ask", label: "Search", icon: "search", view: { kind: "ask" } },
+      : { key: "search", label: "Search", icon: "search", view: { kind: "root" }, find: true },
     { key: "shared", label: "Shared", icon: "people", view: { kind: "shared-notes" } },
   ]);
 </script>
@@ -38,7 +38,8 @@
       class:on={active === tab.key}
       aria-current={active === tab.key ? "page" : undefined}
       onclick={() => {
-        if (tab.key === "notes") app.listReset++;
+        if (tab.key === "notes" || tab.find) app.listReset++;
+        if (tab.find) app.findNotes = true;
         navigate(tab.view);
       }}
     >

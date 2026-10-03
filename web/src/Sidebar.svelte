@@ -312,14 +312,21 @@
   </header>
 
   <div class="scroll" use:scrollEdge>
-    <!-- The same places as the phone's tab bar: Ask (Search without AI) and Recent, then your folders
+    <!-- The same places as the phone's tab bar: Ask (Search, into the Notes list, without AI) and Recent, then your folders
          and what's shared with you under headings, so the tree starts at the left edge. Trash comes last. -->
     <ul class="group">
       <li>
-        <button class="row flat" class:selected={isSelected({ kind: "ask" })} onclick={() => navigate({ kind: "ask" })}>
-          <Icon name={app.features.ask ? "sparkle" : "search"} />
-          <span class="label">{app.features.ask ? "Ask" : "Search"}</span>
-        </button>
+        {#if app.features.ask}
+          <button class="row flat" class:selected={isSelected({ kind: "ask" })} onclick={() => navigate({ kind: "ask" })}>
+            <Icon name="sparkle" />
+            <span class="label">Ask</span>
+          </button>
+        {:else}
+          <button class="row flat" onclick={() => ((app.findNotes = true), navigate({ kind: "root" }))}>
+            <Icon name="search" />
+            <span class="label">Search</span>
+          </button>
+        {/if}
       </li>
       {@render row({ kind: "all" }, "clock", "Recent")}
     </ul>

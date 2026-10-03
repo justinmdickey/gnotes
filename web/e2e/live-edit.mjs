@@ -532,21 +532,17 @@ try {
   check(picked.length >= 1 && "Groceries".startsWith(picked), `a drag from the margin selects from the line start ("${picked}")`);
   await alice.mouse.click(title.x + title.width + 200, title.y + title.height / 2);
 
-  // Before any AI service is set up, the sidebar's top row is a plain Search: typing finds notes, and nothing offers to ask.
+  // Before any AI service is set up, the sidebar's top row is Search: it puts the cursor in the Notes list's search, and nothing offers to ask.
   const noteHash = await alice.evaluate(() => location.hash);
   await alice.click("nav .row ::-p-text(Search)");
-  await alice.waitForFunction(() => location.hash === "#/ask" && document.querySelector(".pane.list .headerbar .title")?.textContent.trim() === "Search");
-  await alice.type(".pane.list .composer input", "bread");
-  await alice.waitForFunction(() => [...document.querySelectorAll(".pane.list .results .card")].some((c) => c.textContent.includes("Groceries") && c.querySelector(".snippet mark")));
+  await alice.waitForFunction(() => location.hash === "#/" && document.activeElement === document.querySelector(".pane.list .search input"));
+  await alice.keyboard.type("bread");
+  await alice.waitForFunction(() => [...document.querySelectorAll(".pane.list .note")].some((c) => c.textContent.includes("Groceries") && c.querySelector(".snippet mark")));
   check(
-    await alice.evaluate(
-      () =>
-        document.querySelector(".pane.list .composer input").placeholder === "Search notes…" &&
-        !document.querySelector(".pane.list .send") &&
-        !document.querySelector(".pane.list [aria-label*=Ask]"),
-    ),
-    "without AI services the sidebar's Search row finds notes as you type and offers nothing about asking",
+    await alice.evaluate(() => !document.querySelector(".pane.list .ask") && ![...document.querySelectorAll("nav .row")].some((r) => r.textContent.trim() === "Ask")),
+    "without AI services the sidebar's Search row opens the Notes list's search, which finds notes as you type and offers nothing about asking",
   );
+  await alice.click(".pane.list .search .clear");
   await alice.evaluate((h) => (location.hash = h), noteHash);
   await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("bread"));
   // Tidy Up needs the AI chat model.
@@ -695,25 +691,22 @@ try {
   await alice.keyboard.up("Control");
   await alice.keyboard.press("Backspace");
 
-  // Search by meaning: "dairy" isn't in Groceries, but milk and cheese are. Ask answers from it and links it.
+  // Finding by meaning is Ask's: "dairy" isn't in Groceries, but milk and cheese are. The list's search is words only, and offers Ask.
   await alice.evaluate(() => document.activeElement?.blur());
   // Notes are embedded a few seconds after typing stops.
   await alice.waitForFunction(async () => (await fetch("/api/search/meaning?q=dairy").then((r) => r.json())).results.length > 0, { timeout: 40000, polling: 500 });
   await alice.evaluate(() => (location.hash = "#/all"));
   await alice.waitForSelector(".pane.list .search input", { visible: true });
   await alice.type(".pane.list .search input", "dairy");
-  await alice.waitForFunction(
-    () => [...document.querySelectorAll(".pane.list .meaning .note")].some((b) => b.textContent.includes("Groceries") && b.querySelector(".snippet")),
-    { timeout: 5000 },
-  );
+  await alice.waitForSelector(".pane.list .status .pill");
+  // Give the word search time to answer, too.
+  await new Promise((r) => setTimeout(r, 600));
   check(
-    await alice.evaluate(() => !document.querySelector(".pane.list .boxed-list:not(.meaning):not(.ask) .note") && !!document.querySelector(".pane.list .meaning + .ask")),
-    "search finds a note by meaning under By Meaning, with Ask after it",
+    await alice.evaluate(() => !document.querySelector(".pane.list .note") && !document.querySelector(".pane.list .meaning") && document.querySelector(".pane.list .status").textContent.includes("No Results")),
+    "a list's search finds notes by their words only, and offers Ask when none match",
   );
-  if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-search-meaning.png") });
-  // The results slide in, moving Ask down; let them settle before tapping it.
-  await new Promise((r) => setTimeout(r, 400));
-  await alice.click(".pane.list .ask button");
+  if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-search-ask.png") });
+  await alice.click(".pane.list .status .pill");
   // The row opens the Ask screen and asks it there. The notes found show as cards first; the answer streams in under the question after.
   await alice.waitForSelector(".pane.list .turn .card", { timeout: 5000 });
   check(
@@ -765,14 +758,17 @@ try {
   await alice.click("nav .row ::-p-text(Ask)");
   await alice.waitForFunction(() => location.hash === "#/ask" && document.querySelectorAll(".pane.list .turn").length === 2);
   check(true, "the sidebar's Ask row opens the Ask screen with the conversation kept");
-  // New Chat starts over; then typing in the field lists notes, by meaning too, before anything is sent.
+  // New Chat starts over; typing a question lists nothing until it's sent.
   await alice.click(".pane.list .new-chat");
-  await alice.waitForFunction(() => !document.querySelector(".pane.list .turn") && document.querySelector(".pane.list .composer input").placeholder === "Search or ask…");
+  await alice.waitForFunction(() => !document.querySelector(".pane.list .turn") && document.querySelector(".pane.list .composer input").placeholder === "Ask your notes…");
   await alice.type(".pane.list .composer input", "dairy");
-  await alice.waitForFunction(() => [...document.querySelectorAll(".pane.list .meaning .card")].some((c) => c.textContent.includes("Groceries")), { timeout: 5000 });
-  check(true, "New Chat starts over, and typing in Ask lists matching notes before sending");
-  if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-ask-search.png") });
-  await alice.click(".pane.list .composer .clear");
+  await new Promise((r) => setTimeout(r, 600));
+  check(await alice.evaluate(() => !document.querySelector(".pane.list .card")), "New Chat starts over, and Ask lists nothing until a question is sent");
+  await alice.evaluate(() => {
+    const input = document.querySelector(".pane.list .composer input");
+    input.value = "";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
   await alice.evaluate((h) => (location.hash = h), askedNote);
   await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("cheese"));
 
@@ -1508,15 +1504,14 @@ try {
     await alice.waitForFunction(() => document.querySelector(".pane.list .hero h1")?.textContent === "Notes" && location.hash === "#/");
     check(true, "Back from Trash returns to Notes");
 
-    // Ask, a tab of its own: typing finds notes, sending chats about them, follow-ups continue it, and Back leaves.
+    // Ask, a tab of its own: sending chats about your notes, follow-ups continue it, and Back leaves.
     await alice.evaluate(() => [...document.querySelectorAll(".tabbar button")].find((b) => b.textContent.includes("Ask")).click());
     await alice.waitForFunction(() => location.hash === "#/ask" && document.querySelector(".tabbar .tab.on")?.textContent.includes("Ask") && !!document.querySelector(".pane.list .headerbar .account"));
     check(await alice.evaluate(() => document.querySelector(".pane.list .status")?.textContent.includes("Ask Your Notes")), "the Ask tab opens on a plain page with its field");
     await shot("phone-ask-dark");
     await alice.tap(".pane.list .composer input");
     await alice.keyboard.type("cheese");
-    await alice.waitForFunction(() => [...document.querySelectorAll(".pane.list .results .card")].some((c) => c.textContent.includes("Groceries") && c.querySelector("mark")));
-    check(await alice.evaluate(() => !document.querySelector(".tabbar")), "typing in Ask lists matching notes, and the tab bar steps aside for the keyboard");
+    check(await alice.evaluate(() => !document.querySelector(".tabbar") && !document.querySelector(".pane.list .card")), "typing a question in Ask, the tab bar steps aside for the keyboard");
     await shot("phone-ask-typing-dark");
     await alice.keyboard.press("Enter");
     await alice.waitForSelector(".pane.list .turn[aria-busy=false] .answer", { timeout: 8000 });

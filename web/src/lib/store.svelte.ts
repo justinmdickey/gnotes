@@ -34,6 +34,8 @@ export const app = $state({
   features: { transcription: false, live_transcription: false, photo_text: false, summaries: false, max_upload: 0, version: "" } as Features,
   /** Bumped by the Notes tab, so the list drops its search and starts over. */
   listReset: 0,
+  /** Set by Search (without AI), so the Notes list puts the cursor in its search field. */
+  findNotes: false,
   /** Why the user was sent back to the login screen, if it wasn't their choice. */
   signedOutReason: "" as string,
 });
@@ -48,7 +50,7 @@ export function viewTitle(view: View, tree: Tree): string {
   if (view.kind === "all") return "Recent";
   if (view.kind === "shared-notes") return "Shared with Me";
   if (view.kind === "trash") return "Trash";
-  if (view.kind === "ask") return app.features.ask ? "Ask" : "Search";
+  if (view.kind === "ask") return "Ask";
   return tree.notebooks.find((n) => n.id === view.id)?.name ?? "Notes";
 }
 
@@ -208,7 +210,7 @@ export async function endSession() {
 //   #/                                the top folder: top-level notebooks and loose notes
 //   #/all  #/shared  #/nb/<id>        Recent, Shared with Me, a notebook
 //   #/trash                           deleted notes and notebooks
-//   #/ask                             Ask (Search without AI): find notes and ask about them
+//   #/ask                             Ask: a conversation with your notes
 //   #/note/<id>  #/nb/<id>/note/<id>  a note, remembering the list it came from
 
 function viewPath(view: View): string {

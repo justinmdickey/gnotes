@@ -1,34 +1,21 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
-  import type { SnippetPart, TreeNote } from "./lib/api";
+  import type { SnippetPart } from "./lib/api";
   import { answerParts, ask, cards, chat, endChat, startChat, titleParts } from "./lib/ask.svelte";
   import AccountButton from "./lib/AccountButton.svelte";
   import Icon from "./lib/Icon.svelte";
   import StatusPage from "./lib/StatusPage.svelte";
-  import { liveSearch, matchingNotes } from "./lib/search.svelte";
   import { app, openNote, pathOf, viewTitle } from "./lib/store.svelte";
   import { media, scrollEdge } from "./lib/ui.svelte";
 
   /**
-   * Search and Ask in one screen. Typing lists matching notes, by their words and (when it's on)
-   * by meaning; sending starts a conversation about it, and the same field asks follow-ups. Without
-   * AI services set up it's a plain Search. What's typed and the conversation live in lib/ask, so
-   * they're still here after a visit to another tab.
+   * Ask: a conversation with your notes, the app's AI search. Sending a question finds notes by
+   * words and meaning and answers from them; the same field asks follow-ups. Plain word search is
+   * the notes list's. What's typed and the conversation live in lib/ask, so they're still here
+   * after a visit to another tab.
    */
   const ai = $derived(!!app.features.ask);
   const chatting = $derived(ai && chat.turns.length > 0);
-  const q = $derived(chatting ? "" : chat.draft.trim().toLowerCase());
-
-  const search = liveSearch(() => q);
-  const notes = $derived(q ? matchingNotes(q, search.hits) : []);
-  /** Meaning matches the word search didn't already list, best first. */
-  const meaningNotes = $derived.by(() => {
-    const listed = new Set(notes.map((n) => n.id));
-    return search.meaning.flatMap((r) => {
-      const note = app.tree.notes.find((n) => n.id === r.note);
-      return note && !listed.has(note.id) ? [{ note, snippet: r.snippet }] : [];
-    });
-  });
 
   let scroller = $state<HTMLElement>();
   let field = $state<HTMLInputElement>();
@@ -54,7 +41,7 @@
     const text = chat.draft.trim();
     // A phone puts its keyboard away, so the answer has the screen.
     if (media.phone) field?.blur();
-    if (!text || !ai || chat.busy) return;
+    if (!text || chat.busy) return;
     if (chatting) {
       chat.draft = "";
       void ask(text);
@@ -71,24 +58,17 @@
       text: path.length ? path.join(" › ") : note.role === "owner" ? "Notes" : `Shared by ${note.owner}`,
     };
   }
-
-  /** A search result's passage: where its words matched, or else its preview. */
-  function passage(note: TreeNote): SnippetPart[] {
-    const hit = search.hits.get(note.id);
-    if (hit?.snippet.some((p) => p.hit)) return hit.snippet;
-    return note.preview ? [{ text: note.preview, hit: false }] : [];
-  }
 </script>
 
 {#snippet marked(parts: SnippetPart[])}{#each parts as part, i (i)}{#if part.hit}<mark>{part.text}</mark>{:else}{part.text}{/if}{/each}{/snippet}
 
-<!-- A found note, in the results and in a conversation alike: number (in a conversation), title, the passage that matched, and where it lives. -->
-{#snippet card(id: string, title: SnippetPart[], snippet: SnippetPart[], n?: number)}
+<!-- A found note: its number, title, the passage that matched, and where it lives. -->
+{#snippet card(id: string, title: SnippetPart[], snippet: SnippetPart[], n: number)}
   {@const place = where(id)}
   <li>
     <button class="flat card" onclick={() => openNote(id)}>
       <span class="head">
-        {#if n !== undefined}<span class="num" aria-hidden="true">{n}</span>{/if}
+        <span class="num" aria-hidden="true">{n}</span>
         <span class="t">{#if title.length}{@render marked(title)}{:else}New Note{/if}</span>
       </span>
       {#if snippet.length}<span class="dim snippet">{@render marked(snippet)}</span>{/if}
@@ -147,62 +127,33 @@
       {#if chat.turns.some((t) => t.answer)}
         <p class="dim disclaimer">Written by AI from your notes. It can get things wrong.</p>
       {/if}
-    {:else if q}
-      {#if notes.length}
-        <h3 class="group-title">Notes</h3>
-        <ul class="boxed-list cards results">
-          {#each notes as note (note.id)}
-            {@render card(note.id, note.title ? [{ text: note.title, hit: false }] : [], passage(note))}
-          {/each}
-        </ul>
-      {/if}
-      {#if meaningNotes.length}
-        <h3 class="group-title">By Meaning</h3>
-        <ul class="boxed-list cards meaning">
-          {#each meaningNotes as m (m.note.id)}
-            {@render card(m.note.id, m.note.title ? [{ text: m.note.title, hit: false }] : [], m.snippet)}
-          {/each}
-        </ul>
-      {/if}
-      {#if !notes.length && !meaningNotes.length}
-        <StatusPage
-          icon="search"
-          title="No Results"
-          description={ai ? `No note has the words “${chat.draft.trim()}”. Send it to ask your notes instead.` : `Nothing matches “${chat.draft.trim()}”.`}
-          tone="neutral"
-        />
-      {/if}
     {:else if ai}
-      <StatusPage icon="sparkle" title="Ask Your Notes" description="Find notes, or ask a question and get an answer from them." fill />
+      <StatusPage icon="sparkle" title="Ask Your Notes" description="Ask a question, and get an answer from your notes with links to them." fill />
     {:else}
-      <StatusPage icon="search" title="Search Your Notes" description="Find notes by the words in them." fill />
+      <StatusPage icon="sparkle" title="Ask Isn't Set Up" description="An admin can turn on Semantic Search and Summaries in Settings." fill />
     {/if}
   </div>
 
-  <form class="composer" onsubmit={send}>
-    <label class="field">
-      <Icon name={chatting ? "sparkle" : "search"} />
-      <input
-        bind:this={field}
-        bind:value={chat.draft}
-        type={chatting ? "text" : "search"}
-        placeholder={chatting ? "Ask a follow-up…" : ai ? "Search or ask…" : "Search notes…"}
-        aria-label={chatting ? "Ask a follow-up" : ai ? "Search or ask" : "Search notes"}
-        enterkeyhint={ai ? "send" : "search"}
-        maxlength="1000"
-        onfocus={() => (app.typing = media.phone)}
-        onblur={() => (app.typing = false)}
-      />
-      {#if chat.draft && !chatting}
-        <button type="button" class="flat icon circular clear" aria-label="Clear search" onclick={() => ((chat.draft = ""), field?.focus())}><Icon name="close" /></button>
-      {/if}
-    </label>
-    {#if ai}
+  {#if ai}
+    <form class="composer" onsubmit={send}>
+      <label class="field">
+        <Icon name="sparkle" />
+        <input
+          bind:this={field}
+          bind:value={chat.draft}
+          placeholder={chatting ? "Ask a follow-up…" : "Ask your notes…"}
+          aria-label={chatting ? "Ask a follow-up" : "Ask your notes"}
+          enterkeyhint="send"
+          maxlength="1000"
+          onfocus={() => (app.typing = media.phone)}
+          onblur={() => (app.typing = false)}
+        />
+      </label>
       <button class="suggested icon circular send" type="submit" title="Ask" aria-label="Ask" disabled={chat.busy || !chat.draft.trim()}>
         <Icon name="send" />
       </button>
-    {/if}
-  </form>
+    </form>
+  {/if}
 </section>
 
 <style>
@@ -394,15 +345,6 @@
     padding-left: 0;
     box-shadow: none;
     color: var(--fg);
-  }
-
-  .field input::-webkit-search-cancel-button {
-    display: none;
-  }
-
-  .clear {
-    min-width: 28px;
-    min-height: 28px;
   }
 
   /* As tall as the field, so the two line up. */

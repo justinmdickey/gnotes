@@ -14,10 +14,9 @@ export function matchingNotes(q: string, hits: Map<string, SearchResult>, inScop
 }
 
 /**
- * The server's matches for what's typed, for a search field: full-text matches a moment after
- * each key, and notes close in meaning (when semantic search is on) once typing pauses, since each
- * of those embeds the query. Call it while a component starts; `query` is read reactively.
- * Offline both stay empty, and the caller's own title and preview matches are all there is.
+ * The server's full-text matches for what's typed, for a search field, a moment after each key.
+ * Finding notes by meaning is Ask's job. Call it while a component starts; `query` is read
+ * reactively. Offline it stays empty, and the caller's own title and preview matches are all there is.
  */
 export function liveSearch(query: () => string) {
   let found = $state<{ q: string; results: Map<string, SearchResult> } | null>(null);
@@ -36,32 +35,11 @@ export function liveSearch(query: () => string) {
     return () => clearTimeout(timer);
   });
 
-  let meant = $state<{ q: string; results: SearchResult[] } | null>(null);
-  $effect(() => {
-    const text = query();
-    void app.tree; // As above: edits change what matches.
-    if (!text || !app.features.semantic_search) return;
-    const timer = setTimeout(async () => {
-      try {
-        const { results } = await api.searchMeaning(text);
-        if (query() === text) meant = { q: text, results };
-      } catch {
-        // Offline, or the service is down: the word matches are still there.
-      }
-    }, 400);
-    return () => clearTimeout(timer);
-  });
-
   const hits = $derived(found && found.q === query() ? found.results : new Map<string, SearchResult>());
-  const meaning = $derived(meant && meant.q === query() ? meant.results : []);
   return {
     /** Full-text matches for the current query, by note id, best first. */
     get hits() {
       return hits;
-    },
-    /** Notes close in meaning to the current query, best first. */
-    get meaning() {
-      return meaning;
     },
   };
 }
