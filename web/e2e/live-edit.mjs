@@ -950,6 +950,7 @@ try {
   await alice.waitForSelector(".cm-drag-grip.shown");
   const grip = await (await alice.$(".cm-drag-grip")).boundingBox();
   check(Math.abs(grip.y + grip.height / 2 - (two.y + two.h / 2)) < 4 && grip.x + grip.width <= two.x + 30, "pointing at a list item shows a grip beside it");
+  check(await alice.$eval(".cm-drag-grip.shown", (g) => g.title === "Drag to move"), "a note only you edit doesn't say who wrote each line");
   const one = await lineBox("one");
   // Edits less than a second apart undo together, so let the typing settle into its own step.
   await new Promise((r) => setTimeout(r, 1100));

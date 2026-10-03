@@ -1,6 +1,6 @@
 // Who wrote what. Loro knows which peer (one editing session) wrote every character; the server
 // knows whose session each peer was. In a shared note, lines someone else typed in last get a bar
-// in their color. Any line's drag grip says who wrote it and when.
+// in their color, and any line's drag grip says who wrote it and when. Notes only you edit show none of it.
 import { Facet, type Range } from "@codemirror/state";
 import { Decoration, type DecorationSet, type EditorView, ViewPlugin, type ViewUpdate, WidgetType } from "@codemirror/view";
 import type { LoroDoc } from "loro-crdt";
@@ -71,6 +71,8 @@ export function blame(doc: LoroDoc, noteId: string, shared: () => boolean) {
   }
 
   function authorOf(view: EditorView, lineNo: number): LineAuthor | null {
+    // Only you write in a note nobody else can edit, so there's no one to tell apart.
+    if (!shared()) return null;
     const line = view.state.doc.line(lineNo);
     const text = doc.getText("body");
     // The line goes to whoever typed in it last: the character with the highest Lamport time.
