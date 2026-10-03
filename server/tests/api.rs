@@ -761,6 +761,51 @@ async fn fake_whisper() -> String {
 }
 
 #[tokio::test]
+async fn transcription_retries_as_wav_for_wav_only_servers() {
+    use axum::response::IntoResponse;
+    // A real recording, which needs ffmpeg here just as the server does.
+    let dir = TempDir::new().unwrap();
+    let webm = dir.path().join("memo.webm");
+    let made = std::process::Command::new("ffmpeg")
+        .args(["-loglevel", "error", "-f", "lavfi", "-i", "sine=duration=1", "-c:a", "libopus"])
+        .arg(&webm)
+        .status();
+    if !made.is_ok_and(|s| s.success()) {
+        eprintln!("skipping: no ffmpeg with libopus");
+        return;
+    }
+    // Like whisper.cpp built without ffmpeg: anything but WAV is an error.
+    let fake = axum::Router::new().route(
+        "/v1/audio/transcriptions",
+        axum::routing::post(|mut form: axum::extract::Multipart| async move {
+            while let Some(field) = form.next_field().await.unwrap() {
+                if field.name() == Some("file") {
+                    let name = field.file_name().unwrap_or_default().to_owned();
+                    let bytes = field.bytes().await.unwrap();
+                    if !bytes.starts_with(b"RIFF") {
+                        return (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "unsupported container").into_response();
+                    }
+                    return axum::Json(json!({ "text": format!("heard {name}") })).into_response();
+                }
+            }
+            axum::http::StatusCode::BAD_REQUEST.into_response()
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/v1", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, fake).await });
+
+    let whisper = WhisperConfig { url, model: "small".into(), key: None, realtime_url: None };
+    let server = start_with(&dir, Some(whisper)).await;
+    let alice = user(&server, "alice").await;
+    let note = alice.post("/notes", json!({})).await["id"].as_str().unwrap().to_owned();
+    let att: Value =
+        upload(&alice, &note, "memo.webm", "audio/webm", std::fs::read(&webm).unwrap()).await.json().await.unwrap();
+    let out = alice.post(&format!("/attachments/{}/transcribe", att["id"].as_str().unwrap()), json!({})).await;
+    assert_eq!(out["text"], "heard memo.wav");
+}
+
+#[tokio::test]
 async fn transcription_uses_the_configured_service() {
     let fake_url = fake_whisper().await;
     let dir = TempDir::new().unwrap();

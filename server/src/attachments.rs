@@ -242,8 +242,41 @@ pub async fn transcribe(
     if !att.mime.starts_with("audio/") {
         return Err(AppError::BadRequest("Only recordings can be transcribed".into()));
     }
-    let bytes = tokio::fs::read(blob_path(&state.config.data_dir, &att.sha256)).await?;
-    let part = reqwest::multipart::Part::bytes(bytes).file_name(att.filename.clone()).mime_str(&att.mime)?;
+    let blob = blob_path(&state.config.data_dir, &att.sha256);
+    let bytes = tokio::fs::read(&blob).await?;
+    let mut res = send_recording(&state, &whisper, bytes, &att.filename, &att.mime).await?;
+    // Some local servers (whisper.cpp and the like) only read WAV. Convert and try once more.
+    if !res.status().is_success() && att.mime != "audio/wav" {
+        let status = res.status();
+        let body = res.text().await.unwrap_or_default();
+        tracing::info!("transcription failed with {status}, retrying as WAV: {body}");
+        let wav = to_wav(&blob).await.map_err(|e| {
+            tracing::warn!("converting the recording to WAV failed: {e:#}");
+            AppError::Conflict("The transcription service returned an error".into())
+        })?;
+        let name = format!("{}.wav", att.filename.rsplit_once('.').map_or(att.filename.as_str(), |(stem, _)| stem));
+        res = send_recording(&state, &whisper, wav, &name, "audio/wav").await?;
+    }
+    if !res.status().is_success() {
+        let status = res.status();
+        let body = res.text().await.unwrap_or_default();
+        tracing::warn!("transcription failed with {status}: {body}");
+        return Err(AppError::Conflict("The transcription service returned an error".into()));
+    }
+    let body: Value = res.json().await?;
+    let text = body.get("text").and_then(Value::as_str).unwrap_or_default().trim().to_owned();
+    Ok(Json(json!({ "text": text })))
+}
+
+/// Posts one recording to the speech-to-text endpoint and returns its response, whatever the status.
+async fn send_recording(
+    state: &AppState,
+    whisper: &crate::WhisperConfig,
+    bytes: Vec<u8>,
+    filename: &str,
+    mime: &str,
+) -> ApiResult<reqwest::Response> {
+    let part = reqwest::multipart::Part::bytes(bytes).file_name(filename.to_owned()).mime_str(mime)?;
     let form = reqwest::multipart::Form::new()
         .text("model", whisper.model.clone())
         .text("response_format", "json")
@@ -255,19 +288,25 @@ pub async fn transcribe(
     if let Some(key) = &whisper.key {
         req = req.bearer_auth(key);
     }
-    let res = req.send().await.map_err(|e| {
+    req.send().await.map_err(|e| {
         tracing::warn!("transcription request failed: {e:#}");
         AppError::Conflict("Couldn't reach the transcription service".into())
-    })?;
-    if !res.status().is_success() {
-        let status = res.status();
-        let body = res.text().await.unwrap_or_default();
-        tracing::warn!("transcription failed with {status}: {body}");
-        return Err(AppError::Conflict("The transcription service returned an error".into()));
-    }
-    let body: Value = res.json().await?;
-    let text = body.get("text").and_then(Value::as_str).unwrap_or_default().trim().to_owned();
-    Ok(Json(json!({ "text": text })))
+    })
+}
+
+/// Converts a recording to 16 kHz mono WAV with ffmpeg, the format every whisper server reads.
+async fn to_wav(input: &Path) -> anyhow::Result<Vec<u8>> {
+    let out = tempfile::Builder::new().suffix(".wav").tempfile()?;
+    let status = tokio::process::Command::new("ffmpeg")
+        .args(["-nostdin", "-loglevel", "error", "-y", "-i"])
+        .arg(input)
+        .args(["-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le"])
+        .arg(out.path())
+        .kill_on_drop(true)
+        .status()
+        .await?;
+    anyhow::ensure!(status.success(), "ffmpeg exited with {status}");
+    Ok(tokio::fs::read(out.path()).await?)
 }
 
 /// What the vision model is asked. NO_TEXT keeps a photo without words from adding a stray line.

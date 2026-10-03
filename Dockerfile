@@ -25,6 +25,9 @@ RUN GNOTES_VERSION="${VERSION#v}" CARGO_BUILD_JOBS=$JOBS cargo build --release -
 FROM debian:trixie-slim
 # CA roots for outgoing HTTPS, e.g. a hosted speech-to-text service.
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+# ffmpeg turns recordings into WAV for speech-to-text servers that only read WAV. A static build, since
+# Debian's package pulls in a few hundred MB of desktop libraries.
+COPY --from=mwader/static-ffmpeg:7.1 /ffmpeg /usr/local/bin/ffmpeg
 RUN useradd --system --home /data gnotes && mkdir -p /data && chown gnotes /data
 COPY --from=server /src/target/release/gnotes-server /usr/local/bin/gnotes-server
 COPY --from=web /src/web/dist /app/web
