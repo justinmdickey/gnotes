@@ -695,11 +695,13 @@
     overflow-wrap: anywhere;
   }
 
-  /* Matched words read as the text itself, the way GNOME search marks them: full color, bold. */
+  /* Matched words stand out like a highlighter pen. */
   .snippet mark {
-    background: none;
-    color: var(--fg);
-    font-weight: 700;
+    padding: 0 2px;
+    border-radius: 3px;
+    background: var(--highlight-bg);
+    color: var(--highlight-fg);
+    box-decoration-break: clone;
   }
 
 

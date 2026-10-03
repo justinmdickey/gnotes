@@ -32,6 +32,9 @@
   --warning-bg: #e5a50a;
   /* The shared badge: Adwaita yellow, so shared things stand out from blue actions. */
   --shared: #e5a50a;
+  /* Search matches, marked like a yellow highlighter. */
+  --highlight-bg: #f9f06b;
+  --highlight-fg: rgb(0 0 6 / 85%);
   /* Sidebar level lines, one color per depth, from the Adwaita palette. */
   --guide-1: #3584e4;
   --guide-2: #2ec27e;
@@ -100,6 +103,7 @@
     --warning: #ffc252;
     --warning-bg: #cd9309;
     --shared: #f6d32d;
+    --highlight-bg: #f6d32d;
     --guide-1: #62a0ea;
     --guide-2: #57e389;
     --guide-3: #f8e45c;
