@@ -40,13 +40,15 @@ pub async fn load_whisper(db: &sqlx::SqlitePool) -> anyhow::Result<Option<Option
     load(db, WHISPER_KEY).await
 }
 
-/// The services that speak the OpenAI chat API, each its own setting.
+/// The OpenAI-compatible services set by a URL, model and key, each its own setting.
 #[derive(Clone, Copy)]
 pub enum Chat {
     /// Reads the text in photos.
     Vision,
-    /// Summarizes notes.
+    /// Summarizes notes, and writes Ask's answers.
     Summary,
+    /// Embeddings for semantic search (`/embeddings`, not chat).
+    Embed,
 }
 
 impl Chat {
@@ -54,6 +56,7 @@ impl Chat {
         match name {
             "vision" => Ok(Chat::Vision),
             "summary" => Ok(Chat::Summary),
+            "embed" => Ok(Chat::Embed),
             _ => Err(AppError::NotFound),
         }
     }
@@ -62,6 +65,7 @@ impl Chat {
         match self {
             Chat::Vision => "vision",
             Chat::Summary => "summary",
+            Chat::Embed => "embed",
         }
     }
 
@@ -69,6 +73,7 @@ impl Chat {
         match self {
             Chat::Vision => &state.vision,
             Chat::Summary => &state.summary,
+            Chat::Embed => &state.embed,
         }
     }
 
@@ -76,6 +81,7 @@ impl Chat {
         match self {
             Chat::Vision => "qwen2.5vl",
             Chat::Summary => "llama3.1",
+            Chat::Embed => "nomic-embed-text",
         }
     }
 }
@@ -162,7 +168,7 @@ pub async fn get_settings(State(state): State<AppState>, CurrentUser(me): Curren
     require_admin(&me)?;
     let saved = load_whisper(&state.db).await?.is_some();
     let mut out = json!({ "whisper": describe(state.whisper.read().await.as_ref(), saved) });
-    for chat in [Chat::Vision, Chat::Summary] {
+    for chat in [Chat::Vision, Chat::Summary, Chat::Embed] {
         let saved = load_chat(&state.db, chat).await?.is_some();
         out[chat.key()] = describe_chat(chat.slot(&state).read().await.as_ref(), saved);
     }
@@ -261,7 +267,7 @@ impl ChatBody {
     }
 }
 
-/// `PUT /admin/settings/{vision|summary}`
+/// `PUT /admin/settings/{vision|summary|embed}`
 pub async fn put_chat(
     State(state): State<AppState>,
     CurrentUser(me): CurrentUser,
@@ -274,10 +280,14 @@ pub async fn put_chat(
     let next = body.resolve(chat, slot.as_ref())?;
     save(&state.db, chat.key(), &next).await?;
     *slot = next;
+    if let Chat::Embed = chat {
+        // A new service or model: embed whatever it hasn't seen yet.
+        state.embedder.refresh_all();
+    }
     Ok(Json(json!({ chat.key(): describe_chat(slot.as_ref(), true) })))
 }
 
-/// `POST /admin/settings/{vision|summary}/test`
+/// `POST /admin/settings/{vision|summary|embed}/test`
 pub async fn test_chat(
     State(state): State<AppState>,
     CurrentUser(me): CurrentUser,

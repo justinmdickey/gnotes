@@ -11,6 +11,7 @@ pub mod live;
 pub mod perms;
 pub mod rooms;
 pub mod search;
+pub mod semantic;
 pub mod settings;
 pub mod shares;
 pub mod summary;
@@ -54,10 +55,13 @@ pub struct Config {
     pub vision: Option<ChatConfig>,
     /// Default note summaries, from env. An admin's saved setting overrides it.
     pub summary: Option<ChatConfig>,
+    /// Default embeddings service for semantic search, from env. An admin's saved setting overrides it.
+    pub embed: Option<ChatConfig>,
 }
 
-/// An OpenAI-compatible chat API, e.g. Ollama, llama.cpp or vLLM on local hardware, or a hosted one.
-/// Used with a vision model to read the text in photos, and with a text model to summarize notes.
+/// An OpenAI-compatible API, e.g. Ollama, llama.cpp or vLLM on local hardware, or a hosted one.
+/// Used with a vision model to read the text in photos, with a text model to summarize notes and
+/// answer questions, and with an embedding model (`/embeddings`) for semantic search.
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct ChatConfig {
     /// Base URL including the version, e.g. `http://ollama:11434/v1`. `/chat/completions` is appended.
@@ -102,6 +106,7 @@ impl Config {
             }),
             vision: chat_from_env("VISION"),
             summary: chat_from_env("SUMMARY"),
+            embed: chat_from_env("EMBED"),
         })
     }
 
@@ -124,8 +129,12 @@ pub struct AppState {
     pub vision: Arc<tokio::sync::RwLock<Option<ChatConfig>>>,
     /// The note-summary service in use right now.
     pub summary: Arc<tokio::sync::RwLock<Option<ChatConfig>>>,
+    /// The embeddings service for semantic search in use right now.
+    pub embed: Arc<tokio::sync::RwLock<Option<ChatConfig>>>,
     /// Keeps the plain Markdown copies under `data/export` up to date.
     pub export: Arc<export::Exporter>,
+    /// Keeps the notes' embeddings for semantic search up to date.
+    pub embedder: Arc<semantic::Embedder>,
 }
 
 impl AppState {
@@ -196,6 +205,8 @@ pub fn router(state: AppState) -> Router {
         .route("/notes/{id}/summary", get(summary::get_summary).post(summary::summarize))
         .route("/notes/{id}/authors", get(authors::list_authors))
         .route("/search", get(search::search))
+        .route("/search/meaning", get(semantic::search))
+        .route("/ask", post(semantic::ask))
         .route("/attachments/{id}/text", post(attachments::photo_text))
         .route("/ws", get(ws::handler))
         .fallback(|| async { error::AppError::NotFound });
@@ -225,7 +236,13 @@ pub async fn build(config: Config) -> anyhow::Result<AppState> {
         Some(saved) => saved,
         None => config.summary.clone(),
     };
+    let embed = match settings::load_chat(&db, settings::Chat::Embed).await? {
+        Some(saved) => saved,
+        None => config.embed.clone(),
+    };
     let state = AppState {
+        embed: Arc::new(tokio::sync::RwLock::new(embed)),
+        embedder: Default::default(),
         whisper: Arc::new(tokio::sync::RwLock::new(whisper)),
         vision: Arc::new(tokio::sync::RwLock::new(vision)),
         summary: Arc::new(tokio::sync::RwLock::new(summary)),
@@ -240,11 +257,14 @@ pub async fn build(config: Config) -> anyhow::Result<AppState> {
     Ok(state)
 }
 
-/// Runs until the listener fails. Also purges old trash hourly and keeps the Markdown copies.
+/// Runs until the listener fails. Also purges old trash hourly and keeps the Markdown copies and
+/// semantic search embeddings.
 pub async fn serve(state: AppState, listener: tokio::net::TcpListener) -> anyhow::Result<()> {
     export::spawn(state.clone());
+    semantic::spawn(state.clone());
     let db = state.db.clone();
     let exporter = state.export.clone();
+    let embedder = state.embedder.clone();
     tokio::spawn(async move {
         let mut hourly = tokio::time::interval(Duration::from_secs(60 * 60));
         loop {
@@ -253,6 +273,8 @@ pub async fn serve(state: AppState, listener: tokio::net::TcpListener) -> anyhow
                 tracing::error!("purging trash: {e:#}");
             }
             exporter.changed();
+            // Retries notes that failed and picks up restored ones that were never embedded.
+            embedder.refresh_all();
         }
     });
     axum::serve(listener, router(state)).await?;

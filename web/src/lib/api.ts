@@ -126,8 +126,15 @@ export interface SearchResult {
   title: string;
   /** A few words around the match, from anywhere in the note. */
   snippet: SnippetPart[];
-  /** Which search found it: "text" (full-text). Other kinds of search can add their own. */
+  /** Which search found it: "text" (full-text) or "meaning" (semantic search, whose snippet has no hits). */
   source: string;
+}
+
+/** Ask's reply. `answer` cites notes as [n]; it's null when the notes don't say. */
+export interface AskAnswer {
+  answer: string | null;
+  /** The notes the answer was written from, by their [n] number. */
+  sources: { n: number; note: string; title: string }[];
 }
 
 /** A note's AI summary. `summary` is null until someone asks for one. */
@@ -146,6 +153,10 @@ export interface Features {
   photo_text: boolean;
   /** Notes can be summarized, on request, in their Summary tab. */
   summaries: boolean;
+  /** Search also finds notes by meaning. Absent from older servers. */
+  semantic_search?: boolean;
+  /** Questions can be asked of your notes (semantic search plus the summary chat model). */
+  ask?: boolean;
   max_upload: number;
   /** The server's release, e.g. "0.7.0", or "dev". */
   version: string;
@@ -209,6 +220,9 @@ export const api = {
   adminResetPassword: (id: string, password: string) => request("POST", `/admin/users/${id}/password`, { password }),
   tree: () => request<Tree>("GET", "/tree"),
   search: (q: string) => request<{ results: SearchResult[] }>("GET", `/search?q=${encodeURIComponent(q)}`),
+  /** Notes about what `q` means, even without its words. Empty when semantic search is off. */
+  searchMeaning: (q: string) => request<{ results: SearchResult[] }>("GET", `/search/meaning?q=${encodeURIComponent(q)}`),
+  ask: (question: string) => request<AskAnswer>("POST", "/ask", { question }),
 
   createNotebook: (name: string, parent_id: string | null) =>
     request<{ id: string }>("POST", "/notebooks", { name, parent_id }),
@@ -220,13 +234,14 @@ export const api = {
   /** `id` is a client-made UUIDv7, so a note made offline keeps the same id. */
   createNote: (notebook_id: string | null, id?: string) => request<{ id: string }>("POST", "/notes", { id, notebook_id }),
   deleteNote: (id: string) => request("DELETE", `/notes/${id}`),
-  adminSettings: () => request<{ whisper: ServiceSettings; vision: ServiceSettings; summary: ServiceSettings }>("GET", "/admin/settings"),
+  adminSettings: () =>
+    request<{ whisper: ServiceSettings; vision: ServiceSettings; summary: ServiceSettings; embed: ServiceSettings }>("GET", "/admin/settings"),
   saveWhisper: (body: ServiceInput) => request<{ whisper: ServiceSettings }>("PUT", "/admin/settings/whisper", body),
   testWhisper: (body: ServiceInput) => request<{ ok: boolean; message: string }>("POST", "/admin/settings/whisper/test", body),
-  /** The chat-API services: reading photos and summarizing notes. */
-  saveChat: <K extends "vision" | "summary">(kind: K, body: ServiceInput) =>
+  /** The services set by URL, model and key: reading photos, summarizing notes, and embeddings for semantic search. */
+  saveChat: <K extends "vision" | "summary" | "embed">(kind: K, body: ServiceInput) =>
     request<Record<K, ServiceSettings>>("PUT", `/admin/settings/${kind}`, body).then((r) => r[kind]),
-  testChat: (kind: "vision" | "summary", body: ServiceInput) =>
+  testChat: (kind: "vision" | "summary" | "embed", body: ServiceInput) =>
     request<{ ok: boolean; message: string }>("POST", `/admin/settings/${kind}/test`, body),
   summary: (noteId: string) => request<NoteSummary>("GET", `/notes/${noteId}/summary`),
   /** Whose editing session each Loro peer was, for showing who wrote what. */

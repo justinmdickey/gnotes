@@ -8,6 +8,7 @@
   import StatusPage from "./lib/StatusPage.svelte";
   import { app, composeNote, drag, goBack, navigate, notesFor, openNote, parentView, pathOf, subtree, trashNotebook, viewTitle } from "./lib/store.svelte";
   import { media, scrollEdge } from "./lib/ui.svelte";
+  import AskDialog from "./AskDialog.svelte";
   import FolderList from "./FolderList.svelte";
   import MoveDialog from "./MoveDialog.svelte";
   import NewNotebookDialog from "./NewNotebookDialog.svelte";
@@ -145,6 +146,27 @@
   });
   const hits = $derived(found?.q === q ? found.results : new Map<string, SearchResult>());
 
+  /** Notes about what was typed, from semantic search, once they arrive. Each embeds the query, so it waits for a pause. */
+  let meant = $state<{ q: string; results: SearchResult[] } | null>(null);
+  $effect(() => {
+    const text = q;
+    void app.tree; // As above: edits change what matches.
+    if (!text || !app.features.semantic_search) return;
+    const timer = setTimeout(async () => {
+      try {
+        const { results } = await api.searchMeaning(text);
+        if (q === text) meant = { q: text, results };
+      } catch {
+        // Offline, or the service is down: the word matches are still there.
+      }
+    }, 400);
+    return () => clearTimeout(timer);
+  });
+  /** Ask's row: first when the search reads like a question, otherwise after the results. */
+  const asking = $derived(!!q && !!app.features.ask);
+  const questionLike = $derived(/\?$|^(who|what|when|where|why|how|which|whose|is|are|was|were|do|does|did|can|could|should|would|will|have|has)\b/i.test(q));
+  let question = $state<string | null>(null);
+
   const notes = $derived.by(() => {
     if (!q) return notesFor(app.view, app.tree);
     // Best full-text matches first, then anything whose title or preview contains the text.
@@ -153,6 +175,17 @@
     return app.tree.notes
       .filter((n) => scope(n.notebook_id, n.role) && (hits.has(n.id) || `${n.title}\n${n.preview}`.toLowerCase().includes(q)))
       .toSorted((a, b) => rank(a) - rank(b) || b.updated_at - a.updated_at);
+  });
+
+  /** Meaning matches the word search didn't already list, in the folder being searched, best first. */
+  const meaningNotes = $derived.by(() => {
+    if (!q || meant?.q !== q) return [];
+    const listed = new Set(notes.map((n) => n.id));
+    return meant.results.flatMap((r) => {
+      const note = app.tree.notes.find((n) => n.id === r.note);
+      if (!note || listed.has(note.id) || !scope(note.notebook_id, note.role)) return [];
+      return [{ note, snippet: r.snippet.map((p) => p.text).join("") }];
+    });
   });
 
   /** Apple Notes-style buckets: Today, Yesterday, Previous 7 Days, Previous 30 Days, then by month. */
@@ -284,50 +317,72 @@
       {/if}
     </label>
 
+    {#snippet noteRow(note: TreeNote, meaning?: string)}
+      <!-- On desktop a note drags onto a notebook in the sidebar to move there. -->
+      <button
+        class="flat note"
+        class:selected={app.noteId === note.id}
+        onclick={() => openNote(note.id)}
+        draggable={!media.phone && note.role !== "viewer"}
+        ondragstart={(e) => {
+          drag.item = { kind: "note", id: note.id };
+          e.dataTransfer?.setData("application/x-gnotes", note.id);
+          if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+        }}
+        ondragend={() => (drag.item = null)}
+      >
+        <span class="note-title">
+          <span class="t">{note.title || "New Note"}</span>
+          {#if note.shared}<span class="shared-badge" title="Shared"><Icon name="person" size={16} /></span>{/if}
+        </span>
+        <span class="meta">
+          <span class="time">{when(note.updated_at)}</span>
+          {#if meaning}
+            <!-- The passage closest in meaning, which may share no words with the search. -->
+            <span class="dim snippet">{meaning}</span>
+          {:else if hits.get(note.id)?.snippet.some((p) => p.hit)}
+            <!-- Where the words matched, which may be far down the note. -->
+            <span class="dim snippet">{#each hits.get(note.id)!.snippet as part, i (i)}{#if part.hit}<mark>{part.text}</mark>{:else}{part.text}{/if}{/each}</span>
+          {:else}
+            <span class="dim preview">{note.preview || (note.role !== "owner" ? note.owner : "No additional text")}</span>
+          {/if}
+        </span>
+        {#if showWhere}
+          <span class="where dim"><Icon name={note.notebook_id ? "folder" : note.role === "owner" ? "home" : "people"} size={12} /><span>{where(note)}</span></span>
+        {/if}
+      </button>
+    {/snippet}
+
+    {#snippet askRow(first: boolean)}
+      <ul class="boxed-list ask" class:first transition:reveal>
+        <li>
+          <button class="flat place-row" onclick={() => (question = query.trim())}>
+            <Icon name="sparkle" />
+            <span class="name">Ask Your Notes<span class="dim sub">“{query.trim()}”</span></span>
+            <span class="dim chev"><Icon name="next" /></span>
+          </button>
+        </li>
+      </ul>
+    {/snippet}
+
     <!-- A new list for each view; only adds and removes within one view animate. -->
     {#key app.view.kind === "notebook" ? app.view.id : app.view.kind}
+    {#if asking && questionLike}{@render askRow(true)}{/if}
     <FolderList {folders} showWhere={!!q} />
     {#each groups as group (group.label)}
       <h3 class="group-title">{group.label}</h3>
       <ul class="boxed-list">
         {#each group.notes as note (note.id)}
-          <li transition:reveal>
-            <!-- On desktop a note drags onto a notebook in the sidebar to move there. -->
-            <button
-              class="flat note"
-              class:selected={app.noteId === note.id}
-              onclick={() => openNote(note.id)}
-              draggable={!media.phone && note.role !== "viewer"}
-              ondragstart={(e) => {
-                drag.item = { kind: "note", id: note.id };
-                e.dataTransfer?.setData("application/x-gnotes", note.id);
-                if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
-              }}
-              ondragend={() => (drag.item = null)}
-            >
-              <span class="note-title">
-                <span class="t">{note.title || "New Note"}</span>
-                {#if note.shared}<span class="shared-badge" title="Shared"><Icon name="person" size={16} /></span>{/if}
-              </span>
-              <span class="meta">
-                <span class="time">{when(note.updated_at)}</span>
-                {#if hits.get(note.id)?.snippet.some((p) => p.hit)}
-                  <!-- Where the words matched, which may be far down the note. -->
-                  <span class="dim snippet">{#each hits.get(note.id)!.snippet as part, i (i)}{#if part.hit}<mark>{part.text}</mark>{:else}{part.text}{/if}{/each}</span>
-                {:else}
-                  <span class="dim preview">{note.preview || (note.role !== "owner" ? note.owner : "No additional text")}</span>
-                {/if}
-              </span>
-              {#if showWhere}
-                <span class="where dim"><Icon name={note.notebook_id ? "folder" : note.role === "owner" ? "home" : "people"} size={12} /><span>{where(note)}</span></span>
-              {/if}
-            </button>
-          </li>
+          <li transition:reveal>{@render noteRow(note)}</li>
         {/each}
       </ul>
     {:else}
-      {#if folders.length}
-        <!-- The folders above are enough; no empty state under them. -->
+      {#if folders.length || meaningNotes.length}
+        <!-- The results below are enough; no empty state over them. -->
+      {:else if query && asking && !questionLike}
+        <StatusPage icon="search" title="No Results" description="No note has the words “{query}”." tone="neutral">
+          <button class="pill" onclick={() => (question = query.trim())}><Icon name="sparkle" />Ask Your Notes</button>
+        </StatusPage>
       {:else if query}
         <StatusPage icon="search" title="No Results" description="Nothing matches “{query}”." tone="neutral" />
       {:else if app.view.kind === "shared-notes"}
@@ -338,6 +393,15 @@
         <StatusPage icon="note" title="No Notes Yet" description="Start one with the pencil button up top." />
       {/if}
     {/each}
+    {#if meaningNotes.length}
+      <h3 class="group-title">By Meaning</h3>
+      <ul class="boxed-list meaning">
+        {#each meaningNotes as m (m.note.id)}
+          <li transition:reveal>{@render noteRow(m.note, m.snippet)}</li>
+        {/each}
+      </ul>
+    {/if}
+    {#if asking && !questionLike && (groups.length || folders.length || meaningNotes.length)}{@render askRow(false)}{/if}
     {/key}
     {#if media.phone && app.view.kind === "root" && !q}
       <!-- Last, where the desktop sidebar keeps it too. -->
@@ -366,6 +430,10 @@
       <button class="suggested" type="submit" form="rename-notebook" disabled={!newName.trim()}>Rename</button>
     {/snippet}
   </Dialog>
+{/if}
+
+{#if question}
+  <AskDialog {question} onclose={() => (question = null)} />
 {/if}
 
 {#if creatingFolder}
@@ -671,6 +739,36 @@
     flex: 1;
   }
 
+  /* Ask: above the results for a question, after them otherwise. The question goes under the label. */
+  .ask {
+    margin-top: 20px;
+  }
+
+  .ask.first {
+    margin: 2px 0 12px;
+  }
+
+  /* Sized like the note rows around it: regular text on wide screens, larger on phones. */
+  .ask .place-row {
+    min-height: 52px;
+    font-size: var(--text-md);
+  }
+
+  .ask .name {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    padding: 8px 0;
+  }
+
+  .ask .sub {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--text-sm);
+    font-weight: 400;
+  }
+
   .place-row .chev {
     display: flex;
   }
@@ -712,6 +810,11 @@
       padding: 13px 16px;
     }
     .note-title {
+      font-size: var(--text-lg);
+    }
+
+    .ask .place-row {
+      min-height: 56px;
       font-size: var(--text-lg);
     }
 

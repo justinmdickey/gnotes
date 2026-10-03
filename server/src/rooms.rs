@@ -369,6 +369,7 @@ impl Room {
             tracing::error!("saving update for note {key}: {e:#}");
         }
         state.export.changed();
+        state.embedder.changed(&key);
         if summary_changed {
             st.title = title;
             st.preview = preview;

@@ -381,6 +381,7 @@ pub async fn import(
     tx.commit().await?;
     state.hub.tree_changed();
     state.export.changed();
+    state.embedder.refresh_all();
     Ok(Json(result))
 }
 

@@ -53,7 +53,7 @@ fn readable(body: &str) -> String {
 }
 
 /// A model's answer without code fences around it.
-fn clean(answer: &str) -> String {
+pub(crate) fn clean(answer: &str) -> String {
     let text = answer.trim();
     match text.strip_prefix("```") {
         Some(inner) => inner.split_once('\n').map_or("", |(_, rest)| rest).trim_end().trim_end_matches("```").trim().to_owned(),
