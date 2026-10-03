@@ -166,6 +166,36 @@ try {
   await alice.waitForFunction(() => document.querySelector(".editor .headerbar .title strong")?.textContent === "Groceries", { timeout: 5000 });
   check(true, "title follows the first line");
 
+  // Undo and redo, from the keyboard and the format bar. A pause ends an undo step.
+  const undoState = () => alice.evaluate(() => ["Undo", "Redo"].map((l) => document.querySelector(`.format button[aria-label=${l}]`).disabled).join(","));
+  const press = async (...keys) => {
+    for (const k of keys.slice(0, -1)) await alice.keyboard.down(k);
+    await alice.keyboard.press(keys.at(-1));
+    for (const k of keys.slice(0, -1).reverse()) await alice.keyboard.up(k);
+  };
+  const oats = (has) => alice.waitForFunction((has) => document.querySelector(".cm-content").innerText.includes("milk oats") === has && document.querySelector(".cm-content").innerText.includes("milk"), { timeout: 3000 }, has);
+  await new Promise((r) => setTimeout(r, 1100));
+  await alice.keyboard.type(" oats");
+  await press("Control", "z");
+  await oats(false);
+  check(true, "Ctrl+Z takes back the last thing typed");
+  await press("Control", "Shift", "Z");
+  await oats(true);
+  check(true, "Ctrl+Shift+Z redoes it");
+  await press("Control", "z");
+  await oats(false);
+  await press("Control", "y");
+  await oats(true);
+  check(true, "Ctrl+Y redoes too");
+  check((await undoState()) === "false,true", "with nothing undone, Redo is disabled");
+  await alice.click(".format button[aria-label=Undo]");
+  await oats(false);
+  await alice.click(".format button[aria-label=Redo]");
+  await oats(true);
+  await alice.click(".format button[aria-label=Undo]");
+  await oats(false);
+  check((await undoState()) === "false,false", "the Undo and Redo buttons step through the same history");
+
   await alice.click("button[aria-label='Share']");
   await alice.waitForSelector("dialog button.add");
   await alice.click("dialog button.add");

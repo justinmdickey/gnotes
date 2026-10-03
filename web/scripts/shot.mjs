@@ -2,7 +2,7 @@
 // Starts a throwaway server with demo data, logs in, and saves one PNG per screen.
 //
 // Usage: npm run build && cargo build -p gnotes-server && node scripts/shot.mjs [options] [screen...]
-//   screens: home recent shared account trash notebook:<name> note:<title> search:<query>
+//   screens: home recent shared account trash notebook:<name> note:<title> edit:<title> search:<query>
 //            (default: home notebook:Kitchen note:Groceries account)
 //   --phone | --desktop   viewport (default: both)
 //   --dark | --light      color scheme (default: dark)
@@ -103,12 +103,18 @@ async function go(page, target) {
     search: "#/",
     notebook: `#/nb/${tree.notebooks.find((n) => n.name === arg)?.id}`,
     note: `#/note/${tree.notes.find((n) => n.title === arg)?.id}`,
+    edit: `#/note/${tree.notes.find((n) => n.title === arg)?.id}`,
   }[kind];
   if (!hash || hash.endsWith("undefined")) throw new Error(`unknown screen ${target}`);
   await page.evaluate((h) => (location.hash = h), hash);
   if (kind === "search") {
     await page.waitForSelector(".pane.list .search input");
     await page.type(".pane.list .search input", arg);
+  }
+  // Typing: the cursor in the note, with the format bar (on phones, the keyboard bar) up.
+  if (kind === "edit") {
+    await page.waitForSelector(".cm-content[contenteditable=true]");
+    await page.click(".cm-content");
   }
   await settle();
 }

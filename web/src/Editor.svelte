@@ -15,6 +15,7 @@
   import { livePreview } from "./lib/livePreview";
   import { slashMenu } from "./lib/slash";
   import { dragHandles } from "./lib/dragHandles";
+  import { undoCommands } from "./lib/undo";
   import { sync } from "./lib/sync";
   import Menu from "./lib/Menu.svelte";
   import StatusPage from "./lib/StatusPage.svelte";
@@ -78,6 +79,10 @@
   const doc = new LoroDoc();
   const ephemeral = new EphemeralStore(30_000);
   const undoManager = new UndoManager(doc, {});
+  /** Whether there's anything to undo or redo, for the format bar's buttons. */
+  let history = $state({ undo: false, redo: false });
+  const refreshHistory = () => (history = { undo: undoManager.canUndo(), redo: undoManager.canRedo() });
+  const steps = undoCommands(undoManager, refreshHistory);
   const editable = new Compartment();
   let hasData = false;
 
@@ -213,6 +218,7 @@
           recordingMarker,
           dropImages,
           EditorView.lineWrapping,
+          steps.keymap,
           keymap.of([...formatKeymap, ...defaultKeymap]),
           // While typing, the text moves up a line at a time to keep this much room below the
           // cursor, so the line being written never touches the format bar or keyboard.
@@ -222,6 +228,7 @@
           EditorView.updateListener.of((u) => {
             if (u.focusChanged) app.typing = focused = u.view.hasFocus;
             if (u.docChanged || u.selectionSet) ({ block, inline } = activeFormats(u.state));
+            if (u.docChanged) refreshHistory();
           }),
           LoroExtensions(
             doc,
@@ -453,7 +460,7 @@
 
     {#if canEdit && view && tab === "note"}
       <div class="format" style:bottom="{keyboard}px" bind:offsetHeight={formatHeight}>
-        <FormatBar {view} {block} {inline} onphoto={pickPhoto} onrecord={startRecording} ondone={() => view?.contentDOM.blur()} />
+        <FormatBar {view} {block} {inline} {history} onundo={steps.undo} onredo={steps.redo} onphoto={pickPhoto} onrecord={startRecording} ondone={() => view?.contentDOM.blur()} />
       </div>
     {/if}
   </div>

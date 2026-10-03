@@ -7,6 +7,9 @@
     view,
     block,
     inline,
+    history,
+    onundo,
+    onredo,
     onphoto,
     onrecord,
     ondone,
@@ -14,6 +17,10 @@
     view: EditorView;
     block: Block;
     inline: Set<Inline>;
+    /** Whether there's anything to undo or redo. */
+    history: { undo: boolean; redo: boolean };
+    onundo: () => void;
+    onredo: () => void;
     onphoto: () => void;
     onrecord: () => void;
     ondone: () => void;
@@ -45,11 +52,16 @@
 <!--
   Class hints for the compact layout: .main shows in the everyday row, .extra only
   while "Aa" is open. With room for everything, all show except the Aa toggle.
+  Bold and italic sit behind "Aa" there, as in Apple Notes, to leave room for undo and redo.
 -->
 <div class="bar" class:styles-open={stylesOpen} role="toolbar" aria-label="Formatting" tabindex="-1" onmousedown={keep} onpointerdown={keep}>
   <button class="flat icon aa main extra" class:active={stylesOpen} aria-label="Text styles" aria-expanded={stylesOpen} onclick={() => (stylesOpen = !stylesOpen)}>
     <Icon name="textformat" />
   </button>
+
+  <button class="flat icon main history" title="Undo" aria-label="Undo" disabled={!history.undo} onclick={onundo}><Icon name="undo" /></button>
+  <button class="flat icon main history" title="Redo" aria-label="Redo" disabled={!history.redo} onclick={onredo}><Icon name="redo" /></button>
+  <span class="sep"></span>
 
   {#each styles as [b, label] (b)}
     <button class="flat chip extra style-{b}" class:active={block === b} onclick={() => setBlock(view, b)}>{label}</button>
@@ -57,7 +69,7 @@
   <span class="sep"></span>
 
   {#each marks as [m, icon, label] (m)}
-    <button class="flat icon mark-{m}" class:main={m !== "strike"} class:extra={m === "strike"} class:active={inline.has(m)} title={label} aria-label={label} aria-pressed={inline.has(m)} onclick={() => toggleInline(view, m)}>
+    <button class="flat icon extra mark-{m}" class:active={inline.has(m)} title={label} aria-label={label} aria-pressed={inline.has(m)} onclick={() => toggleInline(view, m)}>
       <Icon name={icon} />
     </button>
   {/each}
@@ -166,10 +178,10 @@
       display: inline-flex;
     }
 
-    /* Lists come right after Aa, marks after them, as in Apple Notes. */
+    /* Lists come right after Aa, then undo and redo, as in Apple Notes. */
     .aa { order: 0; }
     .list { order: 1; }
-    .main[class*="mark-"] { order: 2; }
+    .history { order: 2; }
     .attach { order: 3; color: var(--accent); }
     .done { order: 4; }
   }
