@@ -14,6 +14,7 @@
   import { codeBlocks } from "./lib/codeBlocks";
   import { livePreview } from "./lib/livePreview";
   import { slashMenu } from "./lib/slash";
+  import { dragHandles } from "./lib/dragHandles";
   import { sync } from "./lib/sync";
   import Menu from "./lib/Menu.svelte";
   import StatusPage from "./lib/StatusPage.svelte";
@@ -208,6 +209,7 @@
           livePreview,
           codeBlocks,
           slashMenu({ photo: () => pickPhoto(), record: () => startRecording() }),
+          dragHandles,
           recordingMarker,
           dropImages,
           EditorView.lineWrapping,
@@ -1175,6 +1177,63 @@
       center / 80% no-repeat;
   }
 
+  /* The grip beside a block, in the margin left of its text, and where a dragged block will land. */
+  .page :global(.cm-drag-grip) {
+    position: absolute;
+    z-index: 3;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 28px;
+    min-height: 0;
+    padding: 0;
+    translate: calc(-100% - 4px) -50%;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--dim-fg);
+    cursor: grab;
+    touch-action: none;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--fast) ease;
+  }
+
+  .page :global(.cm-drag-grip.shown) {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .page :global(.cm-drag-grip:hover),
+  .page :global(.cm-drag-active .cm-drag-grip) {
+    background: var(--hover);
+    color: var(--fg);
+  }
+
+  .page :global(.cm-drag-active),
+  .page :global(.cm-drag-active .cm-drag-grip) {
+    cursor: grabbing;
+    user-select: none;
+  }
+
+  .page :global(.cm-drag-source) {
+    opacity: 0.35;
+  }
+
+  .page :global(.cm-drop-marker) {
+    position: absolute;
+    z-index: 3;
+    display: none;
+    height: 2px;
+    border-radius: 1px;
+    background: var(--accent-bg);
+    pointer-events: none;
+  }
+
+  .page :global(.cm-drop-marker.shown) {
+    display: block;
+  }
+
   /* The "/" menu: a popover of styles and things to add, under the cursor. */
   .page :global(.cm-tooltip.cm-slash) {
     overflow: hidden;
@@ -1352,6 +1411,11 @@
 
     .column {
       --gutter: 18px;
+    }
+
+    .page :global(.cm-drag-grip) {
+      width: 18px;
+      translate: calc(-100% - 1px) -50%;
     }
 
     .page {

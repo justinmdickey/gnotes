@@ -586,6 +586,36 @@ try {
   await new Promise((r) => setTimeout(r, 300));
   check(!(await alice.$(".cm-slash")), "a slash inside code is just a slash");
   for (let i = 0; i < 2; i++) await alice.keyboard.press("Backspace");
+  // Pointing at a block shows a grip beside it; dragging the grip moves the block, nested items and all.
+  await alice.keyboard.down("Control");
+  await alice.keyboard.press("End");
+  await alice.keyboard.up("Control");
+  // Lists continue on Enter; two spaces before the marker nest an item.
+  await alice.keyboard.type("\n- one\ntwo\n");
+  await alice.keyboard.press("Home");
+  await alice.keyboard.type("  ");
+  await alice.keyboard.press("End");
+  // Enter on an empty nested item steps back out a level.
+  await alice.keyboard.type("two child\n\nthree");
+  await alice.evaluate(() => document.activeElement?.blur());
+  const lineBox = (t) => alice.evaluate((t) => {
+    const r = [...document.querySelectorAll(".cm-line")].find((l) => l.textContent.replace("•", "").trim() === t).getBoundingClientRect();
+    return { x: r.x, y: r.y, w: r.width, h: r.height };
+  }, t);
+  const two = await lineBox("two");
+  await alice.mouse.move(two.x + 60, two.y + two.h / 2);
+  await alice.waitForSelector(".cm-drag-grip.shown");
+  const grip = await (await alice.$(".cm-drag-grip")).boundingBox();
+  check(Math.abs(grip.y + grip.height / 2 - (two.y + two.h / 2)) < 4 && grip.x + grip.width <= two.x + 30, "pointing at a list item shows a grip beside it");
+  const one = await lineBox("one");
+  await alice.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
+  await alice.mouse.down();
+  for (let i = 1; i <= 8; i++) await alice.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2 + ((one.y + 2 - grip.y - grip.height / 2) * i) / 8);
+  await alice.waitForSelector(".cm-drop-marker.shown");
+  if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-drag-block.png") });
+  await alice.mouse.up();
+  const order = await alice.$$eval(".cm-line", (ls) => ls.map((l) => l.textContent.replace("•", "").trim()).filter((t) => ["one", "two", "two child", "three"].includes(t)).join(","));
+  check(order === "two,two child,one,three", `dragging a list item's grip moves it with its nested item (${order})`);
   // The note covers the folder's page; Back returns to it.
   await alice.goBack();
   await alice.waitForSelector(".list header button[aria-label='New note']", { visible: true });
@@ -860,6 +890,10 @@ try {
     await shot("phone-slash-menu");
     await alice.keyboard.press("Escape");
     for (let i = 0; i < 2; i++) await alice.keyboard.press("Backspace");
+    // On a touch screen the grip sits beside the line with the cursor.
+    await alice.waitForSelector(".cm-drag-grip.shown");
+    check(true, "on a phone the line being typed on shows its grip");
+    await shot("phone-drag-grip");
     // The keyboard bar has its own way out, so Done at the top isn't the only one.
     await alice.tap("button[aria-label='Hide keyboard']");
     await alice.waitForSelector(".tabbar");
