@@ -20,14 +20,17 @@
   const right: Tab[] = [{ key: "shared", label: "Shared", icon: "people", view: { kind: "shared-notes" } }];
 </script>
 
-<!-- The phone's one bottom bar, the same on every screen. Tapping a tab goes to its top. -->
+<!-- The phone's one bottom bar, the same on every screen. Tapping a tab goes to its top; Notes also clears a search. -->
 <nav class="tabbar" aria-label="Sections">
   {#snippet tabButton(tab: Tab)}
     <button
       class="flat tab"
       class:on={active === tab.key}
       aria-current={active === tab.key ? "page" : undefined}
-      onclick={() => navigate(tab.view)}
+      onclick={() => {
+        if (tab.key === "notes") app.listReset++;
+        navigate(tab.view);
+      }}
     >
       <span class="ind"><Icon name={tab.icon} /></span><span>{tab.label}</span>
     </button>

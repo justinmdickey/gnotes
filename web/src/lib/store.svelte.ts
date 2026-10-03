@@ -29,6 +29,8 @@ export const app = $state({
   drawer: false,
   /** Optional server abilities, like speech-to-text. */
   features: { transcription: false, live_transcription: false, photo_text: false, summaries: false, max_upload: 0, version: "" } as Features,
+  /** Bumped by the Notes tab, so the list drops its search and starts over. */
+  listReset: 0,
   /** Why the user was sent back to the login screen, if it wasn't their choice. */
   signedOutReason: "" as string,
 });

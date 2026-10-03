@@ -24,6 +24,9 @@
   const canMakeFolder = $derived(app.view.kind === "root" || canEdit);
 
   let query = $state("");
+  $effect(() => {
+    if (app.listReset) query = "";
+  });
   /** The big title has scrolled away, so the headerbar shows the name instead. */
   let compact = $state(false);
   /** The phone's top folder shows the app's name in the headerbar, as the sidebar does on desktop. */
