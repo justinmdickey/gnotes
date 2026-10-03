@@ -919,6 +919,11 @@
     position: relative;
   }
 
+  /* A memo player is as wide as the line allows, up to a card's width. */
+  .page :global(.cm-attachment.is-audio) {
+    width: min(100%, 380px);
+  }
+
   /* A photo's or memo's tools: a pill in its corner while you point at it, always on touch screens. */
   .page :global(.cm-att-tools) {
     position: absolute;
@@ -1065,7 +1070,7 @@
     display: flex;
     align-items: center;
     gap: 12px;
-    width: min(100vw - 48px, 380px);
+    width: 100%;
     padding: 10px 14px 10px 10px;
     border-radius: var(--radius-md);
     background: var(--card-bg);

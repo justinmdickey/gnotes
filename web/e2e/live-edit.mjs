@@ -1442,6 +1442,9 @@ try {
     });
     await alice.waitForSelector(".cm-attachment.is-image img");
     await alice.evaluate(() => document.activeElement?.blur());
+    // A memo player and a photo fit the line, so the note never pans sideways.
+    const sideways = () => alice.evaluate(() => [document.scrollingElement, document.querySelector(".pane.editor .scroll")].every((el) => el.scrollWidth <= el.clientWidth));
+    check(await sideways(), "a note with a memo and a photo doesn't scroll sideways on a phone");
     await shot("phone-attachments-dark");
     // The Summary tab on a phone, on a note with plenty in it.
     await alice.tap(".tabs button:last-child");
@@ -1539,7 +1542,6 @@ try {
     await alice.evaluate((id) => (location.hash = `#/all/note/${id}`), plansId);
     await alice.waitForSelector(".cm-kanban-card");
     await shot("phone-table-board-dark");
-    const sideways = () => alice.evaluate(() => [document.scrollingElement, document.querySelector(".pane.editor .scroll")].every((el) => el.scrollWidth <= el.clientWidth));
     check(await sideways(), "a wide board scrolls inside itself, not the page");
     // A finger holds a card still for a moment, then drags it to another column.
     const butter = await (await alice.$(".cm-kanban-col[data-col='1'] .cm-kanban-card")).boundingBox();
