@@ -244,7 +244,7 @@ try {
   await bob.waitForSelector(".peers .avatar[title='Alice is here']", { timeout: 5000 });
   check(true, "bob sees alice in the presence list");
 
-  // Who wrote what: each line gets a bar in the color of whoever typed in it last, saying who and when.
+  // Who wrote what: in a shared note, a line someone else typed in last gets a bar in their color.
   await bob.click(".cm-content");
   await bob.keyboard.down("Control");
   await bob.keyboard.press("End");
@@ -252,18 +252,20 @@ try {
   await bob.keyboard.type("\ncheese");
   await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("cheese"), { timeout: 5000 });
   await bob.evaluate(() => document.activeElement?.blur());
-  await alice.click("button[aria-label='Note menu']");
-  await alice.click(".popover ::-p-text(Show Who Wrote What)");
-  await alice.waitForFunction(() => !document.querySelector(".popover"));
   const blameOf = (t) => alice.evaluate((t) => [...document.querySelectorAll(".cm-line")].find((l) => l.textContent.includes(t))?.querySelector(".cm-blame")?.title ?? "", t);
   await alice.waitForFunction(() => [...document.querySelectorAll(".cm-line")].find((l) => l.textContent.includes("cheese"))?.querySelector(".cm-blame")?.title.startsWith("Bob"), { timeout: 8000 });
   const [titleBy, cheeseBy] = [await blameOf("Groceries"), await blameOf("cheese")];
-  check(titleBy.startsWith("Alice ·") && cheeseBy.startsWith("Bob ·"), `Show Who Wrote What puts each line down to its author (${titleBy} / ${cheeseBy})`);
+  check(titleBy === "" && cheeseBy.startsWith("Bob ·"), `in a shared note, lines someone else wrote get a bar and yours don't (${cheeseBy})`);
   if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-blame.png") });
-  await alice.click("button[aria-label='Note menu']");
-  await alice.click(".popover ::-p-text(Show Who Wrote What)");
-  await alice.waitForFunction(() => !document.querySelector(".popover"));
-  await alice.waitForFunction(() => !document.querySelector(".cm-blame"));
+  // Pointing at a line's grip says who wrote it.
+  const milk = await alice.evaluate(() => {
+    const r = [...document.querySelectorAll(".cm-line")].find((l) => l.textContent.includes("milk")).getBoundingClientRect();
+    return { x: r.x, y: r.y, height: r.height };
+  });
+  await alice.mouse.move(milk.x + 40, milk.y + milk.height / 2);
+  await alice.waitForFunction(() => document.querySelector(".cm-drag-grip.shown")?.title.startsWith("You ·"));
+  check(true, "a line's grip says who wrote it");
+  await alice.mouse.move(5, 5);
 
   // The checklist button turns the current line into a task; tapping the circle ticks it for everyone.
   await alice.click(".cm-content");

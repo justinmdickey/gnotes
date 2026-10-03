@@ -16,7 +16,7 @@
   import { slashMenu } from "./lib/slash";
   import { dragHandles } from "./lib/dragHandles";
   import { undoCommands } from "./lib/undo";
-  import { blame, setBlame } from "./lib/blame";
+  import { blame } from "./lib/blame";
   import { tables } from "./lib/tables";
   import { kanban } from "./lib/kanban";
   import { sync } from "./lib/sync";
@@ -82,12 +82,12 @@
   const doc = new LoroDoc();
   // Times on each change, so who-wrote-what can say when.
   doc.setRecordTimestamp(true);
-  /** Bars beside each line showing who wrote it, from the note menu. */
-  let showBlame = $state(false);
-  function toggleBlame() {
-    showBlame = !showBlame;
-    view?.dispatch({ effects: setBlame.of(showBlame) });
-  }
+  /** Others can edit this note, so lines they wrote get a bar in their color. */
+  const shared = $derived(!!note && (note.shared || note.role !== "owner"));
+  $effect(() => {
+    void shared;
+    untrack(() => view?.dispatch({}));
+  });
   const ephemeral = new EphemeralStore(30_000);
   const undoManager = new UndoManager(doc, {});
   /** Whether there's anything to undo or redo, for the format bar's buttons. */
@@ -228,7 +228,7 @@
           codeBlocks,
           slashMenu({ photo: () => pickPhoto(), record: () => startRecording() }),
           dragHandles,
-          blame(doc, noteId),
+          blame(doc, noteId, () => shared),
           tables,
           kanban,
           recordingMarker,
@@ -459,7 +459,6 @@
         <Menu
           label="Note menu"
           items={[
-            { label: "Show Who Wrote What", icon: "people", checked: showBlame, onselect: toggleBlame },
             { label: "Move to…", icon: "move", onselect: () => (moving = true) },
             ...(role === "owner"
               ? [{ label: "Move to Trash", icon: "trash" as const, destructive: true, onselect: () => trashNote(noteId) }]
@@ -1224,10 +1223,6 @@
     inset: -0.2em -6px;
   }
 
-  .page :global(.cm-blame-on .cm-drag-grip) {
-    display: none;
-  }
-
   /* The grip beside a block, in the margin left of its text, and where a dragged block will land. */
   .page :global(.cm-drag-grip) {
     position: absolute;
@@ -1248,6 +1243,12 @@
     opacity: 0;
     pointer-events: none;
     transition: opacity var(--fast) ease;
+  }
+
+  /* On someone else's line the grip takes their color, like the bar it sits over. */
+  .page :global(.cm-drag-grip.authored) {
+    background: var(--view-bg);
+    color: var(--user-color);
   }
 
   .page :global(.cm-drag-grip.shown) {

@@ -7,6 +7,8 @@ import { Decoration, EditorView, ViewPlugin, type ViewUpdate } from "@codemirror
 import { EMBED } from "./attachments";
 import { blockOf } from "./format";
 import { iconSvg } from "./icons";
+import { lineAuthor, type LineAuthor } from "./blame";
+import { toast } from "./ui.svelte";
 
 /** A run of whole lines, by line number. */
 interface Block {
@@ -107,8 +109,9 @@ const handles = ViewPlugin.fromClass(
     grip: HTMLButtonElement;
     marker: HTMLDivElement;
     block: Block | null = null;
+    author: LineAuthor | null = null;
     pointerLine = 0;
-    drag: { block: Block; before: number; y: number; scroller: HTMLElement | null; frame: number } | null = null;
+    drag: { block: Block; before: number; y: number; startY: number; moved: boolean; scroller: HTMLElement | null; frame: number } | null = null;
 
     constructor(readonly view: EditorView) {
       this.grip = document.createElement("button");
@@ -161,6 +164,10 @@ const handles = ViewPlugin.fromClass(
       this.block = block;
       this.grip.classList.toggle("shown", !!block);
       if (!block) return;
+      // Pointing at the grip says who wrote the line; on someone else's line it wears their color.
+      const author = (this.author = state.facet(lineAuthor)?.(view, block.first) ?? null);
+      this.grip.title = author ? `${author.label}\nDrag to move` : "Drag to move";
+      this.grip.className = `cm-drag-grip shown${author?.known && !author.mine ? ` authored ${author.color}` : ""}`;
       view.requestMeasure({
         read: () => {
           const line = state.doc.line(block.first);
@@ -186,7 +193,7 @@ const handles = ViewPlugin.fromClass(
       e.preventDefault();
       e.stopPropagation();
       this.grip.setPointerCapture(e.pointerId);
-      this.drag = { block: this.block, before: this.block.first, y: e.clientY, scroller: scrollParent(this.view.dom), frame: 0 };
+      this.drag = { block: this.block, before: this.block.first, y: e.clientY, startY: e.clientY, moved: false, scroller: scrollParent(this.view.dom), frame: 0 };
       this.view.dom.classList.add("cm-drag-active");
       this.view.dispatch({ effects: setDragging.of(this.block) });
       this.grip.addEventListener("pointermove", this.move);
@@ -199,6 +206,7 @@ const handles = ViewPlugin.fromClass(
     move = (e: PointerEvent) => {
       if (!this.drag) return;
       this.drag.y = e.clientY;
+      if (Math.abs(e.clientY - this.drag.startY) > 4) this.drag.moved = true;
       this.track();
     };
 
@@ -248,7 +256,9 @@ const handles = ViewPlugin.fromClass(
 
     end = () => {
       const drag = this.finish();
-      if (drag) moveBlock(this.view, drag.block, drag.before);
+      // A tap that doesn't drag says who wrote the line, which matters most on a phone.
+      if (drag && !drag.moved && this.author) toast(this.author.label);
+      else if (drag) moveBlock(this.view, drag.block, drag.before);
       this.place();
     };
 
