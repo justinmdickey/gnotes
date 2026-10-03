@@ -333,7 +333,8 @@ impl Room {
         st.unsnapshotted += 1;
         let key = self.id.to_string();
         let now = now_ms();
-        let (title, preview) = summarize(&st.doc.get_text("body").to_string());
+        let body = st.doc.get_text("body").to_string();
+        let (title, preview) = summarize(&body);
         let summary_changed = title != st.title || preview != st.preview;
         let persisted = async {
             sqlx::query("INSERT INTO note_updates (note_id, seq, data, user_id, created_at) VALUES (?, ?, ?, ?, ?)")
@@ -360,6 +361,7 @@ impl Room {
                 .bind(&key)
                 .execute(&state.db)
                 .await?;
+            crate::search::index(&state.db, &key, &body).await?;
             anyhow::Ok(())
         }
         .await;

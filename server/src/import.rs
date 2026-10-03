@@ -349,6 +349,7 @@ pub async fn import(
             .execute(&mut *tx)
             .await?;
             seed(&mut *tx, &note_id, &body).await?;
+            crate::search::index(&mut *tx, &note_id, &body).await?;
             for (path, att_id) in linked {
                 used.insert(path.clone());
                 let bytes = &batch.files[&path];

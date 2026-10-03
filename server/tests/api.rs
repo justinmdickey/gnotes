@@ -1130,3 +1130,120 @@ async fn notes_are_copied_to_plain_markdown() {
     let _server = start(&dir).await;
     export_settles(&dir, &[&old]).await;
 }
+
+/// Search results for `q` as (note id, matched words).
+async fn search(user: &User, q: &str) -> Vec<(String, Vec<String>)> {
+    let url = reqwest::Url::parse_with_params(&user.url("/search"), &[("q", q)]).unwrap();
+    let res = user.http.get(url).send().await.unwrap();
+    assert!(res.status().is_success(), "search {q:?}: {}", res.status());
+    let body: Value = res.json().await.unwrap();
+    body["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| {
+            let hits = r["snippet"].as_array().unwrap().iter().filter(|s| s["hit"] == true).map(|s| s["text"].as_str().unwrap().to_owned());
+            (r["note"].as_str().unwrap().to_owned(), hits.collect())
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn search_finds_words_deep_in_notes() {
+    let dir = TempDir::new().unwrap();
+    let server = start(&dir).await;
+    let alice = user(&server, "alice").await;
+    let note = alice.post("/notes", json!({})).await["id"].as_str().unwrap().to_owned();
+    let mut ws = alice.ws().await;
+    ws.join_and_sync(&note, None).await;
+    let filler = "nothing to see on this line\n".repeat(60);
+    ws.send_frame(0x01, &note, &edit(&LoroDoc::new(), 0, &format!("# Shopping\nmilk\n{filler}- [ ] **Zucchini** from the market\n"))).await;
+    let other = alice.post("/notes", json!({})).await["id"].as_str().unwrap().to_owned();
+    ws.join_and_sync(&other, None).await;
+    let other_doc = LoroDoc::new();
+    ws.send_frame(0x01, &other, &edit(&other_doc, 0, "# Café notes\nzebra")).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Only on the 63rd line, found while still typing the word, with the match marked.
+    assert_eq!(search(&alice, "zucchini").await, vec![(note.clone(), vec!["Zucchini".to_owned()])]);
+    assert_eq!(search(&alice, "zu").await.len(), 1, "prefix of the last word");
+    assert_eq!(search(&alice, "market zucc").await.len(), 1, "every word must match");
+    assert_eq!(search(&alice, "market zebra").await.len(), 0);
+    assert_eq!(search(&alice, "cafe").await[0].0, other, "accents don't matter");
+    // Query syntax is just text, never an error.
+    for q in ["\"zucchini", "zucchini OR", "-milk", "*", "(milk", "NEAR(milk", "milk\"*:^", ""] {
+        search(&alice, q).await;
+    }
+    assert_eq!(search(&alice, "\"milk\" (").await.len(), 1);
+
+    // Edits keep it current.
+    ws.send_frame(0x01, &other, &edit(&other_doc, 0, "pumpkin\n")).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(search(&alice, "pumpkin").await.len(), 1);
+
+    // Trashed notes drop out, and come back when restored.
+    alice.send(reqwest::Method::DELETE, &format!("/notes/{note}"), json!({})).await;
+    assert!(search(&alice, "zucchini").await.is_empty());
+    alice.post(&format!("/trash/note/{note}/restore"), json!({})).await;
+    assert_eq!(search(&alice, "zucchini").await.len(), 1);
+
+    // Imported notes are searchable right away.
+    let res = import(&alice, None, vec![("Trip.md", format!("{filler}passport").into_bytes())]).await;
+    assert!(res.status().is_success());
+    assert_eq!(search(&alice, "passport").await.len(), 1);
+
+    // Notes written before search existed are indexed at startup.
+    drop(ws);
+    sqlx::query("DELETE FROM note_text").execute(&server.state.db).await.unwrap();
+    assert!(search(&alice, "zucchini").await.is_empty());
+    server.task.abort();
+    drop(server);
+    let server = start(&dir).await;
+    let alice = login(&server.base, "alice").await;
+    assert_eq!(search(&alice, "zucchini").await.len(), 1);
+    assert_eq!(search(&alice, "passport").await.len(), 1);
+}
+
+#[tokio::test]
+async fn search_follows_sharing() {
+    let dir = TempDir::new().unwrap();
+    let server = start(&dir).await;
+    let alice = user(&server, "alice").await;
+    let bob = user(&server, "bob").await;
+    let home = alice.post("/notebooks", json!({ "name": "Home" })).await["id"].as_str().unwrap().to_owned();
+    let kitchen = alice.post("/notebooks", json!({ "name": "Kitchen", "parent_id": home })).await["id"].as_str().unwrap().to_owned();
+    let in_kitchen = alice.post("/notes", json!({ "notebook_id": kitchen })).await["id"].as_str().unwrap().to_owned();
+    let loose = alice.post("/notes", json!({})).await["id"].as_str().unwrap().to_owned();
+    let mut ws = alice.ws().await;
+    for note in [&in_kitchen, &loose] {
+        ws.join_and_sync(note, None).await;
+        ws.send_frame(0x01, note, &edit(&LoroDoc::new(), 0, "# Secret\nthe word is rhubarb")).await;
+    }
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(search(&alice, "rhubarb").await.len(), 2);
+    assert!(search(&bob, "rhubarb").await.is_empty(), "not shared");
+
+    // Through a parent notebook, and directly.
+    let via_notebook = alice
+        .post("/shares", json!({ "resource_type": "notebook", "resource_id": home, "username": "bob", "role": "viewer" }))
+        .await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let ids = |results: Vec<(String, Vec<String>)>| results.into_iter().map(|r| r.0).collect::<Vec<_>>();
+    assert_eq!(ids(search(&bob, "rhubarb").await), vec![in_kitchen.clone()]);
+    let direct = alice
+        .post("/shares", json!({ "resource_type": "note", "resource_id": loose, "username": "bob", "role": "editor" }))
+        .await["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(search(&bob, "rhubarb").await.len(), 2);
+
+    // Unsharing takes them out of bob's results.
+    alice.send(reqwest::Method::DELETE, &format!("/shares/{via_notebook}"), json!({})).await;
+    assert_eq!(ids(search(&bob, "rhubarb").await), vec![loose.clone()]);
+    alice.send(reqwest::Method::DELETE, &format!("/shares/{direct}"), json!({})).await;
+    assert!(search(&bob, "rhubarb").await.is_empty());
+    assert_eq!(search(&alice, "rhubarb").await.len(), 2);
+}

@@ -10,6 +10,7 @@ pub mod invites;
 pub mod live;
 pub mod perms;
 pub mod rooms;
+pub mod search;
 pub mod settings;
 pub mod shares;
 pub mod summary;
@@ -194,6 +195,7 @@ pub fn router(state: AppState) -> Router {
         .route("/admin/settings/{chat}/test", post(settings::test_chat))
         .route("/notes/{id}/summary", get(summary::get_summary).post(summary::summarize))
         .route("/notes/{id}/authors", get(authors::list_authors))
+        .route("/search", get(search::search))
         .route("/attachments/{id}/text", post(attachments::photo_text))
         .route("/ws", get(ws::handler))
         .fallback(|| async { error::AppError::NotFound });
@@ -223,7 +225,7 @@ pub async fn build(config: Config) -> anyhow::Result<AppState> {
         Some(saved) => saved,
         None => config.summary.clone(),
     };
-    Ok(AppState {
+    let state = AppState {
         whisper: Arc::new(tokio::sync::RwLock::new(whisper)),
         vision: Arc::new(tokio::sync::RwLock::new(vision)),
         summary: Arc::new(tokio::sync::RwLock::new(summary)),
@@ -233,7 +235,9 @@ pub async fn build(config: Config) -> anyhow::Result<AppState> {
         hub: Default::default(),
         export: Default::default(),
         http: reqwest::Client::builder().timeout(Duration::from_secs(300)).build()?,
-    })
+    };
+    search::backfill(&state).await?;
+    Ok(state)
 }
 
 /// Runs until the listener fails. Also purges old trash hourly and keeps the Markdown copies.

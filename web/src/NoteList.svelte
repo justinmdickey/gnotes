@@ -1,7 +1,7 @@
 <script lang="ts">
   import { slide } from "svelte/transition";
   import { cubicOut } from "svelte/easing";
-  import { api, type TreeNote, type TreeNotebook } from "./lib/api";
+  import { api, type SearchResult, type TreeNote, type TreeNotebook } from "./lib/api";
   import Dialog from "./lib/Dialog.svelte";
   import Icon from "./lib/Icon.svelte";
   import Menu from "./lib/Menu.svelte";
@@ -127,11 +127,32 @@
   let newName = $state("");
   let sharing = $state(false);
 
+  /** The server's full-text matches for `q`, once they arrive. Offline, search has titles and previews only. */
+  let found = $state<{ q: string; results: Map<string, SearchResult> } | null>(null);
+  $effect(() => {
+    const text = q;
+    void app.tree; // Edits that change the list can change what matches, too.
+    if (!text) return;
+    const timer = setTimeout(async () => {
+      try {
+        const { results } = await api.search(text);
+        if (q === text) found = { q: text, results: new Map(results.map((r) => [r.note, r])) };
+      } catch {
+        // Offline or the server is down: the title and preview matches below are all there is.
+      }
+    }, 150);
+    return () => clearTimeout(timer);
+  });
+  const hits = $derived(found?.q === q ? found.results : new Map<string, SearchResult>());
+
   const notes = $derived.by(() => {
     if (!q) return notesFor(app.view, app.tree);
+    // Best full-text matches first, then anything whose title or preview contains the text.
+    const order = [...hits.keys()];
+    const rank = (n: TreeNote) => (hits.has(n.id) ? order.indexOf(n.id) : order.length);
     return app.tree.notes
-      .filter((n) => scope(n.notebook_id, n.role) && `${n.title}\n${n.preview}`.toLowerCase().includes(q))
-      .toSorted((a, b) => b.updated_at - a.updated_at);
+      .filter((n) => scope(n.notebook_id, n.role) && (hits.has(n.id) || `${n.title}\n${n.preview}`.toLowerCase().includes(q)))
+      .toSorted((a, b) => rank(a) - rank(b) || b.updated_at - a.updated_at);
   });
 
   /** Apple Notes-style buckets: Today, Yesterday, Previous 7 Days, Previous 30 Days, then by month. */
@@ -290,7 +311,12 @@
               </span>
               <span class="meta">
                 <span class="time">{when(note.updated_at)}</span>
-                <span class="dim preview">{note.preview || (note.role !== "owner" ? note.owner : "No additional text")}</span>
+                {#if hits.get(note.id)?.snippet.some((p) => p.hit)}
+                  <!-- Where the words matched, which may be far down the note. -->
+                  <span class="dim snippet">{#each hits.get(note.id)!.snippet as part, i (i)}{#if part.hit}<mark>{part.text}</mark>{:else}{part.text}{/if}{/each}</span>
+                {:else}
+                  <span class="dim preview">{note.preview || (note.role !== "owner" ? note.owner : "No additional text")}</span>
+                {/if}
               </span>
               {#if showWhere}
                 <span class="where dim"><Icon name={note.notebook_id ? "folder" : note.role === "owner" ? "home" : "people"} size={12} /><span>{where(note)}</span></span>
@@ -586,6 +612,23 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  /* Up to two lines, so the match shows even when it's mid-sentence. */
+  .snippet {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+  }
+
+  /* Matched words read as the text itself, the way GNOME search marks them: full color, bold. */
+  .snippet mark {
+    background: none;
+    color: var(--fg);
+    font-weight: 700;
   }
 
 

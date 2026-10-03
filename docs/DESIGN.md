@@ -141,6 +141,8 @@ DELETE /notes/:id                  to trash
 GET    /trash                      my directly deleted items
 POST   /trash/:type/:id/restore
 
+GET    /search?q=                  full-text search of notes I can see -> {results}
+
 GET    /notes/:id/shares           owner only (same for /notebooks/:id/shares)
 POST   /shares                     {resource_type, resource_id, username, role}
 PATCH  /shares/:id                 {role} (owner) or {hidden} (recipient)
@@ -160,6 +162,18 @@ GET    /health                     (public)
 ```
 
 Changes to `/tree` are pushed over the websocket as `tree_changed`, so clients only refetch when something changed.
+
+`/search` matches every word typed as a prefix (`gro mil` finds "Groceries … milk"), anywhere in a note. Quotes and FTS5 operators in `q` are plain text. Results come best first, at most 200, never trashed notes:
+
+```jsonc
+{"results": [{"note": "<id>", "title": "Groceries", "source": "text",
+              "snippet": [{"text": "…buy ", "hit": false}, {"text": "milk", "hit": true}]}]}
+```
+
+- `snippet` is a few words of the text after the title, around the match. A title-only match has no `hit` parts.
+- `source` says which search found the note; full-text is `"text"`. Other kinds of search add their own value.
+- The server keeps each note's text, with Markdown marks stripped, in an FTS5 index (`note_text`, `note_search`) updated on every edit and import. Notes from before the index existed are added at startup.
+- The PWA folds results into the folder being searched and adds any title or preview matches. Offline it has only those.
 
 ## Websocket protocol
 

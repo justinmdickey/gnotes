@@ -257,6 +257,23 @@ try {
   const [titleBy, cheeseBy] = [await blameOf("Groceries"), await blameOf("cheese")];
   check(titleBy === "" && cheeseBy.startsWith("Bob ·"), `in a shared note, lines someone else wrote get a bar and yours don't (${cheeseBy})`);
   if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-blame.png") });
+  // Search reads whole notes on the server: "cheese" is past the title and preview, and half-typed.
+  for (const p of [alice, bob]) {
+    await p.evaluate(() => (location.hash = "#/all"));
+    await p.waitForSelector(".pane.list .search input", { visible: true });
+    await p.type(".pane.list .search input", "chee");
+    await p.waitForFunction(
+      () => [...document.querySelectorAll(".pane.list .note")].some((b) => b.textContent.includes("Groceries") && b.querySelector(".snippet mark")?.textContent === "cheese"),
+      { timeout: 5000 },
+    );
+  }
+  check(true, "search finds a word deep in a note, for its owner and who it's shared with, and marks it");
+  if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-search-deep.png") });
+  for (const p of [alice, bob]) {
+    await p.click(".pane.list .search .clear");
+    await p.goBack();
+    await p.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("cheese"));
+  }
   // Pointing at a line's grip says who wrote it.
   const milk = await alice.evaluate(() => {
     const r = [...document.querySelectorAll(".cm-line")].find((l) => l.textContent.includes("milk")).getBoundingClientRect();

@@ -114,6 +114,22 @@ export interface ImportResult {
   notebook_id: string | null;
 }
 
+/** A piece of a search snippet; `hit` pieces are the words that matched. */
+export interface SnippetPart {
+  text: string;
+  hit: boolean;
+}
+
+/** A note that matched a search, best first. Only notes you can see come back. */
+export interface SearchResult {
+  note: string;
+  title: string;
+  /** A few words around the match, from anywhere in the note. */
+  snippet: SnippetPart[];
+  /** Which search found it: "text" (full-text). Other kinds of search can add their own. */
+  source: string;
+}
+
 /** A note's AI summary. `summary` is null until someone asks for one. */
 export interface NoteSummary {
   summary: string | null;
@@ -192,6 +208,7 @@ export const api = {
     request("PATCH", `/admin/users/${id}`, patch),
   adminResetPassword: (id: string, password: string) => request("POST", `/admin/users/${id}/password`, { password }),
   tree: () => request<Tree>("GET", "/tree"),
+  search: (q: string) => request<{ results: SearchResult[] }>("GET", `/search?q=${encodeURIComponent(q)}`),
 
   createNotebook: (name: string, parent_id: string | null) =>
     request<{ id: string }>("POST", "/notebooks", { name, parent_id }),
