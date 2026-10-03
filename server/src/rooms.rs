@@ -366,6 +366,7 @@ impl Room {
         if let Err(e) = persisted {
             tracing::error!("saving update for note {key}: {e:#}");
         }
+        state.export.changed();
         if summary_changed {
             st.title = title;
             st.preview = preview;

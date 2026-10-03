@@ -63,10 +63,16 @@ The server keeps a readable copy of every note on disk, a few seconds after each
 
 ```
 data/export/<username>/<notebook path>/<title> (<short id>).md
-data/export/<username>/<notebook path>/attachments/<filename>
+data/export/<username>/<notebook path>/attachments/<filename> (<short id>).<ext>
 ```
 
 These copies are for backup and leaving the app. The SQL database and Loro snapshots remain the source of truth.
+
+- `<username>` is the note's owner, so a shared note is copied once, under its owner. The short id is the last 8 characters of the note's or attachment's id.
+- Titles and notebook names lose characters that aren't safe in file names (`/ \ : * ? " < > |`, leading dots).
+- One background task (`server/src/export.rs`) keeps the folder in line with the database, about 2 seconds after an edit or tree change, and once at startup so existing notes get copies. Each copy's modified time is its note's last edit; a copy whose time differs is rewritten.
+- Renames, moves, trash and deletes remove the old copy and empty folders. Restoring brings it back. Blank notes have no copy. Files the server didn't write are left alone.
+- Copies are written to a temporary file and renamed. A failed write is logged and never affects editing.
 
 ### Attachments
 
