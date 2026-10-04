@@ -232,8 +232,6 @@ try {
   await alice.click("button[type=submit]");
   await alice.waitForSelector("nav");
   check((await (await fetch(`${base}/api/auth/setup`)).json()).needed === false, "first-run setup makes the first account");
-  createUser("bob", "Bob");
-  const bob = await login(browser, "bob");
 
   // Alice writes a note and shares it with Bob.
   await alice.click(".list header button[aria-label='New note']");
@@ -273,6 +271,19 @@ try {
   await oats(false);
   check((await undoState()) === "false,false", "the Undo and Redo buttons step through the same history");
 
+  // Alone on the server, Share says so and makes inviting someone the main action.
+  await alice.click("button[aria-label='Share']");
+  await alice.waitForSelector("dialog .empty");
+  check(
+    await alice.evaluate(() => document.querySelector("dialog .empty").textContent.trim() === "No one else is on this server yet" && document.querySelector("dialog button.invite").matches(".suggested")),
+    "with no one else on the server, Share says so and Invite is the suggested button",
+  );
+  if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "share-alone.png") });
+  await alice.click("dialog .actions button");
+  await closed(alice);
+
+  createUser("bob", "Bob");
+  const bob = await login(browser, "bob");
   await alice.click("button[aria-label='Share']");
   await alice.waitForSelector("dialog button.add");
   await alice.click("dialog button.add");

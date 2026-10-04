@@ -15,11 +15,14 @@
   let role = $state<"editor" | "viewer">("editor");
   let error = $state("");
   let invite = $state<string | null>(null);
+  let loaded = $state(false);
   // Both only exist in secure contexts (HTTPS), so plain-HTTP dev falls back to a selectable link.
   const canShare = "share" in navigator;
   const canCopy = "clipboard" in navigator;
 
   const byUsername = $derived(new Map(users.map((u) => [u.username, u])));
+  /** No one else has an account yet, so an invite is the only way to share. */
+  const alone = $derived(loaded && !users.some((u) => u.id !== app.user?.id));
   const candidates = $derived.by(() => {
     const q = query.trim().toLowerCase();
     return users.filter(
@@ -32,6 +35,7 @@
 
   async function load() {
     [shares, users] = await Promise.all([api.shares(kind, id), api.users()]);
+    loaded = true;
   }
   load();
 
@@ -110,7 +114,11 @@
           <button class="suggested add pill" onclick={() => run(() => api.share(kind, id, u.username, role))}>Add</button>
         </li>
       {:else}
-        <li class="dim empty">{query ? "No one matches" : "Everyone on this server already has access"}</li>
+        {#if loaded}
+          <li class="dim empty">
+            {#if query}No one matches{:else if alone}No one else is on this server yet{:else}Everyone on this server already has access{/if}
+          </li>
+        {/if}
       {/each}
     </ul>
   </section>
@@ -127,7 +135,8 @@
           {/if}
         </div>
       {:else}
-        <button class="invite" onclick={() => run(makeInvite)}>
+        <!-- With no one else to add, an invite is the way to share, so it's the main action. -->
+        <button class="invite" class:suggested={alone} onclick={() => run(makeInvite)}>
           <Icon name="person_add" /> Invite someone new
         </button>
       {/if}
@@ -258,6 +267,10 @@
     width: 100%;
     min-height: 46px;
     color: var(--accent);
+  }
+
+  .invite.suggested {
+    color: var(--accent-fg);
   }
 
   .hint {
