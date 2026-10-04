@@ -136,7 +136,7 @@ Each one talks to an **OpenAI-compatible API**, so it can be a local server (Oll
 - URLs include the API version (`/v1`).
 - The photo model must be able to read images.
 - The live URL is a websocket that speaks OpenAI's realtime transcription events. The server connects to it, so it can stay on a private network.
-- A summary is only made when someone opens a note's Summary tab.
+- A summary is only made when someone picks Summarize in a note's actions.
 - Semantic search needs an embedding model. Every note is sent to it in pieces when it's set up, and again a few seconds after each edit. Query instructions that qwen3-embedding, nomic-embed-text, e5 and bge models expect are added by model name.
 - Ask is a chat with your notes. Each question sends passages from the eight notes that best match it, by words and by meaning, only from notes the asker can see, to the summary model, along with the last few turns of the conversation. The answer streams in and links the notes it used. Nothing of the conversation is kept on the server.
 
