@@ -251,6 +251,14 @@ button.suggested:active:not(:disabled) {
   background: color-mix(in srgb, var(--accent-bg) 85%, black);
 }
 
+/* Adwaita's insensitive state: a main action that can't be taken yet goes neutral, not a dim blue that looks tappable. */
+button.suggested:disabled {
+  background: var(--button-bg);
+  color: var(--dim-fg);
+  box-shadow: none;
+  opacity: 1;
+}
+
 button.destructive {
   color: var(--destructive);
 }
