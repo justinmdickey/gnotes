@@ -45,6 +45,8 @@ pub struct TreeNote {
     updated_at: i64,
     /// Someone has a share on this exact item, so it shows a shared badge.
     shared: bool,
+    /// Who it's shared with, by display name. Only on your own notes; others don't see each other.
+    shared_with: Vec<String>,
 }
 
 /// Something shared with the caller directly, shown under "Shared with me".
@@ -138,18 +140,18 @@ pub async fn get_tree(State(state): State<AppState>, CurrentUser(me): CurrentUse
 
     let mut notes: HashMap<String, TreeNote> = HashMap::new();
     for (id, notebook_id, title, preview, owner, updated_at) in own_notes {
-        notes.insert(id.clone(), TreeNote { id, notebook_id, title, preview, owner, role: Role::Owner, updated_at, shared: false });
+        notes.insert(id.clone(), TreeNote { id, notebook_id, title, preview, owner, role: Role::Owner, updated_at, shared: false, shared_with: vec![] });
     }
     for (id, notebook_id, title, preview, owner, updated_at) in notebook_notes {
         let role = notebook_id.as_ref().and_then(|nb| notebooks.get(nb)).map_or(Role::Viewer, |nb| nb.role);
-        notes.insert(id.clone(), TreeNote { id, notebook_id, title, preview, owner, role, updated_at, shared: false });
+        notes.insert(id.clone(), TreeNote { id, notebook_id, title, preview, owner, role, updated_at, shared: false, shared_with: vec![] });
     }
     for (id, notebook_id, title, preview, owner, updated_at, role) in direct_notes {
         let role = Role::parse(&role).unwrap_or(Role::Viewer);
         notes
             .entry(id.clone())
             .and_modify(|n| n.role = n.role.max(role))
-            .or_insert(TreeNote { id, notebook_id, title, preview, owner, role, updated_at, shared: false });
+            .or_insert(TreeNote { id, notebook_id, title, preview, owner, role, updated_at, shared: false, shared_with: vec![] });
     }
 
     let shared: Vec<SharedRoot> = sqlx::query_as::<_, (String, String, String, bool)>(
@@ -181,19 +183,21 @@ pub async fn get_tree(State(state): State<AppState>, CurrentUser(me): CurrentUse
         };
     }
 
-    // Who each of my own notebooks is shared with, for "Shared with Bob" on its page.
-    let recipients: Vec<(String, String)> = sqlx::query_as(
-        "SELECT s.resource_id, u.display_name FROM shares s
-         JOIN notebooks nb ON nb.id = s.resource_id JOIN users u ON u.id = s.user_id
-         WHERE s.resource_type = 'notebook' AND nb.owner_id = ? ORDER BY u.display_name COLLATE NOCASE",
+    // Who each of my own notebooks and notes is shared with, for "Shared with Bob" on its page and in Shared.
+    let recipients: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT s.resource_type, s.resource_id, u.display_name FROM shares s JOIN users u ON u.id = s.user_id
+         LEFT JOIN notebooks nb ON s.resource_type = 'notebook' AND nb.id = s.resource_id
+         LEFT JOIN notes n ON s.resource_type = 'note' AND n.id = s.resource_id
+         WHERE COALESCE(nb.owner_id, n.owner_id) = ? ORDER BY u.display_name COLLATE NOCASE",
     )
     .bind(&me.id)
     .fetch_all(db)
     .await?;
-    for (id, name) in recipients {
-        if let Some(nb) = notebooks.get_mut(&id) {
-            nb.shared_with.push(name);
-        }
+    for (kind, id, name) in recipients {
+        match kind.as_str() {
+            "notebook" => notebooks.get_mut(&id).map(|nb| nb.shared_with.push(name)),
+            _ => notes.get_mut(&id).map(|n| n.shared_with.push(name)),
+        };
     }
 
     let mut notebooks: Vec<_> = notebooks.into_values().collect();

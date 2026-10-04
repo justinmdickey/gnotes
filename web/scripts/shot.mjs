@@ -142,7 +142,7 @@ async function login(page) {
   await page.waitForSelector("nav");
 }
 
-/** Notebooks Home › Kitchen and Home › Garage, two loose notes, a note in Kitchen, Home shared with Bob, and a note and notebook in the trash. */
+/** Notebooks Home › Kitchen and Home › Garage, two loose notes, a note in Kitchen, Home and Groceries shared with Bob, and a note and notebook in the trash. */
 async function seed(page) {
   const ids = await page.evaluate(async () => {
     const post = (path, body) =>
@@ -178,6 +178,8 @@ async function seed(page) {
     const tree = await fetch("/api/tree").then((r) => r.json());
     const del = (path) => fetch(`/api${path}`, { method: "DELETE" });
     await del(`/notes/${tree.notes.find((n) => n.title === "Old packing list").id}`);
+    const groceries = tree.notes.find((n) => n.title === "Groceries").id;
+    await fetch("/api/shares", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ resource_type: "note", resource_id: groceries, username: "bob", role: "viewer" }) });
     const old = await fetch("/api/notebooks", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Archive", parent_id: null }) }).then((r) => r.json());
     await del(`/notebooks/${old.id}`);
   });

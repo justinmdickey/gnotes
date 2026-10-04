@@ -8,7 +8,7 @@
   import Menu from "./lib/Menu.svelte";
   import StatusPage from "./lib/StatusPage.svelte";
   import { liveSearch, matchingNotes } from "./lib/search.svelte";
-  import { app, composeNote, drag, goBack, navigate, notesFor, openAsk, openNote, parentView, pathOf, subtree, trashNotebook, viewTitle } from "./lib/store.svelte";
+  import { app, composeNote, drag, goBack, navigate, notesFor, openAsk, openNote, parentView, pathOf, sharedWithLabel, subtree, trashNotebook, viewTitle } from "./lib/store.svelte";
   import { media, scrollEdge } from "./lib/ui.svelte";
   import FolderList from "./FolderList.svelte";
   import MoveDialog from "./MoveDialog.svelte";
@@ -67,16 +67,19 @@
     app.tree.notebooks.filter(
       (n) => (n.role === "owner") === owned && !(n.parent_id && visible.has(n.parent_id)) && !hiddenShares.has(n.id),
     );
+  /** What you've shared with other people yourself, for the second half of Shared. */
+  const byMeFolders = $derived(app.tree.notebooks.filter((n) => n.role === "owner" && n.shared));
+  const byMeNotes = $derived(app.tree.notes.filter((n) => n.role === "owner" && n.shared));
   /** The folders directly in this place, before any search. */
   const children = $derived.by((): TreeNotebook[] => {
     const v = app.view;
     if (v.kind === "root") return tops(true);
-    if (v.kind === "shared-notes") return tops(false);
+    if (v.kind === "shared-notes") return [...tops(false), ...byMeFolders];
     if (v.kind === "notebook") return app.tree.notebooks.filter((n) => n.parent_id === v.id);
     return [];
   });
   const subCount = $derived(children.length);
-  const noteCount = $derived(notesFor(app.view, app.tree).length);
+  const noteCount = $derived(notesFor(app.view, app.tree).length + (app.view.kind === "shared-notes" ? byMeNotes.length : 0));
   /** Nothing when the place is empty: the empty state under it says so already. */
   const countLabel = $derived(
     subCount || noteCount
@@ -96,17 +99,13 @@
       ? ""
       : notebook.role !== "owner"
         ? `Shared by ${notebook.owner} · ${notebook.role === "viewer" ? "view only" : "can edit"}`
-        : sharedWith.length === 0
-          ? ""
-          : sharedWith.length <= 2
-            ? `Shared with ${sharedWith.join(" and ")}`
-            : `Shared with ${sharedWith.length} people`,
+        : sharedWithLabel(sharedWith),
   );
   const subtitle = $derived([shareLabel, countLabel].filter(Boolean).join(" · "));
   const q = $derived(query.trim().toLowerCase());
   /**
    * What a search looks through: this folder and everything inside it. From Notes or Recent
-   * that's everything you can see; from Shared, everything shared with you.
+   * that's everything you can see; from Shared, everything shared with you or by you.
    */
   const scope = $derived.by((): ((notebookId: string | null, role: string) => boolean) => {
     const v = app.view;
@@ -114,16 +113,37 @@
       const ids = subtree(v.id);
       return (id) => ids.has(id);
     }
-    if (v.kind === "shared-notes") return (_id, role) => role !== "owner";
+    if (v.kind === "shared-notes") {
+      const ids = new Set(byMeFolders.flatMap((nb) => [...subtree(nb.id)]));
+      return (id, role) => role !== "owner" || (id !== null && ids.has(id));
+    }
     return () => true;
   });
+  /** Shared, before a search: what's shared with you, then what you've shared, each with its notebooks and notes. */
+  const sections = $derived(
+    app.view.kind === "shared-notes" && !q
+      ? [
+          { label: "Shared with Me", folders: tops(false), notes: notesFor(app.view, app.tree), byMe: false },
+          { label: "Shared by Me", folders: byMeFolders, notes: byMeNotes, byMe: true },
+        ]
+          .map((s) => ({ ...s, folders: s.folders.toSorted((a, b) => a.name.localeCompare(b.name)) }))
+          .filter((s) => s.folders.length || s.notes.length)
+      : [],
+  );
   const folders = $derived(
-    (q
-      ? app.tree.notebooks.filter(
-          (n) => n.id !== (notebook?.id ?? "") && scope(n.parent_id, n.role) && scope(n.id, n.role) && n.name.toLowerCase().includes(q),
-        )
-      : children
-    ).toSorted((a, b) => a.name.localeCompare(b.name)),
+    app.view.kind === "shared-notes" && !q
+      ? []
+      : (q
+          ? app.tree.notebooks.filter(
+              // A notebook you shared from the top of Notes has no shared parent, but still belongs in Shared.
+              (n) =>
+                n.id !== (notebook?.id ?? "") &&
+                (app.view.kind === "shared-notes" || scope(n.parent_id, n.role)) &&
+                scope(n.id, n.role) &&
+                n.name.toLowerCase().includes(q),
+            )
+          : children
+        ).toSorted((a, b) => a.name.localeCompare(b.name)),
   );
   const up = $derived(parentView(app.view));
   const searchHint = $derived(
@@ -175,7 +195,13 @@
   const asking = $derived(!!q && !!app.features.ask);
   const questionLike = $derived(/\?$|^(who|what|when|where|why|how|which|whose|is|are|was|were|do|does|did|can|could|should|would|will|have|has)\b/i.test(q));
 
-  const notes = $derived(q ? matchingNotes(q, hits, (n) => scope(n.notebook_id, n.role)) : notesFor(app.view, app.tree));
+  const notes = $derived(
+    q
+      ? matchingNotes(q, hits, (n) => scope(n.notebook_id, n.role) || (app.view.kind === "shared-notes" && n.shared))
+      : sections.length || app.view.kind === "shared-notes"
+        ? []
+        : notesFor(app.view, app.tree),
+  );
 
   /** Apple Notes-style buckets: Today, Yesterday, Previous 7 Days, Previous 30 Days, then by month. */
   const groups = $derived.by(() => {
@@ -310,7 +336,7 @@
       {/if}
     </label>
 
-    {#snippet noteRow(note: TreeNote)}
+    {#snippet noteRow(note: TreeNote, byMe = false)}
       <!-- On desktop a note drags onto a notebook in the sidebar to move there. -->
       <button
         class="flat note"
@@ -338,7 +364,9 @@
             <span class="dim preview">{note.preview || (note.role !== "owner" ? note.owner : "No additional text")}</span>
           {/if}
         </span>
-        {#if showWhere}
+        {#if byMe && note.shared_with?.length}
+          <span class="where dim"><Icon name="people" size={12} /><span>{sharedWithLabel(note.shared_with)}</span></span>
+        {:else if showWhere}
           <span class="where dim"><Icon name={note.notebook_id ? "folder" : note.role === "owner" ? "home" : "people"} size={12} /><span>{where(note)}</span></span>
         {/if}
       </button>
@@ -360,6 +388,17 @@
     {#key app.view.kind === "notebook" ? app.view.id : app.view.kind}
     {#if asking && questionLike}{@render askRow(true)}{/if}
     <FolderList {folders} showWhere={!!q} />
+    {#each sections as section (section.label)}
+      <h3 class="group-title">{section.label}</h3>
+      <FolderList folders={section.folders} title="" showSharedWith={section.byMe} />
+      {#if section.notes.length}
+        <ul class="boxed-list">
+          {#each section.notes as note (note.id)}
+            <li transition:reveal>{@render noteRow(note, section.byMe)}</li>
+          {/each}
+        </ul>
+      {/if}
+    {/each}
     {#each groups as group (group.label)}
       <h3 class="group-title">{group.label}</h3>
       <ul class="boxed-list">
@@ -368,7 +407,7 @@
         {/each}
       </ul>
     {:else}
-      {#if folders.length}
+      {#if folders.length || sections.length}
         <!-- The folders above are enough; no empty state over them. -->
       {:else if query && asking && !questionLike}
         <StatusPage icon="search" title="No Results" description="No note has the words “{query}”." tone="neutral">
@@ -377,7 +416,7 @@
       {:else if query}
         <StatusPage icon="search" title="No Results" description="Nothing matches “{query}”." tone="neutral" />
       {:else if app.view.kind === "shared-notes"}
-        <StatusPage icon="people" title="Nothing Shared Yet" description="Notes and notebooks people share with you show up here." tone="neutral" />
+        <StatusPage icon="people" title="Nothing Shared Yet" description="Notes and notebooks you share, and ones people share with you, show up here." tone="neutral" />
       {:else if notebook}
         <!-- Phones add notes with the + in the tab bar, wider screens with the pencil in the headerbar. -->
         <StatusPage

@@ -294,9 +294,15 @@ try {
   await alice.waitForFunction(() => [...document.querySelectorAll(".note")].some((b) => b.textContent.includes("Groceries") && b.querySelector(".shared-badge")));
   check(true, "a shared note shows the shared badge");
 
+  const sharedRow = "[...document.querySelectorAll('nav:not(.tabbar) button')].find((b) => b.textContent.trim().startsWith('Shared'))";
   // Bob sees it appear without reloading, and opens it.
-  await bob.waitForFunction(() => [...document.querySelectorAll("nav button")].some((b) => b.textContent.includes("Shared with Me")));
-  await bob.evaluate(() => [...document.querySelectorAll("nav button")].find((b) => b.textContent.includes("Shared with Me")).click());
+  await bob.waitForFunction(`!!${sharedRow}`);
+  await bob.evaluate(`${sharedRow}.click()`);
+  await bob.waitForFunction(() => [...document.querySelectorAll(".group-title")].some((h) => h.textContent === "Shared with Me"));
+  check(
+    await bob.evaluate(() => ![...document.querySelectorAll(".group-title")].some((h) => h.textContent === "Shared by Me")),
+    "Shared with Me lists what others shared, with no Shared by Me when you've shared nothing",
+  );
   await bob.waitForFunction(() => [...document.querySelectorAll("li button")].some((b) => b.textContent.includes("Groceries")));
   await bob.evaluate(() => [...document.querySelectorAll("li button")].find((b) => b.textContent.includes("Groceries")).click());
   await bob.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("milk"));
@@ -359,6 +365,23 @@ try {
     await p.goBack();
     await p.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("cheese"));
   }
+  // Alice's Shared page lists what she shared, and with whom.
+  await alice.evaluate(`${sharedRow}.click()`);
+  await alice.waitForFunction(() => [...document.querySelectorAll(".group-title")].some((h) => h.textContent === "Shared by Me"));
+  check(
+    await alice.evaluate(() =>
+      [...document.querySelectorAll(".pane.list .note")].some((b) => b.textContent.includes("Groceries") && b.textContent.includes("Shared with Bob")),
+    ),
+    "Shared lists a note you shared, and who it's shared with",
+  );
+  check(
+    await alice.evaluate(() => ![...document.querySelectorAll(".group-title")].some((h) => h.textContent === "Shared with Me")),
+    "with nothing shared with you, Shared has no Shared with Me section",
+  );
+  if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "shared-by-me.png") });
+
+  await alice.goBack();
+  await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("cheese"));
   // Pointing at a line's grip says who wrote it.
   const milk = await alice.evaluate(() => {
     const r = [...document.querySelectorAll(".cm-line")].find((l) => l.textContent.includes("milk")).getBoundingClientRect();

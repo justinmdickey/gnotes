@@ -29,6 +29,8 @@ export interface TreeNote {
   role: Role;
   updated_at: number;
   shared: boolean;
+  /** Who it's shared with, by display name: only on your own notes. Missing from trees saved by older versions. */
+  shared_with?: string[];
 }
 
 export interface SharedRoot {

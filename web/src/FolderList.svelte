@@ -3,7 +3,7 @@
   import { cubicOut } from "svelte/easing";
   import type { TreeNotebook } from "./lib/api";
   import Icon from "./lib/Icon.svelte";
-  import { app, navigate, notesFor, pathOf } from "./lib/store.svelte";
+  import { app, navigate, notesFor, pathOf, sharedWithLabel } from "./lib/store.svelte";
   import { media } from "./lib/ui.svelte";
   import { longPress } from "./lib/longPress";
   import RowMenu, { hasActions, type RowPress } from "./RowMenu.svelte";
@@ -13,7 +13,8 @@
     folders,
     title = "Notebooks",
     showWhere = false,
-  }: { folders: TreeNotebook[]; title?: string; showWhere?: boolean } = $props();
+    showSharedWith = false,
+  }: { folders: TreeNotebook[]; title?: string; showWhere?: boolean; showSharedWith?: boolean } = $props();
 
   const inside = (id: string) => app.tree.notebooks.filter((n) => n.parent_id === id).length;
   const reveal = (node: Element) => slide(node, { duration: media.reduced ? 0 : 200, easing: cubicOut });
@@ -28,7 +29,7 @@
 </script>
 
 {#if folders.length}
-  <h3 class="group-title">{title}</h3>
+  {#if title}<h3 class="group-title">{title}</h3>{/if}
   <ul class="boxed-list folders">
     {#each folders as nb (nb.id)}
       <li transition:reveal>
@@ -36,6 +37,7 @@
           <Icon name="folder" />
           <span class="name">
             {nb.name}
+            {#if showSharedWith && nb.shared_with?.length}<small class="dim">{sharedWithLabel(nb.shared_with)}</small>{/if}
             {#if showWhere}<small class="dim">in {pathOf(nb.parent_id).join(" › ") || (nb.role === "owner" ? "Notes" : nb.owner)}</small>{/if}
           </span>
           {#if nb.shared}<span class="shared-badge" title="Shared"><Icon name="person" size={16} /></span>{/if}

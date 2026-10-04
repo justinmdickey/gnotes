@@ -32,6 +32,8 @@
   const hiddenShares = $derived(new Set(app.tree.shared.filter((s) => s.hidden).map((s) => s.resource_id)));
   const sharedRoots = $derived((byParent.get(null) ?? []).filter((n) => n.role !== "owner" && !hiddenShares.has(n.id)));
   const hasSharedNotes = $derived(app.tree.shared.some((s) => s.resource_type === "note" && !s.hidden));
+  /** You've shared something yourself, which the Shared page lists too. */
+  const sharedByMe = $derived(app.tree.notebooks.some((n) => n.role === "owner" && n.shared) || app.tree.notes.some((n) => n.role === "owner" && n.shared));
 
   const ROOT = "@root";
   const SHARED = "@shared";
@@ -353,9 +355,9 @@
         {/each}
       {/if}
     </ul>
-    {#if sharedRoots.length || hasSharedNotes}
+    {#if sharedRoots.length || hasSharedNotes || sharedByMe}
       <ul class="group section">
-        {@render row({ kind: "shared-notes" }, "people", "Shared with Me", "", 0, sharedRoots.length || sharedNotes.length ? SHARED : null, false, true)}
+        {@render row({ kind: "shared-notes" }, "people", "Shared", "", 0, sharedRoots.length || sharedNotes.length ? SHARED : null, false, true)}
         {#if !folded(SHARED)}
           {#each sharedRoots as nb (nb.id)}
             {@render notebookRows(nb, 0)}

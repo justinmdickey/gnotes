@@ -316,6 +316,10 @@ async fn live_sync_presence_and_persistence() {
     alice
         .post("/shares", json!({ "resource_type": "note", "resource_id": note, "username": "bob", "role": "editor" }))
         .await;
+    // The owner sees who a note is shared with; bob doesn't.
+    let bob_name = bob.get("/me").await["display_name"].clone();
+    assert_eq!(alice.get("/tree").await["notes"][0]["shared_with"], json!([bob_name]));
+    assert_eq!(bob.get("/tree").await["notes"][0]["shared_with"], json!([]));
 
     let mut alice_ws = alice.ws().await;
     let mut bob_ws = bob.ws().await;

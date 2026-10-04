@@ -50,7 +50,7 @@ export function twoPane(): boolean {
 export function viewTitle(view: View, tree: Tree): string {
   if (view.kind === "root") return "Notes";
   if (view.kind === "all") return "Recent";
-  if (view.kind === "shared-notes") return "Shared with Me";
+  if (view.kind === "shared-notes") return "Shared";
   if (view.kind === "trash") return "Trash";
   if (view.kind === "ask") return "Ask";
   return tree.notebooks.find((n) => n.id === view.id)?.name ?? "Notes";
@@ -364,6 +364,12 @@ export function notesFor(view: View, tree: Tree): TreeNote[] {
     case "ask":
       return [];
   }
+}
+
+/** "Shared with Bob", "Shared with Bob and Carol", "Shared with 3 people". Empty when it's no one. */
+export function sharedWithLabel(names: string[]) {
+  if (!names.length) return "";
+  return names.length <= 2 ? `Shared with ${names.join(" and ")}` : `Shared with ${names.length} people`;
 }
 
 /** Stable per-user cursor color. */
