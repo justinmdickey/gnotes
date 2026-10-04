@@ -2,9 +2,13 @@
   import { api, ApiError } from "./lib/api";
   import Dialog from "./lib/Dialog.svelte";
   import { app, navigate, refreshTree } from "./lib/store.svelte";
+  import { toast } from "./lib/ui.svelte";
 
-  /** One way to make a notebook, at the top level (`parent` null) or inside another one. */
-  let { parent, onclose }: { parent: string | null; onclose: () => void } = $props();
+  /**
+   * One way to make a notebook, at the top level (`parent` null) or inside another one. You stay
+   * where you are, to see it arrive in the list; the toast's Open goes inside.
+   */
+  let { parent, onclose, oncreated }: { parent: string | null; onclose: () => void; oncreated?: (id: string) => void } = $props();
 
   let name = $state("");
   let error = $state("");
@@ -14,10 +18,12 @@
     e.preventDefault();
     if (!name.trim()) return;
     try {
-      const { id } = await api.createNotebook(name.trim(), parent);
+      const made = name.trim();
+      const { id } = await api.createNotebook(made, parent);
       await refreshTree();
+      oncreated?.(id);
       onclose();
-      navigate({ kind: "notebook", id });
+      toast(`Created ${made}`, { label: "Open", run: () => navigate({ kind: "notebook", id }) });
     } catch (err) {
       error = err instanceof ApiError ? err.message : "Couldn't make the notebook";
     }

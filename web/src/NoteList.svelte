@@ -13,7 +13,9 @@
   import FolderList from "./FolderList.svelte";
   import MoveDialog from "./MoveDialog.svelte";
   import NewNotebookDialog from "./NewNotebookDialog.svelte";
+  import RowMenu, { hasActions, type RowPress } from "./RowMenu.svelte";
   import ShareDialog from "./ShareDialog.svelte";
+  import { longPress } from "./lib/longPress";
 
   const notebook = $derived(
     app.view.kind === "notebook" ? app.tree.notebooks.find((n) => n.id === (app.view as { id: string }).id) : undefined,
@@ -37,8 +39,13 @@
   });
   /** The big title has scrolled away, so the headerbar shows the name instead. */
   let compact = $state(false);
-  /** The phone's top folder shows the app's name in the headerbar, as the sidebar does on desktop. */
-  const brand = $derived(media.phone && app.view.kind === "root");
+  /**
+   * The top of each phone tab shows the app's name in the headerbar, as the sidebar does on desktop:
+   * always on Notes, and on Recent and Shared until their big title scrolls away.
+   */
+  const brand = $derived(media.phone && !parentView(app.view) && (app.view.kind === "root" || !compact));
+  /** Wider screens keep the place's name in the middle of the headerbar, as the note screen does. */
+  const titleShown = $derived(compact || brand || !media.phone);
 
   /** Parent notebooks, outermost first, for the path above the title. */
   const path = $derived.by(() => {
@@ -69,18 +76,33 @@
     return [];
   });
   const subCount = $derived(children.length);
+  const noteCount = $derived(notesFor(app.view, app.tree).length);
+  /** Nothing when the place is empty: the empty state under it says so already. */
   const countLabel = $derived(
-    [subCount ? plural(subCount, "notebook", "notebooks") : "", plural(notesFor(app.view, app.tree).length, "note", "notes")]
-      .filter(Boolean)
-      .join(" · "),
+    subCount || noteCount
+      ? [subCount ? plural(subCount, "notebook", "notebooks") : "", plural(noteCount, "note", "notes")].filter(Boolean).join(" · ")
+      : "",
   );
-  const subtitle = $derived(
-    notebook && notebook.role !== "owner"
-      ? `${notebook.owner}'s notebook · ${notebook.role === "viewer" ? "view only" : "can edit"} · ${countLabel}`
-      : notebook
-        ? countLabel
-        : countLabel,
+  /** Who else sees your notebook: the people it, or a notebook it's inside, is shared with. */
+  const sharedWith = $derived.by(() => {
+    const names = new Set<string>();
+    for (let nb = notebook; nb; nb = app.tree.notebooks.find((n) => n.id === nb!.parent_id)) {
+      for (const name of nb.shared_with ?? []) names.add(name);
+    }
+    return [...names];
+  });
+  const shareLabel = $derived(
+    !notebook
+      ? ""
+      : notebook.role !== "owner"
+        ? `Shared by ${notebook.owner} · ${notebook.role === "viewer" ? "view only" : "can edit"}`
+        : sharedWith.length === 0
+          ? ""
+          : sharedWith.length <= 2
+            ? `Shared with ${sharedWith.join(" and ")}`
+            : `Shared with ${sharedWith.length} people`,
   );
+  const subtitle = $derived([shareLabel, countLabel].filter(Boolean).join(" · "));
   const q = $derived(query.trim().toLowerCase());
   /**
    * What a search looks through: this folder and everything inside it. From Notes or Recent
@@ -138,6 +160,13 @@
   let renaming = $state(false);
   let newName = $state("");
   let sharing = $state(false);
+  /** A note whose actions are open, from a long-press or right-click on its row. */
+  let pressed = $state<RowPress | null>(null);
+  function openRow(id: string, x: number, y: number) {
+    if (!hasActions("note", id)) return false;
+    pressed = { kind: "note", id, x, y };
+    return true;
+  }
 
   /** The server's matches for `q`, once they arrive. Offline, search has titles and previews only. */
   const search = liveSearch(() => q);
@@ -202,7 +231,7 @@
       {/if}
     </div>
     <!-- Phones have no sidebar, so the top of Notes carries the app's name and icon instead. -->
-    <div class="title" class:shown={compact || brand} aria-hidden={!compact && !brand}>
+    <div class="title" class:shown={titleShown} aria-hidden={!titleShown}>
       {#if brand}
         <strong class="brand"><img src="/icon.svg" alt="" width="22" height="22" />Gnotes</strong>
       {:else}
@@ -247,13 +276,14 @@
             <button class="crumb root" class:icon-only={path.length > 1} title={home.label} aria-label={home.label} onclick={() => navigate(home.view)}>
               <Icon name={home.icon} size={14} />{#if path.length <= 1}<span>{home.label}</span>{/if}
             </button>
-            <span class="sep"><Icon name="next" size={12} /></span>
+            <!-- Separators go between levels only; the title under the path is where it ends. -->
             {#snippet crumb(nb: { id: string; name: string })}
-              <button class="crumb" title={nb.name} onclick={() => navigate({ kind: "notebook", id: nb.id })}><span>{nb.name}</span></button>
               <span class="sep"><Icon name="next" size={12} /></span>
+              <button class="crumb" title={nb.name} onclick={() => navigate({ kind: "notebook", id: nb.id })}><span>{nb.name}</span></button>
             {/snippet}
             {#each crumbs.head as nb (nb.id)}{@render crumb(nb)}{/each}
             {#if crumbs.hidden.length}
+              <span class="sep"><Icon name="next" size={12} /></span>
               <Menu
                 label="{crumbs.hidden.length} more levels"
                 class="crumb more"
@@ -261,14 +291,13 @@
               >
                 {#snippet trigger()}<span>…</span>{/snippet}
               </Menu>
-              <span class="sep"><Icon name="next" size={12} /></span>
             {/if}
             {#each crumbs.tail as nb (nb.id)}{@render crumb(nb)}{/each}
           </nav>
         {/if}
         <div class="hero-text">
           <h1>{title}</h1>
-          <span class="dim">{subtitle}</span>
+          {#if subtitle}<span class="dim">{subtitle}</span>{/if}
         </div>
       </div>
     {/key}
@@ -287,6 +316,7 @@
         class="flat note"
         class:selected={app.noteId === note.id}
         onclick={() => openNote(note.id)}
+        use:longPress={(x, y) => openRow(note.id, x, y)}
         draggable={!media.phone && note.role !== "viewer"}
         ondragstart={(e) => {
           drag.item = { kind: "note", id: note.id };
@@ -349,9 +379,15 @@
       {:else if app.view.kind === "shared-notes"}
         <StatusPage icon="people" title="Nothing Shared Yet" description="Notes and notebooks people share with you show up here." tone="neutral" />
       {:else if notebook}
-        <StatusPage icon="folder" title="Empty Notebook" description={canEdit ? "New notes and notebooks you make here go inside it." : "Nothing has been added here yet."} tone="neutral" />
+        <!-- Phones add notes with the + in the tab bar, wider screens with the pencil in the headerbar. -->
+        <StatusPage
+          icon="folder"
+          title="Empty Notebook"
+          description={!canEdit ? "Nothing has been added here yet." : media.phone ? "Tap + to add the first note." : "Add the first note with the pencil button up top."}
+          tone="neutral"
+        />
       {:else}
-        <StatusPage icon="note" title="No Notes Yet" description="Start one with the pencil button up top." />
+        <StatusPage icon="note" title="No Notes Yet" description={media.phone ? "Tap + to start one." : "Start one with the pencil button up top."} />
       {/if}
     {/each}
     {#if asking && !questionLike && (groups.length || folders.length)}{@render askRow(false)}{/if}
@@ -397,6 +433,10 @@
   <ShareDialog kind="notebook" id={notebook.id} name={notebook.name} onclose={() => (sharing = false)} />
 {/if}
 
+{#if pressed}
+  <RowMenu press={pressed} onclose={() => (pressed = null)} />
+{/if}
+
 <style>
   section {
     position: relative;
@@ -411,14 +451,27 @@
     padding: 0 12px;
   }
 
-  /* Wide screens lay the headerbar out as one row; the groups only matter on phones. */
-  .start,
-  .end {
-    display: contents;
+  /* Three columns, so the title sits in the middle of the headerbar whatever buttons are on each side. */
+  .headerbar {
+    display: grid;
+    grid-template-columns: 1fr minmax(0, auto) 1fr;
   }
 
-  /* The small headerbar title only appears once the big one scrolls away. */
+  .start,
+  .end {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .end {
+    justify-content: flex-end;
+  }
+
+  /* On phones the small headerbar title only appears once the big one scrolls away. */
   .headerbar .title {
+    align-items: center;
+    text-align: center;
     opacity: 0;
     transform: translateY(4px);
     transition:
@@ -482,7 +535,7 @@
   }
 
   /* The nearest level, last before the title, keeps its name longest. */
-  .crumbs :global(.crumb:nth-last-child(2)) {
+  .crumbs :global(.crumb:last-child) {
     flex-shrink: 0.3;
   }
 
@@ -725,28 +778,6 @@
   }
 
   @media (max-width: 700px) {
-    /* Three columns, so the title sits in the middle of the screen whatever buttons are on each side. */
-    .headerbar {
-      display: grid;
-      grid-template-columns: 1fr minmax(0, auto) 1fr;
-    }
-
-    .start,
-    .end {
-      display: flex;
-      align-items: center;
-      gap: 4px;
-    }
-
-    .end {
-      justify-content: flex-end;
-    }
-
-    .headerbar .title {
-      align-items: center;
-      text-align: center;
-    }
-
 
     .scroll {
       padding: 0 16px 96px;

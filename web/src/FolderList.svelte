@@ -5,6 +5,8 @@
   import Icon from "./lib/Icon.svelte";
   import { app, navigate, notesFor, pathOf } from "./lib/store.svelte";
   import { media } from "./lib/ui.svelte";
+  import { longPress } from "./lib/longPress";
+  import RowMenu, { hasActions, type RowPress } from "./RowMenu.svelte";
 
   /** The notebooks in one place, top level or inside a notebook. Every level looks the same. */
   let {
@@ -15,6 +17,14 @@
 
   const inside = (id: string) => app.tree.notebooks.filter((n) => n.parent_id === id).length;
   const reveal = (node: Element) => slide(node, { duration: media.reduced ? 0 : 200, easing: cubicOut });
+
+  /** A notebook whose actions are open, from a long-press or right-click on its row. */
+  let pressed = $state<RowPress | null>(null);
+  function openRow(id: string, x: number, y: number) {
+    if (!hasActions("notebook", id)) return false;
+    pressed = { kind: "notebook", id, x, y };
+    return true;
+  }
 </script>
 
 {#if folders.length}
@@ -22,7 +32,7 @@
   <ul class="boxed-list folders">
     {#each folders as nb (nb.id)}
       <li transition:reveal>
-        <button class="flat folder-row" onclick={() => navigate({ kind: "notebook", id: nb.id })}>
+        <button class="flat folder-row" onclick={() => navigate({ kind: "notebook", id: nb.id })} use:longPress={(x, y) => openRow(nb.id, x, y)}>
           <Icon name="folder" />
           <span class="name">
             {nb.name}
@@ -37,6 +47,10 @@
       </li>
     {/each}
   </ul>
+{/if}
+
+{#if pressed}
+  <RowMenu press={pressed} onclose={() => (pressed = null)} />
 {/if}
 
 <style>

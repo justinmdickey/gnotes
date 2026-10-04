@@ -1021,8 +1021,12 @@ try {
   await alice.type("dialog input", "Packing");
   await alice.click("dialog button[type=submit]");
   await closed(alice);
+  // You stay where you were: the new row shows in the list, and the toast's Open goes inside.
+  await alice.waitForFunction(() => [...document.querySelectorAll(".pane.list .folder-row .name")].some((e) => e.textContent.trim() === "Packing"));
+  check(await alice.evaluate(() => document.querySelector(".hero h1")?.textContent === "Vault" && document.querySelector(".toast")?.innerText.includes("Created Packing")), "making a notebook stays on the list, shows its row and says Created");
+  await alice.click(".toast ::-p-text(Open)");
   await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Packing" && document.querySelector(".hero .crumbs")?.textContent.includes("Vault"));
-  check(true, "the sidebar + makes a notebook inside the folder you point at");
+  check(true, "the sidebar + makes a notebook inside the folder you point at, and Open goes inside");
   await alice.hover("nav li:has(button[aria-label='New in Packing'])");
   await alice.click("nav button[aria-label='New in Packing']");
   await alice.click(".popover ::-p-text(New Note)");
@@ -1069,6 +1073,26 @@ try {
   await alice.evaluate((id) => (location.hash = `#/nb/${id}`), kitchen);
   await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Kitchen" && document.querySelector(".hero .crumbs")?.textContent.includes("Home"));
   check(true, "nested notebook shows its path and name");
+  // A shared notebook says so under its name: who it's shared with for the owner, who shared it for the others.
+  createUser("dave", "Dave");
+  const club = await alice.evaluate(async () => {
+    const post = (path, body) => fetch(`/api${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then((r) => r.json());
+    const club = (await post("/notebooks", { name: "Club", parent_id: null })).id;
+    const share = (await post("/shares", { resource_type: "notebook", resource_id: club, username: "dave", role: "editor" })).id;
+    return { club, share };
+  });
+  await alice.evaluate((id) => (location.hash = `#/nb/${id}`), club.club);
+  await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Club" && document.querySelector(".hero-text .dim")?.textContent.startsWith("Shared with Dave"));
+  check(true, "the owner's shared notebook says who it's shared with");
+  const dave = await login(browser, "dave");
+  await dave.evaluate((id) => (location.hash = `#/nb/${id}`), club.club);
+  await dave.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Club");
+  const daveSub = await dave.$eval(".hero-text .dim", (e) => e.textContent);
+  check(daveSub === "Shared by Alice · can edit", `a notebook shared with you says who shared it (${daveSub})`);
+  await dave.browserContext().close();
+  await alice.evaluate((id) => fetch(`/api/shares/${id}`, { method: "DELETE" }), club.share);
+  await alice.evaluate((id) => (location.hash = `#/nb/${id}`), kitchen);
+  await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Kitchen");
   // The notebook menu floats above the editor pane instead of being clipped by the list.
   await alice.click(".list header button[aria-label='Notebook menu']");
   await alice.waitForSelector(".popover [role=menuitem]");
@@ -1224,14 +1248,22 @@ try {
   await alice.type("#new-notebook input", "Garage");
   await alice.click("dialog button[form=new-notebook]");
   await closed(alice);
-  await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Garage" && document.querySelector(".hero .crumbs")?.textContent.includes("Home"));
+  await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Home" && [...document.querySelectorAll(".pane.list .folder-row .name")].some((e) => e.textContent.trim() === "Garage"));
   check(true, "a notebook is made inside another the same way as at the top");
-  await alice.click(".hero .crumbs button.crumb:not(.root)");
   await alice.waitForFunction(() => {
     const names = [...document.querySelectorAll(".pane.list .folder-row .name")].map((e) => e.textContent.trim());
     return names.join(",") === "Garage,Kitchen";
   });
   check(true, "a notebook lists its sub-notebooks as folders");
+  // A right-click on a row offers its actions in place, without opening it or the browser's own menu.
+  const listHash = await alice.evaluate(() => location.hash);
+  await alice.click(".pane.list .folder-row ::-p-text(Kitchen)", { button: "right" });
+  await alice.waitForSelector(".popover[aria-label=Kitchen] [role=menuitem]");
+  const folderActions = await alice.$$eval(".popover [role=menuitem]", (els) => els.map((e) => e.textContent.trim()).join(","));
+  check(folderActions === "Move to…,Rename…,Share…,Move to Trash" && (await alice.evaluate(() => location.hash)) === listHash, `right-clicking a notebook row shows its actions and stays put (${folderActions})`);
+  if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-row-menu.png") });
+  await alice.keyboard.press("Escape");
+  await alice.waitForFunction(() => !document.querySelector(".popover"));
   await alice.evaluate((id) => (location.hash = `${location.hash}/note/${id}`), pantry);
   await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("Pantry"));
   await noteAction(alice, "Move to…");
@@ -1240,6 +1272,35 @@ try {
   await closed(alice);
   await alice.waitForFunction(() => document.querySelector(".notebook-chip")?.textContent.trim() === "Home › Garage");
   check(true, "a note moves to another notebook");
+  // Moving from the sheet has Undo, like a drag.
+  await alice.click(".toast ::-p-text(Undo)");
+  await alice.waitForFunction(() => document.querySelector(".notebook-chip")?.textContent.trim() === "Home › Kitchen");
+  check(true, "Undo in the Move to toast puts the note back");
+  // The sheet makes a notebook to move into, in one go.
+  await noteAction(alice, "Move to…");
+  await alice.waitForSelector("dialog [aria-label=Destinations]");
+  if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-move-sheet.png") });
+  await alice.click("dialog ::-p-text(New Notebook…)");
+  await alice.type("#move-new-notebook input", "Bins");
+  await alice.click("dialog button[form=move-new-notebook]");
+  await closed(alice);
+  await alice.waitForFunction(() => document.querySelector(".notebook-chip")?.textContent.trim() === "Bins" && document.querySelector(".toast")?.innerText.includes("Moved to Bins"));
+  check(true, "New Notebook in the Move sheet makes the notebook and moves the note into it");
+  // From a row in Recent, the row's own menu moves it back to Garage, without opening it.
+  await alice.evaluate(() => (location.hash = "#/all"));
+  await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Recent");
+  await alice.click(".pane.list .note ::-p-text(Pantry)", { button: "right" });
+  await alice.waitForSelector(".popover [role=menuitem]");
+  const noteActions = await alice.$$eval(".popover [role=menuitem]", (els) => els.map((e) => e.textContent.trim()).join(","));
+  check(noteActions === "Move to…,Share…,Move to Trash", `right-clicking a note row shows its actions (${noteActions})`);
+  await alice.click(".popover ::-p-text(Move to…)");
+  await alice.waitForSelector("dialog [aria-label=Destinations]");
+  await alice.evaluate(() => [...document.querySelectorAll("dialog [aria-label=Destinations] button")].find((b) => b.textContent.trim() === "Garage").click());
+  await closed(alice);
+  await alice.waitForFunction(() => document.querySelector(".toast")?.innerText.includes("Moved to Garage"));
+  check(await alice.evaluate(() => location.hash === "#/all"), "Move to… from a note row's menu moves it, staying on the list");
+  await alice.evaluate((id) => (location.hash = `#/all/note/${id}`), pantry);
+  await alice.waitForFunction(() => document.querySelector(".notebook-chip")?.textContent.trim() === "Home › Garage");
 
   // Trash: a deleted note waits in the Trash screen and Restore puts it back where it was.
   await noteAction(alice, "Move to Trash");
@@ -1290,6 +1351,7 @@ try {
   await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Pocket" && document.querySelector(".hero .crumb.more"));
   const shown = await alice.$$eval(".hero .crumbs button.crumb:not(.root):not(.more)", (els) => els.map((e) => e.textContent.trim()).join(","));
   check(shown === "Home,Box,Bag", `a deep path shows the top and nearest levels (${shown})`);
+  check(await alice.evaluate(() => !document.querySelector(".hero .crumbs > :last-child.sep")), "the path ends at its nearest level, without a trailing separator");
   await alice.click(".hero .crumb.more");
   await alice.waitForFunction(() => [...document.querySelectorAll("[role=menuitem]")].some((b) => b.textContent.includes("Garage")));
   await alice.evaluate(() => [...document.querySelectorAll("[role=menuitem]")].find((b) => b.textContent.includes("Shelf")).click());
@@ -1549,6 +1611,27 @@ try {
     await alice.evaluate(() => [...document.querySelectorAll(".tabbar button")].find((b) => b.textContent.includes("Notes")).click());
     await alice.waitForFunction(() => document.querySelector(".search input")?.value === "" && !!document.querySelector(".pane.list .folder-row"));
     check(true, "the Notes tab clears a search");
+    // A long-press on a row opens its actions as a sheet; a quick swipe over it is just a scroll.
+    const homeRow = await (await alice.waitForSelector(".pane.list .folder-row ::-p-text(Home)")).boundingBox();
+    const rowHash = await alice.evaluate(() => location.hash);
+    await alice.touchscreen.touchStart(homeRow.x + 40, homeRow.y + homeRow.height / 2);
+    for (let i = 1; i <= 4; i++) await alice.touchscreen.touchMove(homeRow.x + 40, homeRow.y + homeRow.height / 2 - i * 15);
+    await new Promise((r) => setTimeout(r, 700));
+    await alice.touchscreen.touchEnd();
+    await new Promise((r) => setTimeout(r, 300));
+    check(await alice.evaluate(() => !document.querySelector("dialog")), "a moving finger on a row doesn't open its actions");
+    // The swipe may have scrolled the list, so find the row again.
+    const heldRow = await (await alice.waitForSelector(".pane.list .folder-row ::-p-text(Home)")).boundingBox();
+    await alice.touchscreen.touchStart(heldRow.x + 40, heldRow.y + heldRow.height / 2);
+    await new Promise((r) => setTimeout(r, 700));
+    await alice.touchscreen.touchEnd();
+    await alice.waitForSelector("dialog [role=menu][aria-label=Home] [role=menuitem]");
+    await new Promise((r) => setTimeout(r, 400));
+    const sheetActions = await alice.$$eval("dialog [role=menuitem]", (els) => els.map((e) => e.textContent.trim()).join(","));
+    check(sheetActions === "Move to…,Rename…,Share…,Move to Trash" && (await alice.evaluate(() => location.hash)) === rowHash, `a long-press on a phone row opens its actions as a sheet, without opening the row (${sheetActions})`);
+    await shot("phone-row-menu-dark");
+    await alice.tap("dialog .actions button");
+    await closed(alice);
     await alice.evaluate(() => [...document.querySelectorAll(".pane.list .folder-row")].find((b) => b.textContent.includes("Home")).click());
     await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Home");
     await alice.evaluate(() => [...document.querySelectorAll(".pane.list .folder-row")].find((b) => b.textContent.includes("Kitchen")).click());

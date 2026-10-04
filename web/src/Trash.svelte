@@ -198,14 +198,11 @@
     padding: 8px 10px 8px 14px;
   }
 
+  /* Notes and notebooks alike: nothing in the trash is a place to go, so no blue folders. */
   .kind {
     flex: none;
     display: flex;
     color: var(--dim-fg);
-  }
-
-  .kind.notebook {
-    color: var(--accent);
   }
 
   .name {

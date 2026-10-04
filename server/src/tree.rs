@@ -30,6 +30,8 @@ pub struct TreeNotebook {
     updated_at: i64,
     /// Someone has a share on this exact item, so it shows a shared badge.
     shared: bool,
+    /// Who it's shared with, by display name. Only on your own notebooks; others don't see each other.
+    shared_with: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -94,14 +96,14 @@ pub async fn get_tree(State(state): State<AppState>, CurrentUser(me): CurrentUse
 
     let mut notebooks: HashMap<String, TreeNotebook> = HashMap::new();
     for (id, parent_id, name, owner, updated_at) in own_notebooks {
-        notebooks.insert(id.clone(), TreeNotebook { id, parent_id, name, owner, role: Role::Owner, updated_at, shared: false });
+        notebooks.insert(id.clone(), TreeNotebook { id, parent_id, name, owner, role: Role::Owner, updated_at, shared: false, shared_with: vec![] });
     }
     for (id, parent_id, name, owner, updated_at, role) in shared_notebooks {
         let role = Role::parse(&role).unwrap_or(Role::Viewer);
         notebooks
             .entry(id.clone())
             .and_modify(|nb| nb.role = nb.role.max(role))
-            .or_insert(TreeNotebook { id, parent_id, name, owner, role, updated_at, shared: false });
+            .or_insert(TreeNotebook { id, parent_id, name, owner, role, updated_at, shared: false, shared_with: vec![] });
     }
 
     // Own notes, notes inside visible shared notebooks, and notes shared directly.
@@ -177,6 +179,21 @@ pub async fn get_tree(State(state): State<AppState>, CurrentUser(me): CurrentUse
             "notebook" => notebooks.get_mut(&id).map(|nb| nb.shared = true),
             _ => notes.get_mut(&id).map(|n| n.shared = true),
         };
+    }
+
+    // Who each of my own notebooks is shared with, for "Shared with Bob" on its page.
+    let recipients: Vec<(String, String)> = sqlx::query_as(
+        "SELECT s.resource_id, u.display_name FROM shares s
+         JOIN notebooks nb ON nb.id = s.resource_id JOIN users u ON u.id = s.user_id
+         WHERE s.resource_type = 'notebook' AND nb.owner_id = ? ORDER BY u.display_name COLLATE NOCASE",
+    )
+    .bind(&me.id)
+    .fetch_all(db)
+    .await?;
+    for (id, name) in recipients {
+        if let Some(nb) = notebooks.get_mut(&id) {
+            nb.shared_with.push(name);
+        }
     }
 
     let mut notebooks: Vec<_> = notebooks.into_values().collect();

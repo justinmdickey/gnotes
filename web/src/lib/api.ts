@@ -16,6 +16,8 @@ export interface TreeNotebook {
   updated_at: number;
   /** Has a share of its own, either given by you or to you. */
   shared: boolean;
+  /** Who it's shared with, by display name: only on your own notebooks. Missing from trees saved by older versions. */
+  shared_with?: string[];
 }
 
 export interface TreeNote {

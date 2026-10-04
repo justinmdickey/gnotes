@@ -260,6 +260,10 @@ async fn sharing_controls_access() {
     assert_eq!(tree["notes"][0]["shared"], false);
     let own = alice.get("/tree").await;
     assert_eq!(own["notebooks"][0]["shared"], true);
+    // The owner sees who it's shared with; the people it's shared with don't see each other.
+    let bob_name = bob.get("/me").await["display_name"].clone();
+    assert_eq!(own["notebooks"][0]["shared_with"], json!([bob_name]));
+    assert_eq!(tree["notebooks"][0]["shared_with"], json!([]));
 
     let (role, _, _) = bob_ws.join_and_sync(&note, None).await;
     assert_eq!(role, "viewer");
@@ -299,6 +303,7 @@ async fn sharing_controls_access() {
     assert_eq!(bob_ws.control("revoked").await["note"], note);
     assert_eq!(bob.get("/tree").await["notes"].as_array().unwrap().len(), 0);
     assert_eq!(alice.get("/tree").await["notebooks"][0]["shared"], false);
+    assert_eq!(alice.get("/tree").await["notebooks"][0]["shared_with"], json!([]));
 }
 
 #[tokio::test]

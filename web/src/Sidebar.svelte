@@ -3,7 +3,9 @@
   import { untrack } from "svelte";
   import Icon, { type IconName } from "./lib/Icon.svelte";
   import Menu from "./lib/Menu.svelte";
+  import { longPress } from "./lib/longPress";
   import NewNotebookDialog from "./NewNotebookDialog.svelte";
+  import RowMenu, { hasActions, type RowPress } from "./RowMenu.svelte";
   import { app, canMoveTo, colorFor, composeNote, drag, moveTo, navigate, notesFor, openSettings, type View } from "./lib/store.svelte";
   import { media, scrollEdge } from "./lib/ui.svelte";
 
@@ -185,6 +187,14 @@
 
   /** The notebook a New Notebook dialog is open for; `null` is the top folder. */
   let newNotebookIn = $state<string | null | undefined>(undefined);
+
+  /** A note's or notebook's row whose actions are open, from a right-click or long-press. */
+  let pressed = $state<RowPress | null>(null);
+  function openRow(kind: RowPress["kind"], id: string, x: number, y: number) {
+    if (!hasActions(kind, id)) return false;
+    pressed = { kind, id, x, y };
+    return true;
+  }
 </script>
 
 {#snippet row(view: View, icon: IconName, label: string, owner = "", depth = 0, fold: string | null = null, shared = false, heading = false)}
@@ -204,6 +214,7 @@
       class:selected={isSelected(view)}
       style:--depth={depth}
       onclick={() => navigate(view)}
+      use:longPress={(x, y) => view.kind === "notebook" && openRow("notebook", view.id, x, y)}
       draggable={movable}
       ondragstart={(e) => {
         if (view.kind !== "notebook") return;
@@ -270,6 +281,7 @@
       class:selected={app.noteId === note.id}
       style:--depth={depth}
       onclick={() => navigate(folder, note.id)}
+      use:longPress={(x, y) => openRow("note", note.id, x, y)}
       draggable={note.role !== "viewer"}
       ondragstart={(e) => {
         drag.item = { kind: "note", id: note.id };
@@ -371,7 +383,16 @@
 </nav>
 
 {#if newNotebookIn !== undefined}
-  <NewNotebookDialog parent={newNotebookIn} onclose={() => (newNotebookIn = undefined)} />
+  <!-- The new row shows in the tree, so the folder it went into opens. -->
+  <NewNotebookDialog
+    parent={newNotebookIn}
+    oncreated={() => setFolded([newNotebookIn ?? ROOT], false)}
+    onclose={() => (newNotebookIn = undefined)}
+  />
+{/if}
+
+{#if pressed}
+  <RowMenu press={pressed} onclose={() => (pressed = null)} />
 {/if}
 
 
