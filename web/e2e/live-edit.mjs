@@ -1673,7 +1673,27 @@ try {
     await alice.waitForFunction(() => document.querySelector(".tab-page h1")?.textContent === "Account");
     check(await alice.evaluate(() => !!document.querySelector(".tabbar") && !document.querySelector(".tabbar .tab.on")), "the avatar opens Account, with the tab bar still there and no tab lit");
     await shot("phone-account-dark");
+    check(await alice.evaluate(() => ![...document.querySelectorAll(".tab-page h2")].some((h) => h.textContent === "Account")), "Account's title isn't repeated as its first group's");
     check(await alice.evaluate(() => ![...document.querySelectorAll(".tab-page li")].some((li) => li.textContent.includes("Trash"))), "Account no longer has a Trash entry");
+    // The name is an entry row: its pencil puts the cursor in it, and Save appears once it changes.
+    await alice.tap(".tab-page .entry-row .edit");
+    check(await alice.evaluate(() => document.activeElement?.id === "display-name"), "the pencil on the Name row puts the cursor in it");
+    const saveName = async (to) => {
+      await alice.$eval("#display-name", (el) => el.select());
+      await alice.keyboard.type(to);
+      await alice.waitForSelector(".tab-page .entry-row button.suggested");
+      await alice.tap(".tab-page .entry-row button.suggested");
+      await alice.waitForFunction((to) => document.querySelector(".tab-page .profile strong")?.textContent === to && !document.querySelector(".tab-page .entry-row button"), {}, to);
+    };
+    await saveName("Alice Liddell");
+    await saveName("Alice");
+    check(true, "the name is edited in place and saved from its row");
+    // Its "Name saved" toasts would cover the fields tapped next.
+    await alice.waitForFunction(() => !document.querySelector(".toast"), { timeout: 15000 });
+    await alice.$eval(".tab-page .scroll", (el) => el.scrollTo(0, 200));
+    await alice.waitForFunction(() => document.querySelector(".tab-page .headerbar .title.shown")?.textContent === "Account");
+    check(true, "Account's title moves into the headerbar once it scrolls away");
+    await alice.$eval(".tab-page .scroll", (el) => el.scrollTo(0, 0));
     await alice.$eval(".tab-page .back-icon", (b) => b.click());
     await alice.waitForFunction(() => !document.querySelector(".tab-page") && document.querySelector(".pane.list .hero h1")?.textContent === "Recent");
     check(true, "Account's back chevron returns to the tab it was opened from");

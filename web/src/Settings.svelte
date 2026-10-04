@@ -13,6 +13,8 @@
   let name = $state(app.user?.display_name ?? "");
   let savedName = $state(app.user?.display_name ?? "");
   let error = $state("");
+  /** On a phone, the big title has scrolled away, so the headerbar shows it instead. */
+  let compact = $state(false);
 
   let changingPassword = $state(false);
   let current = $state("");
@@ -130,11 +132,14 @@
       <div class="side"></div>
     {:else}
       <!-- Opened from your avatar, so no tab is lit: the chevron goes back to where you were. -->
-      <button class="flat icon circular back-icon" title="Back" aria-label="Back" onclick={goBack}><Icon name="back" /></button>
+      <div class="side"><button class="flat icon circular back-icon" title="Back" aria-label="Back" onclick={goBack}><Icon name="back" /></button></div>
+      <!-- The small title only appears once the big one scrolls away, as on the note lists. -->
+      <div class="title" class:shown={compact} aria-hidden={!compact}><strong>Account</strong></div>
+      <div class="side"></div>
     {/if}
   </header>
 
-  <div class="scroll" use:scrollEdge>
+  <div class="scroll" use:scrollEdge onscroll={(e) => (compact = tab && e.currentTarget.scrollTop > 40)}>
     <div class="column">
       {#if tab}
         <!-- Titled like the other tabs: a big heading at the top of the page. -->
@@ -147,13 +152,21 @@
       </div>
       {#if error && !changingPassword && !resetting}<p class="error">{error}</p>{/if}
 
-      <h2 class="group-title">Account</h2>
-      <ul class="boxed">
-        <li>
+      <!-- On a phone the page's own title already says Account. -->
+      {#if !tab}<h2 class="group-title">Account</h2>{/if}
+      <ul class="boxed" class:first={tab}>
+        <!-- An AdwEntryRow: the label small above the text, which you type into in place. -->
+        <li class="entry-row">
           <form class="row-form" onsubmit={saveName}>
-            <label for="display-name">Name</label>
-            <input id="display-name" bind:value={name} autocomplete="name" />
-            {#if name.trim() && name.trim() !== savedName}<button class="suggested" type="submit">Save</button>{/if}
+            <label class="entry">
+              <span class="dim sub">Name</span>
+              <input id="display-name" bind:value={name} autocomplete="name" />
+            </label>
+            {#if name.trim() && name.trim() !== savedName}
+              <button class="suggested" type="submit">Save</button>
+            {:else}
+              <label class="edit dim" for="display-name" title="Edit name"><Icon name="rename" /></label>
+            {/if}
           </form>
         </li>
         <li>
@@ -420,6 +433,27 @@
     padding-top: 0;
   }
 
+  /* Three columns, so the small title sits in the middle of the screen. */
+  .page.tab .headerbar {
+    display: grid;
+    grid-template-columns: 1fr minmax(0, auto) 1fr;
+  }
+
+  .page.tab .headerbar .title {
+    align-items: center;
+    text-align: center;
+    opacity: 0;
+    transform: translateY(4px);
+    transition:
+      opacity var(--fast) ease,
+      transform var(--fast) ease;
+  }
+
+  .page.tab .headerbar .title.shown {
+    opacity: 1;
+    transform: none;
+  }
+
   .hero {
     padding: 4px 4px 6px;
     animation: rise 260ms var(--ease-out) both;
@@ -539,20 +573,45 @@
     width: 100%;
   }
 
-  .row-form label {
-    flex: none;
-  }
-
-  .row-form input {
+  .entry {
     flex: 1;
     min-width: 0;
-    background: transparent;
-    text-align: right;
+    display: flex;
+    flex-direction: column;
+    cursor: text;
   }
 
-  .row-form input:focus {
-    background: var(--hover);
-    text-align: left;
+  .entry input {
+    min-height: 24px;
+    padding: 0;
+    border-radius: 0;
+    background: transparent;
+  }
+
+  /* The row itself shows focus, as an entry would. */
+  .entry input:focus {
+    box-shadow: none;
+  }
+
+  .entry-row {
+    cursor: text;
+    transition: box-shadow var(--fast) ease;
+  }
+
+  .entry-row:focus-within {
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent-bg) 60%, transparent);
+  }
+
+  .edit {
+    flex: none;
+    display: inline-flex;
+    cursor: text;
+  }
+
+  /* The group under the profile has no title of its own on a phone. */
+  .boxed.first {
+    margin-top: 20px;
   }
 
 
