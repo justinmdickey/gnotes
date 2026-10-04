@@ -1163,6 +1163,91 @@ async fn tidy_up_never_loses_anything() {
     assert_eq!(alice.send(reqwest::Method::POST, &path, json!({ "text": "  " })).await.status(), 400);
 }
 
+/// A stand-in chat model for Edit with AI and the AI Prompt block. An edit drops the note's
+/// second line and says what it was asked; a write says what it was asked and the line it goes
+/// after, wrapped in thinking and a ```markdown fence.
+async fn fake_editor() -> String {
+    let fake = axum::Router::new().route(
+        "/v1/chat/completions",
+        axum::routing::post(|axum::Json(body): axum::Json<Value>| async move {
+            let prompt = body["messages"][0]["content"].as_str().unwrap().to_owned();
+            let content = if let Some(rest) = prompt.split_once("The instruction: ").map(|(_, r)| r) {
+                let (instruction, note) = rest.split_once("\n\nThe note:\n\n").unwrap();
+                let mut lines: Vec<&str> = note.lines().collect();
+                lines.remove(1);
+                format!("```markdown\n{}\n\n{instruction}\n```", lines.join("\n"))
+            } else {
+                let rest = prompt.split_once("The request: ").unwrap().1;
+                let (request, note) = rest.split_once("\n\nThe note:\n\n").unwrap();
+                let before = note.split_once("<<WRITE HERE>>").unwrap().0;
+                let after = before.trim_end().lines().last().unwrap_or("");
+                format!("<think>ok</think>\n```markdown\n- {request}\n- after {after:?}\n```")
+            };
+            axum::Json(json!({ "choices": [{ "message": { "role": "assistant", "content": content } }] }))
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/v1", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, fake).await });
+    url
+}
+
+#[tokio::test]
+async fn ai_edits_and_writes_into_a_note() {
+    let fake_url = fake_editor().await;
+    let dir = TempDir::new().unwrap();
+    let server = start(&dir).await;
+    auth::create_user(&server.state.db, "root", "", "password123", true).await.unwrap();
+    let root = login(&server.base, "root").await;
+    let alice = user(&server, "alice").await;
+    let bob = user(&server, "bob").await;
+    let res = import(&alice, None, vec![("Plan.md", b"Plan\ncall Bob\nbuy nails\n".to_vec())]).await;
+    assert!(res.status().is_success());
+    let plan = alice.get("/tree").await["notes"][0]["id"].as_str().unwrap().to_owned();
+    let (edit, write) = (format!("/notes/{plan}/edit"), format!("/notes/{plan}/write"));
+
+    // Off until the summary chat model is set up.
+    let ask = json!({ "instruction": "Drop Bob" });
+    assert_eq!(alice.send(reqwest::Method::POST, &edit, ask.clone()).await.status(), 409);
+    let at = json!({ "prompt": "two tips", "text": "Plan\n\nend", "at": 5 });
+    assert_eq!(alice.send(reqwest::Method::POST, &write, at.clone()).await.status(), 409);
+    root.send(reqwest::Method::PUT, "/admin/settings/summary", json!({ "url": fake_url, "model": "llama3.1" })).await;
+
+    // An edit may remove things; it comes back unfenced and isn't saved.
+    let edited = alice.post(&edit, ask.clone()).await;
+    assert_eq!(edited["original"], "Plan\ncall Bob\nbuy nails");
+    assert_eq!(edited["text"], "Plan\nbuy nails\n\nDrop Bob");
+    assert_eq!(gnotes_server::rooms::note_body(&server.state, plan.parse().unwrap()).await.unwrap(), "Plan\ncall Bob\nbuy nails");
+    // The app can send the text it shows, and the result ends the way it does.
+    let edited = alice.post(&edit, json!({ "instruction": "x", "text": "a\nb\nc\n" })).await;
+    assert_eq!(edited["text"], "a\nc\n\nx\n");
+
+    // A write gets the note with a marker where its text goes, and returns only the new text.
+    assert_eq!(alice.post(&write, at.clone()).await["text"], "- two tips\n- after \"Plan\"");
+    // Positions are an editor's: UTF-16 units, so an emoji counts as two.
+    let emoji = alice.post(&write, json!({ "prompt": "more", "text": "🎉 party\nnext", "at": 9 })).await;
+    assert_eq!(emoji["text"], "- more\n- after \"🎉 party\"");
+    // An empty note is fine to write in.
+    assert_eq!(alice.post(&write, json!({ "prompt": "start", "text": "", "at": 0 })).await["text"], "- start\n- after \"\"");
+
+    // Prompts must say something and not be too long; the note can't be too long or empty to edit.
+    let long = "word ".repeat(5000);
+    for body in [json!({ "instruction": "  " }), json!({ "instruction": "x".repeat(1001) }), json!({ "instruction": "x", "text": long }), json!({ "instruction": "x", "text": " " })] {
+        assert_eq!(alice.send(reqwest::Method::POST, &edit, body).await.status(), 400);
+    }
+    for body in [json!({ "prompt": "", "text": "a", "at": 0 }), json!({ "prompt": "x".repeat(1001), "text": "a", "at": 0 }), json!({ "prompt": "x", "text": long, "at": 0 })] {
+        assert_eq!(alice.send(reqwest::Method::POST, &write, body).await.status(), 400);
+    }
+
+    // Viewers can't, and strangers don't see the note.
+    alice.post("/shares", json!({ "resource_type": "note", "resource_id": plan, "username": "bob", "role": "viewer" })).await;
+    assert_eq!(bob.send(reqwest::Method::POST, &edit, ask.clone()).await.status(), 403);
+    assert_eq!(bob.send(reqwest::Method::POST, &write, at.clone()).await.status(), 403);
+    let carol = user(&server, "carol").await;
+    assert_eq!(carol.send(reqwest::Method::POST, &edit, ask).await.status(), 404);
+    assert_eq!(carol.send(reqwest::Method::POST, &write, at).await.status(), 404);
+}
+
 /// Every file under `data/export`, relative and sorted.
 fn exported(dir: &TempDir) -> Vec<String> {
     let root = dir.path().join("export");
