@@ -275,6 +275,8 @@
     display: flex;
     align-items: center;
     gap: 10px;
+    /* Its own width, not the half of the pane that left: 50% leaves it. */
+    width: max-content;
     max-width: calc(100% - 24px);
     padding: 6px 6px 6px 16px;
     translate: -50% 0;
@@ -367,6 +369,8 @@
   }
 
   .message {
+    /* With its close button, the pill grows to about 320px before the message wraps. */
+    max-width: 240px;
     font-size: var(--text-sm);
     line-height: 1.35;
   }
