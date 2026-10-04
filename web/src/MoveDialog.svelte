@@ -2,7 +2,7 @@
   import { api, ApiError, type TreeNotebook } from "./lib/api";
   import Dialog from "./lib/Dialog.svelte";
   import Icon from "./lib/Icon.svelte";
-  import { app, refreshTree } from "./lib/store.svelte";
+  import { app, moveTo, refreshTree } from "./lib/store.svelte";
   import { toast } from "./lib/ui.svelte";
 
   let {
@@ -59,28 +59,53 @@
 
   let busy = $state(false);
 
-  async function move(target: string | null, label: string) {
+  /** Moves it, with Undo in the toast like a drag-and-drop move. */
+  async function move(target: string | null) {
     busy = true;
-    try {
-      if (kind === "note") await api.moveNote(id, target);
-      else await api.moveNotebook(id, target);
-      await refreshTree();
-      toast(`Moved to ${label}`);
-      onclose();
-    } catch (err) {
-      toast(err instanceof ApiError ? err.message : "Couldn't move it");
-      busy = false;
-    }
+    if (await moveTo({ kind, id }, target)) onclose();
+    else busy = false;
   }
 
   const topLabel = $derived(kind === "note" ? "No Notebook" : "Top Level");
+
+  /** Naming a new notebook to move into, instead of picking one. */
+  let naming = $state(false);
+  let newName = $state("");
+  /**
+   * Where the new notebook goes: the top level for the owner, otherwise beside the item, in the
+   * notebook it's in now, since only the owner can make notebooks at the top of their tree.
+   */
+  const newParent = $derived(canTop ? null : current);
+  const newWhere = $derived(newParent ? app.tree.notebooks.find((n) => n.id === newParent)?.name : null);
+  const canMake = $derived(canTop || app.tree.notebooks.some((n) => n.id === current && n.role !== "viewer"));
+
+  async function createAndMove(e: SubmitEvent) {
+    e.preventDefault();
+    if (!newName.trim()) return;
+    busy = true;
+    try {
+      const { id: target } = await api.createNotebook(newName.trim(), newParent);
+      await refreshTree();
+      await move(target);
+    } catch (err) {
+      toast(err instanceof ApiError ? err.message : "Couldn't make the notebook");
+      busy = false;
+    }
+  }
 </script>
 
 <Dialog title="Move “{name || 'New Note'}”" {onclose}>
+  {#if naming}
+    <form id="move-new-notebook" onsubmit={createAndMove}>
+      <p class="dim where">Into a new notebook{#if newWhere} inside “{newWhere}”{/if}</p>
+      <!-- svelte-ignore a11y_autofocus -->
+      <input placeholder="Notebook name" aria-label="Notebook name" bind:value={newName} autofocus />
+    </form>
+  {:else}
   <ul class="boxed-list targets" aria-label="Destinations">
     {#if canTop}
       <li>
-        <button class="flat row" disabled={busy || current === null} onclick={() => move(null, topLabel)}>
+        <button class="flat row" disabled={busy || current === null} onclick={() => move(null)}>
           <Icon name={kind === "note" ? "note" : "home"} />
           <span class="label">{topLabel}</span>
           {#if current === null}<span class="here"><Icon name="check" /></span>{/if}
@@ -93,7 +118,7 @@
           class="flat row"
           style:--depth={depth}
           disabled={busy || blocked.has(nb.id) || current === nb.id}
-          onclick={() => move(nb.id, nb.name)}
+          onclick={() => move(nb.id)}
         >
           <Icon name="folder" />
           <span class="label">{nb.name}</span>
@@ -102,16 +127,47 @@
       </li>
     {/each}
   </ul>
+  {#if canMake}
+    <!-- Its own list under the scrolling one, so it's in reach however many notebooks there are. -->
+    <ul class="boxed-list new">
+      <li>
+        <button class="flat row" disabled={busy} onclick={() => (naming = true)}>
+          <Icon name="newfolder" />
+          <span class="label">New Notebook…</span>
+        </button>
+      </li>
+    </ul>
+  {/if}
+  {/if}
 
   {#snippet actions()}
-    <button onclick={onclose}>Cancel</button>
+    {#if naming}
+      <button onclick={() => (naming = false)}>Back</button>
+      <button class="suggested" type="submit" form="move-new-notebook" disabled={busy || !newName.trim()}>Create and Move</button>
+    {:else}
+      <button onclick={onclose}>Cancel</button>
+    {/if}
   {/snippet}
 </Dialog>
 
 <style>
   .targets {
-    max-height: min(56vh, 480px);
+    max-height: min(48vh, 420px);
     overflow-y: auto;
+  }
+
+  .new {
+    margin-top: 12px;
+  }
+
+  form input {
+    width: 100%;
+  }
+
+  .where {
+    margin: -8px 0 14px;
+    font-size: var(--text-sm);
+    text-align: center;
   }
 
   .row {

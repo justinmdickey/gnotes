@@ -406,8 +406,8 @@ export function canMoveTo(item: Movable, target: string | null): boolean {
   return item.kind === "note" || !subtree(item.id).has(target);
 }
 
-/** Moves a note or notebook, with Undo to put it back. */
-export async function moveTo(item: Movable, target: string | null) {
+/** Moves a note or notebook, with Undo to put it back. Says whether it moved. */
+export async function moveTo(item: Movable, target: string | null): Promise<boolean> {
   const from = placeOf(item)?.at ?? null;
   const send = (to: string | null) => (item.kind === "note" ? api.moveNote(item.id, to) : api.moveNotebook(item.id, to));
   try {
@@ -415,7 +415,9 @@ export async function moveTo(item: Movable, target: string | null) {
     await refreshTree();
     const label = target ? (app.tree.notebooks.find((n) => n.id === target)?.name ?? "notebook") : "Notes";
     toast(`Moved to ${label}`, { label: "Undo", run: () => void send(from).then(refreshTree) });
+    return true;
   } catch (err) {
     toast(err instanceof ApiError ? err.message : "Couldn't move it");
+    return false;
   }
 }
