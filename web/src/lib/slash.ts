@@ -17,9 +17,10 @@ interface SlashItem extends Completion {
 export interface SlashActions {
   photo: () => void;
   record: () => void;
-  /** Tidy Up the note with AI; listed only while this says it can. */
+  /** Tidy Up the note with AI, and an AI Prompt block at the cursor; listed only while this says AI can. */
   tidy: () => void;
-  canTidy: () => boolean;
+  prompt: (view: EditorView) => void;
+  canAI: () => boolean;
 }
 
 /** Takes the "/word" out (the menu's range starts after the slash), then runs the item. */
@@ -54,9 +55,23 @@ const ADD = { name: "Add", rank: 1 };
 const AI = { name: "AI", rank: 2 };
 
 const TIDY = "Tidy Up";
-/** Other words for Tidy Up: typing the start of one finds it too. */
-const TIDY_WORDS = ["clean up", "format", "improve"];
-const tidyWord = (typed: string) => (typed ? TIDY_WORDS.find((w) => w.startsWith(typed.toLowerCase())) : undefined);
+const PROMPT = "AI Prompt";
+/** Other words for the AI items: typing the start of one finds it too. */
+const ALIASES: Record<string, string[]> = { [TIDY]: ["clean up", "format", "improve"], [PROMPT]: ["ai", "prompt", "write"] };
+
+/** The other word each AI item is found under for what was typed, when its own name doesn't start that way. */
+function aliasesFor(typed: string): Record<string, string> {
+  const t = typed.toLowerCase();
+  const found: Record<string, string> = {};
+  if (!t) return found;
+  for (const [label, words] of Object.entries(ALIASES)) {
+    if (label.toLowerCase().split(" ").some((w) => w.startsWith(t))) continue;
+    const word = words.find((w) => w.startsWith(t));
+    if (word) found[label] = word;
+  }
+  return found;
+}
+const aliasKey = (typed: string) => JSON.stringify(aliasesFor(typed));
 
 function items(actions: SlashActions): SlashItem[] {
   const list: SlashItem[] = [
@@ -74,6 +89,7 @@ function items(actions: SlashActions): SlashItem[] {
     { label: "Emoji", icon: "emoji", apply: pick(startEmoji), section: ADD },
     { label: "Photo", icon: "camera", apply: pick(actions.photo), section: ADD },
     { label: "Voice Memo", icon: "mic", apply: pick(actions.record), section: ADD },
+    { label: PROMPT, icon: "sparkle", apply: pick(actions.prompt), section: AI },
     { label: TIDY, icon: "broom", apply: pick(actions.tidy), section: AI },
   ];
   // Listed in this order until a typed word ranks them by how well they match.
@@ -94,12 +110,14 @@ export function slashMenu(actions: SlashActions) {
     const match = context.matchBefore(/(?:^|\s)\/(\w+( \w*)?)?$/);
     if (!match || inCode(context)) return null;
     const from = match.from + match.text.indexOf("/") + 1;
-    let options = actions.canTidy() ? all : all.filter((o) => o.label !== TIDY);
-    // Typing another word for Tidy Up lists it under that word, still shown as Tidy Up.
-    const alias = tidyWord(context.state.sliceDoc(from, context.pos));
-    if (alias) options = options.map((o) => (o.label === TIDY ? { ...o, label: alias, displayLabel: TIDY } : o));
-    // Narrowed as you type, and asked again only when that changes which word Tidy Up is under.
-    return { from, options, validFor: (text) => /^(\w+( \w*)?)?$/.test(text) && tidyWord(text) === alias };
+    let options = actions.canAI() ? all : all.filter((o) => o.section !== AI);
+    // Typing another word for an AI item lists it under that word, still shown by its name.
+    const typed = context.state.sliceDoc(from, context.pos);
+    const aliases = aliasesFor(typed);
+    options = options.map((o) => (aliases[o.label] ? { ...o, label: aliases[o.label], displayLabel: o.label } : o));
+    // Narrowed as you type, and asked again only when that changes which words the AI items are under.
+    const key = aliasKey(typed);
+    return { from, options, validFor: (text) => /^(\w+( \w*)?)?$/.test(text) && aliasKey(text) === key };
   };
   return autocompletion({
     override: [source, emojiSource],

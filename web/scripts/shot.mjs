@@ -5,7 +5,9 @@
 //   screens: home recent shared account trash notebook:<name> note:<title> edit:<title> search:<query>
 //            ask (the Ask tab, empty; Search without --ai) find:<query> (typed in Ask's field, not sent)
 //            ask:<question>[|<follow-up>...] (with --ai) service:<form> (a Settings service form, e.g. service:embed)
-//            menu:<title> (a note with its menu open) tidy:<title> (Tidy Up's preview, with --ai)
+//            fab:<title> (a note with its actions open) tidy:<title> (Tidy Up's preview, with --ai)
+//            editai:<title>[|<instruction>] (Edit with AI asking, or its preview for that, with --ai)
+//            prompt:<title>[|<prompt>] (an AI Prompt block at the end of the note, or writing that, with --ai)
 //            (default: home notebook:Kitchen note:Groceries account)
 //   --phone | --desktop   viewport (default: both)
 //   --dark | --light      color scheme (default: dark)
@@ -79,6 +81,21 @@ if (flag("--ai")) {
             res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\n`);
           }
           res.end("data: [DONE]\n\n");
+          return;
+        }
+        // Edit with AI: every line after the title becomes a bullet, and action items go at the end.
+        const edit = last.match(/^The instruction: (.*)\n\nThe note:\n\n([\s\S]*)$/m);
+        if (edit) {
+          const [first, ...rest] = edit[2].split("\n");
+          const items = rest.filter((l) => l.trim()).map((l) => `- ${l.replace(/^\s*([-*]|\d+\.)\s+(\[[ x]\]\s+)?/, "")}`);
+          const content = [first, "", ...items, "", "## Action items", "", "- [ ] Go shopping on Saturday"].join("\n");
+          res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content } }] }));
+          return;
+        }
+        // The AI Prompt block: a few lines that fit a grocery list, slowly, so the shot catches it writing.
+        if (last.includes("<<WRITE HERE>>")) {
+          const content = "- Olive oil\n- Coffee beans\n- Butter";
+          setTimeout(() => res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content } }] })), 4000);
           return;
         }
         // Tidy Up: a title mark, a heading, and plain lines as bullets.
@@ -185,14 +202,21 @@ async function go(page, target) {
     notebook: `#/nb/${tree.notebooks.find((n) => n.name === arg)?.id}`,
     note: `#/note/${tree.notes.find((n) => n.title === arg)?.id}`,
     edit: `#/note/${tree.notes.find((n) => n.title === arg)?.id}`,
-    menu: `#/note/${tree.notes.find((n) => n.title === arg)?.id}`,
+    fab: `#/note/${tree.notes.find((n) => n.title === arg)?.id}`,
     tidy: `#/note/${tree.notes.find((n) => n.title === arg)?.id}`,
+    editai: `#/note/${tree.notes.find((n) => n.title === arg.split("|")[0])?.id}`,
+    prompt: `#/note/${tree.notes.find((n) => n.title === arg.split("|")[0])?.id}`,
   }[kind];
   if (!hash || hash.endsWith("undefined")) throw new Error(`unknown screen ${target}`);
   // No dialog left over from the screen before.
   if (await page.$("dialog")) {
     await page.keyboard.press("Escape");
     await page.waitForFunction(() => !document.querySelector("dialog"));
+  }
+  // Nor open note actions or an AI Prompt block.
+  if (await page.$(".editor [role=menuitem], .cm-ai-prompt")) {
+    await page.keyboard.press("Escape");
+    await page.waitForFunction(() => !document.querySelector(".editor [role=menuitem], .cm-ai-prompt"));
   }
   await page.evaluate((h) => (location.hash = h), hash);
   if (kind === "search") {
@@ -232,15 +256,48 @@ async function go(page, target) {
     await page.evaluate((name) => document.querySelector(`.service.${name}`).scrollIntoView({ block: "center" }), arg);
   }
   // Typing: the cursor in the note, with the format bar (on phones, the keyboard bar) up.
-  if (kind === "menu" || kind === "tidy") {
-    await page.waitForSelector(".editor header button[aria-label='Note menu']");
+  // The note's actions: its floating button, opened.
+  if (kind === "fab" || kind === "tidy" || kind === "editai") {
+    await page.waitForSelector(".editor button[aria-label='Note actions']");
     await settle(300);
-    await page.click(".editor header button[aria-label='Note menu']");
-    await page.waitForSelector("[role=menuitem]");
+    await page.click(".editor button[aria-label='Note actions']");
+    await page.waitForSelector(".editor [role=menuitem]");
   }
+  const action = (label) => page.evaluate((l) => [...document.querySelectorAll(".editor [role=menuitem]")].find((b) => b.textContent.includes(l)).click(), label);
   if (kind === "tidy") {
-    await page.evaluate(() => [...document.querySelectorAll("[role=menuitem]")].find((b) => b.textContent.includes("Tidy Up")).click());
+    await action("Tidy Up");
     await page.waitForSelector("dialog .tidy-page .cm-content", { timeout: 8000 });
+  }
+  if (kind === "editai") {
+    await action("Edit with AI");
+    await page.waitForSelector("dialog .ai-ask input");
+    const [, instruction] = arg.split("|");
+    if (instruction) {
+      await page.type("dialog .ai-ask input", instruction);
+      await page.keyboard.press("Enter");
+      await page.waitForSelector("dialog .tidy-page .cm-content", { timeout: 8000 });
+    }
+  }
+  // The AI Prompt block, from the "/" menu on a new line at the end of the note.
+  if (kind === "prompt") {
+    await page.waitForSelector(".cm-content[contenteditable=true]");
+    await settle(300);
+    await page.click(".cm-content");
+    await page.keyboard.down("Control");
+    await page.keyboard.press("End");
+    await page.keyboard.up("Control");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("/ai");
+    await page.waitForFunction(() => document.querySelector(".cm-slash li[aria-selected]")?.textContent.includes("AI Prompt"));
+    await settle(150);
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(() => document.activeElement?.closest(".cm-ai-prompt"));
+    const [, prompt] = arg.split("|");
+    if (prompt) {
+      await page.keyboard.type(prompt);
+      await page.keyboard.press("Enter");
+      await page.waitForSelector(".cm-ai-prompt.busy");
+    }
   }
   if (kind === "edit") {
     await page.waitForSelector(".cm-content[contenteditable=true]");

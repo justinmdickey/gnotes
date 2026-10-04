@@ -22,7 +22,8 @@
   import { kanban } from "./lib/kanban";
   import { sync, type NoteHandler } from "./lib/sync";
   import { cache, dropQueued, editing, flush, isQueued, whenCreated } from "./lib/offline";
-  import Menu from "./lib/Menu.svelte";
+  import Fab from "./lib/Fab.svelte";
+  import type { MenuItem } from "./lib/Menu.svelte";
   import StatusPage from "./lib/StatusPage.svelte";
   import { app, colorFor, composeNote, goBack, navigate, pathOf, retitle, saveTree, trashNote, twoPane, viewTitle, type View } from "./lib/store.svelte";
   import { bloom, media, scrollEdge } from "./lib/ui.svelte";
@@ -36,6 +37,7 @@
   import ShareDialog from "./ShareDialog.svelte";
   import Dialog from "./lib/Dialog.svelte";
   import { changesBetween } from "./lib/tidy";
+  import { aiPrompt, openAiPrompt } from "./lib/aiPrompt";
 
   const props: { noteId: string } = $props();
   const noteId = $derived(props.noteId);
@@ -228,57 +230,109 @@
     });
   });
 
-  // Tidy Up: the summary chat model improves the note's structure and formatting. The server makes
-  // sure nothing was lost; the result is shown rendered, and Apply writes it in as the smallest edits
-  // that get there, so it merges like typing and one Undo takes it back.
-  const canTidy = $derived(canEdit && app.features.summaries);
-  let tidying = $state<{ busy: boolean; error: string; original: string; text: string } | null>(null);
-  let tidyParent = $state<HTMLDivElement>();
+  // Tidy Up and Edit with AI: the summary chat model rewrites the note. Tidy Up improves its structure
+  // and formatting, and the server makes sure nothing was lost; Edit with AI changes it as you ask. The
+  // result is shown rendered, and Apply writes it in as the smallest edits that get there, so it merges
+  // like typing and one Undo takes it back.
+  const canAI = $derived(canEdit && app.features.summaries);
+  type AiEdit = { kind: "tidy" | "edit"; asking: boolean; busy: boolean; error: string; instruction: string; original: string; text: string };
+  let aiEdit = $state<AiEdit | null>(null);
+  /** What Edit with AI is asked to do, as typed. */
+  let instruction = $state("");
+  let aiParent = $state<HTMLDivElement>();
   /** Which request is current, so an answer for a closed dialog is dropped. */
-  let tidyRun = 0;
+  let aiRun = 0;
+  const SUGGESTIONS = ["Restructure it", "Make it all bullets", "Add action items at the end", "Fix spelling and grammar"];
 
-  async function startTidy() {
+  async function runAiEdit(kind: AiEdit["kind"], asked = "") {
     if (!view) return;
-    const run = ++tidyRun;
+    const run = ++aiRun;
     const original = view.state.doc.toString();
-    tidying = { busy: true, error: "", original, text: "" };
+    aiEdit = { kind, asking: false, busy: true, error: "", instruction: asked, original, text: "" };
     view.contentDOM.blur();
     try {
-      const res = await api.tidy(noteId, original);
-      if (run !== tidyRun || !tidying) return;
+      const res = kind === "tidy" ? await api.tidy(noteId, original) : await api.editWithAI(noteId, asked, original);
+      if (run !== aiRun || !aiEdit) return;
       if (res.text === res.original) {
-        tidying = null;
-        toast("This note is already tidy");
-      } else tidying = { busy: false, error: "", original: res.original, text: res.text };
+        aiEdit = null;
+        toast(kind === "tidy" ? "This note is already tidy" : "The AI left the note as it was");
+      } else aiEdit = { ...aiEdit, busy: false, original: res.original, text: res.text };
     } catch (err) {
-      if (run === tidyRun && tidying) tidying = { ...tidying, busy: false, error: err instanceof ApiError ? err.message : "Couldn't reach the server" };
+      if (run === aiRun && aiEdit) aiEdit = { ...aiEdit, busy: false, error: err instanceof ApiError ? err.message : "Couldn't reach the server" };
     }
   }
 
-  function closeTidy() {
-    tidyRun++;
-    tidying = null;
+  const startTidy = () => runAiEdit("tidy");
+
+  /** Edit with AI starts by asking what to change. */
+  function startEdit() {
+    aiRun++;
+    view?.contentDOM.blur();
+    instruction = "";
+    aiEdit = { kind: "edit", asking: true, busy: false, error: "", instruction: "", original: "", text: "" };
   }
 
-  function applyTidy() {
-    const t = tidying;
-    closeTidy();
+  function askEdit(asked: string) {
+    if (asked.trim()) void runAiEdit("edit", asked.trim());
+  }
+
+  const tryAgain = (t: AiEdit) => void runAiEdit(t.kind, t.instruction);
+
+  function closeAiEdit() {
+    aiRun++;
+    aiEdit = null;
+  }
+
+  function applyAiEdit() {
+    const t = aiEdit;
+    closeAiEdit();
     if (!view || !t?.text) return;
-    if (view.state.doc.toString() !== t.original) return toast("The note changed meanwhile. Try Tidy Up again.");
+    if (view.state.doc.toString() !== t.original) return toast(`The note changed meanwhile. Try ${t.kind === "tidy" ? "Tidy Up" : "Edit with AI"} again.`);
     // Its own undo step, never merged with an edit just before it, like the slash command's.
     undoManager.setMergeInterval(0);
-    view.dispatch({ changes: changesBetween(t.original, t.text), userEvent: "input.tidy" });
+    view.dispatch({ changes: changesBetween(t.original, t.text), userEvent: `input.${t.kind}` });
     undoManager.setMergeInterval(1000);
-    toast("Note tidied up", { label: "Undo", run: steps.undo });
+    toast(t.kind === "tidy" ? "Note tidied up" : "Note edited", { label: "Undo", run: steps.undo });
   }
 
   $effect(() => {
-    const text = tidying?.text;
-    const el = tidyParent;
+    const text = aiEdit?.text;
+    const el = aiParent;
     if (!text || !el) return;
-    const preview = untrack(() => new EditorView({ parent: el, state: EditorState.create({ doc: text, extensions: readOnlyLook("Tidied note") }) }));
+    const label = untrack(() => (aiEdit?.kind === "tidy" ? "Tidied note" : "Edited note"));
+    const preview = untrack(() => new EditorView({ parent: el, state: EditorState.create({ doc: text, extensions: readOnlyLook(label) }) }));
     return () => preview.destroy();
   });
+
+  // The AI Prompt block (lib/aiPrompt.ts): writes at a spot in the note, with the note as context.
+  const promptActions = {
+    async write(prompt: string, text: string, at: number) {
+      try {
+        return (await api.writeWithAI(noteId, prompt, text, at)).text;
+      } catch (err) {
+        toast(err instanceof ApiError ? err.message : "Couldn't reach the server");
+        throw err;
+      }
+    },
+    commit(v: EditorView, spec: Parameters<EditorView["dispatch"]>[0]) {
+      // Its own undo step, like Tidy Up's.
+      undoManager.setMergeInterval(0);
+      v.dispatch(spec);
+      undoManager.setMergeInterval(1000);
+    },
+  };
+
+  /** The note's actions, in the floating button: AI first, then Move to and Trash. */
+  const actions = $derived<MenuItem[]>([
+    ...(canAI
+      ? [
+          { label: "Edit with AI", icon: "sparkle" as const, onselect: startEdit },
+          { label: "Tidy Up", icon: "broom" as const, onselect: () => void startTidy() },
+        ]
+      : []),
+    ...(role && role !== "viewer" ? [{ label: "Move to…", icon: "move" as const, onselect: () => (moving = true) }] : []),
+    ...(role === "owner" ? [{ label: "Move to Trash", icon: "trash" as const, destructive: true, onselect: () => trashNote(noteId) }] : []),
+  ]);
 
   const madeAt = (ms: number) => new Date(ms).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 
@@ -325,7 +379,8 @@
           syntaxHighlighting(markdownStyle),
           livePreview,
           codeBlocks,
-          slashMenu({ photo: () => pickPhoto(), record: () => startRecording(), tidy: () => void startTidy(), canTidy: () => canTidy }),
+          slashMenu({ photo: () => pickPhoto(), record: () => startRecording(), tidy: () => void startTidy(), prompt: openAiPrompt, canAI: () => canAI }),
+          aiPrompt(promptActions),
           dragHandles,
           blame(doc, noteId, () => shared),
           emojiOnColon,
@@ -342,7 +397,7 @@
           editable.of(EditorView.editable.of(false)),
           EditorView.contentAttributes.of({ "aria-label": "Note text", autocapitalize: "sentences", spellcheck: "true" }),
           EditorView.updateListener.of((u) => {
-            if (u.focusChanged) app.typing = focused = u.view.hasFocus;
+            if (u.focusChanged) syncFocus();
             if (u.docChanged || u.selectionSet) ({ block, inline } = activeFormats(u.state));
             if (u.docChanged) refreshHistory();
           }),
@@ -356,6 +411,10 @@
       }),
     });
     view = v;
+    // Focus moving between the text and a field inside it (the AI Prompt block).
+    const onFocusMove = () => setTimeout(syncFocus);
+    v.dom.addEventListener("focusin", onFocusMove);
+    v.dom.addEventListener("focusout", onFocusMove);
 
     const offDoc = doc.subscribeLocalUpdates((bytes) => {
       editedSinceJoin = true;
@@ -465,6 +524,18 @@
       ephemeral.destroy();
     };
   });
+
+  /** Typing: the cursor in the note, or in its AI Prompt block. */
+  function syncFocus() {
+    if (!view) return;
+    app.typing = focused = view.hasFocus || !!document.activeElement?.closest(".cm-ai-prompt");
+  }
+
+  /** Done typing: the keyboard goes away, from the note or a field in it. */
+  function blurNote() {
+    if (view?.dom.contains(document.activeElement)) (document.activeElement as HTMLElement).blur();
+    view?.contentDOM.blur();
+  }
 
   /**
    * Glides the cursor back into comfortable view when the keyboard opens or the visible
@@ -587,23 +658,11 @@
       </div>
       {#if role === "viewer"}<span class="badge">View only</span>{/if}
       {#if focused && media.phone}
-        <button class="suggested done" onclick={() => view?.contentDOM.blur()} transition:bloom>Done</button>
-      {:else if role && role !== "viewer"}
-        {#if role === "owner"}
-          <button class="flat share" class:icon={media.phone} aria-label="Share" title="Share this note" onclick={() => (sharing = true)}>
-            <Icon name="share" />{#if !media.phone}<span>Share</span>{/if}
-          </button>
-        {/if}
-        <Menu
-          label="Note menu"
-          items={[
-            ...(canTidy ? [{ label: "Tidy Up", icon: "broom" as const, onselect: () => void startTidy() }] : []),
-            { label: "Move to…", icon: "move", onselect: () => (moving = true) },
-            ...(role === "owner"
-              ? [{ label: "Move to Trash", icon: "trash" as const, destructive: true, onselect: () => trashNote(noteId) }]
-              : []),
-          ]}
-        />
+        <button class="suggested done" onclick={blurNote} transition:bloom>Done</button>
+      {:else if role === "owner"}
+        <button class="flat share" class:icon={media.phone} aria-label="Share" title="Share this note" onclick={() => (sharing = true)}>
+          <Icon name="share" />{#if !media.phone}<span>Share</span>{/if}
+        </button>
       {/if}
       {#if twoPane()}
         <!-- The folder's New note button is hidden under the note, so it moves up here. -->
@@ -615,7 +674,7 @@
 
     {#if canEdit && view && tab === "note"}
       <div class="format" style:bottom="{keyboard}px" bind:offsetHeight={formatHeight}>
-        <FormatBar {view} {block} {inline} {history} onundo={steps.undo} onredo={steps.redo} onphoto={pickPhoto} onrecord={startRecording} ondone={() => view?.contentDOM.blur()} />
+        <FormatBar {view} {block} {inline} {history} onundo={steps.undo} onredo={steps.redo} onphoto={pickPhoto} onrecord={startRecording} ondone={blurNote} />
       </div>
     {/if}
   </div>
@@ -692,6 +751,10 @@
       onclose={discardRecording}
     />
   {/if}
+  <!-- The note's actions. On phones it steps aside while you type. -->
+  {#if actions.length && loaded && !lost && !recording && !(focused && media.phone)}
+    <Fab label="Note actions" icon="more" items={actions} />
+  {/if}
 </section>
 
 <input bind:this={photoInput} class="file" type="file" accept="image/*" multiple onchange={onPhotos} aria-hidden="true" tabindex="-1" />
@@ -705,22 +768,37 @@
   <MoveDialog kind="note" id={noteId} name={note?.title ?? ""} onclose={() => (moving = false)} />
 {/if}
 
-{#if tidying}
-  <Dialog title="Tidy Up" wide onclose={closeTidy}>
-    {#if tidying?.busy}
-      <div class="tidy-state dim" aria-live="polite"><span class="spinner"></span>Tidying up…</div>
-    {:else if tidying?.error}
-      <p class="tidy-state error-text">{tidying.error}</p>
+{#if aiEdit}
+  <Dialog title={aiEdit.kind === "tidy" ? "Tidy Up" : "Edit with AI"} wide onclose={closeAiEdit}>
+    {#if aiEdit.asking}
+      <form id="ai-edit" class="ai-ask" onsubmit={(e) => (e.preventDefault(), askEdit(instruction))}>
+        <!-- svelte-ignore a11y_autofocus -->
+        <input bind:value={instruction} placeholder="Describe a change…" aria-label="Change to make" maxlength="1000" autofocus />
+        <div class="ai-chips">
+          {#each SUGGESTIONS as suggestion (suggestion)}
+            <button type="button" class="ai-chip" onclick={() => askEdit(suggestion)}>{suggestion}</button>
+          {/each}
+        </div>
+      </form>
+    {:else if aiEdit.busy}
+      <div class="tidy-state dim" aria-live="polite"><span class="spinner"></span>{aiEdit.kind === "tidy" ? "Tidying up…" : "Editing…"}</div>
+    {:else if aiEdit.error}
+      <p class="tidy-state error-text">{aiEdit.error}</p>
     {:else}
-      <p class="tidy-hint dim">Rearranged and formatted with AI. Everything in the note is still there.</p>
-      <div class="page tidy-page" bind:this={tidyParent}></div>
+      <p class="tidy-hint dim">
+        {#if aiEdit.kind === "tidy"}Rearranged and formatted with AI. Everything in the note is still there.{:else}Changed with AI: “{aiEdit.instruction}”{/if}
+      </p>
+      <div class="page tidy-page" bind:this={aiParent}></div>
     {/if}
     {#snippet actions()}
-      <button onclick={closeTidy}>Cancel</button>
-      {#if tidying?.error}
-        <button onclick={() => void startTidy()}>Try Again</button>
+      <button onclick={closeAiEdit}>Cancel</button>
+      {#if aiEdit?.asking}
+        <button class="suggested" type="submit" form="ai-edit" disabled={!instruction.trim()}>Edit</button>
+      {:else if aiEdit?.error}
+        <button onclick={() => aiEdit && tryAgain(aiEdit)}>Try Again</button>
       {:else}
-        <button class="suggested" disabled={!tidying?.text} onclick={applyTidy}>Apply</button>
+        {#if aiEdit?.text}<button onclick={() => aiEdit && tryAgain(aiEdit)}>Try Again</button>{/if}
+        <button class="suggested" disabled={!aiEdit?.text} onclick={applyAiEdit}>Apply</button>
       {/if}
     {/snippet}
   </Dialog>
@@ -1284,6 +1362,88 @@
 
   .tidy-page :global(.cm-editor) {
     font-size: var(--text-md);
+  }
+
+  /* Edit with AI: what to change, and a few ideas to tap. */
+  .ai-ask {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    margin-bottom: 4px;
+  }
+
+  .ai-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .ai-chip {
+    min-height: 32px;
+    padding: 0 14px;
+    border-radius: var(--radius-pill);
+    font-size: var(--text-sm);
+    font-weight: 600;
+  }
+
+  /* The AI Prompt block: a field in the note, under the line it was opened on. */
+  .page :global(.cm-ai-prompt) {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 6px 0;
+    padding: 0 6px 0 12px;
+    border-radius: var(--radius-md);
+    background: var(--card-bg);
+    box-shadow: var(--shadow-sm), 0 0 0 1px var(--border);
+    font-size: var(--text-md);
+    white-space: normal;
+    cursor: default;
+    animation: rise 220ms var(--ease-out) both;
+  }
+
+  .page :global(.cm-ai-prompt:focus-within) {
+    box-shadow: var(--shadow-sm), 0 0 0 2px color-mix(in srgb, var(--accent-bg) 60%, transparent);
+  }
+
+  .page :global(.cm-ai-prompt > svg) {
+    flex: none;
+    color: var(--accent);
+  }
+
+  /* No width of its own, so a long prompt never widens the note. */
+  .page :global(.cm-ai-prompt input) {
+    flex: 1;
+    width: 0;
+    min-height: 44px;
+    padding: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .page :global(.cm-ai-busy) {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    padding-right: 8px;
+    color: var(--dim-fg);
+    font-size: var(--text-sm);
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .page :global(.cm-ai-prompt.busy .cm-ai-busy) {
+    display: flex;
+  }
+
+  .page :global(.cm-ai-prompt.busy input) {
+    color: var(--dim-fg);
+  }
+
+  .page :global(.cm-ai-busy .spinner) {
+    width: 14px;
+    height: 14px;
+    color: var(--accent);
   }
 
   .summary-page.shown {

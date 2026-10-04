@@ -321,6 +321,10 @@ export const api = {
   summarize: (noteId: string) => request<NoteSummary>("POST", `/notes/${noteId}/summary`, {}),
   /** `text` improved by the summary chat model, with nothing of it lost. Nothing is saved. */
   tidy: (noteId: string, text: string) => request<{ original: string; text: string }>("POST", `/notes/${noteId}/tidy`, { text }),
+  editWithAI: (noteId: string, instruction: string, text: string) =>
+    request<{ original: string; text: string }>("POST", `/notes/${noteId}/edit`, { instruction, text }),
+  writeWithAI: (noteId: string, prompt: string, text: string, at: number) =>
+    request<{ text: string }>("POST", `/notes/${noteId}/write`, { prompt, text, at }),
   photoText: (id: string) => request<{ text: string }>("POST", `/attachments/${id}/text`, {}),
   features: () => request<Features>("GET", "/features"),
   attachmentMeta: (id: string) => request<AttachmentMeta>("GET", `/attachments/${id}/meta`),

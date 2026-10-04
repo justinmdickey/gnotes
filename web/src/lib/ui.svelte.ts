@@ -16,7 +16,7 @@ reducedQuery.addEventListener("change", (e) => (media.reduced = e.matches));
 export const standalone =
   matchMedia("(display-mode: standalone)").matches || (navigator as { standalone?: boolean }).standalone === true;
 
-const ms = (n: number) => (media.reduced ? 0 : n);
+export const ms = (n: number) => (media.reduced ? 0 : n);
 
 export interface Toast {
   id: number;

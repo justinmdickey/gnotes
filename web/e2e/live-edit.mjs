@@ -18,7 +18,9 @@ const base = `http://127.0.0.1:${port}`;
 // It's also the chat model: a photo always reads as a short shopping list, a note (text only)
 // summarizes to a fixed summary, and a question (Ask) gets a one-line answer citing note [1],
 // streamed a few characters at a time, each a moment later. A follow-up is rewritten as the first
-// question plus the follow-up. Tidy Up adds a heading and makes plain lines bullets. And the embedding model: dairy words land together; any other word is its own
+// question plus the follow-up. Tidy Up adds a heading and makes plain lines bullets. Edit with AI
+// drops the note's last line and says what it was asked at the end. The AI Prompt block gets two
+// bullets in a ```markdown fence, or fails when asked to "break". And the embedding model: dairy words land together; any other word is its own
 // direction (hashed), so texts only come close when they share a word or are both about dairy.
 const whisper = createServer((req, res) => {
   const chunks = [];
@@ -36,6 +38,22 @@ const whisper = createServer((req, res) => {
         let i = 0;
         const next = () => (i < pieces.length ? (res.write(pieces[i++]), setTimeout(next, 60)) : res.end("data: [DONE]\n\n"));
         setTimeout(next, 800);
+        return;
+      }
+      const edit = !photo && last.match(/^The instruction: (.*)\n\nThe note:\n\n([\s\S]*)$/m);
+      if (edit) {
+        const content = `${edit[2].split("\n").slice(0, -1).join("\n")}\n\nEdited: ${edit[1]}`;
+        setTimeout(() => res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content } }] })), 800);
+        return;
+      }
+      if (!photo && last.includes("<<WRITE HERE>>")) {
+        const request = last.match(/^The request: (.*)$/m)[1];
+        if (request.includes("break")) {
+          res.statusCode = 500;
+          return void res.end("{}");
+        }
+        const content = "```markdown\n- Olive oil\n- Coffee beans\n```";
+        setTimeout(() => res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content } }] })), 800);
         return;
       }
       // Tidy Up: a heading under the title, and plain lines outside code as bullets.
@@ -145,6 +163,19 @@ function check(cond, msg) {
 const closed = (page) => page.waitForFunction(() => !document.querySelector("dialog"));
 
 const text = (page) => page.$eval(".cm-content", (el) => el.innerText);
+
+/** The labels in the note's actions, opened from its floating button. */
+async function openNoteActions(page) {
+  await page.click(".editor button[aria-label='Note actions']");
+  await page.waitForSelector(".editor [role=menuitem]");
+  return page.evaluate(() => [...document.querySelectorAll(".editor [role=menuitem]")].map((b) => b.textContent.trim()));
+}
+
+/** Picks one of the note's actions. */
+async function noteAction(page, label) {
+  await openNoteActions(page);
+  await page.evaluate((l) => [...document.querySelectorAll(".editor [role=menuitem]")].find((b) => b.textContent.includes(l)).click(), label);
+}
 
 /** The note with a table and a kanban board, for screenshots. */
 let plansId;
@@ -545,12 +576,13 @@ try {
   await alice.click(".pane.list .search .clear");
   await alice.evaluate((h) => (location.hash = h), noteHash);
   await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("bread"));
-  // Tidy Up needs the AI chat model.
-  await alice.click(".editor header button[aria-label='Note menu']");
-  await alice.waitForSelector("[role=menuitem]");
-  check(await alice.evaluate(() => ![...document.querySelectorAll("[role=menuitem]")].some((b) => b.textContent.includes("Tidy Up"))), "without AI, the note menu has no Tidy Up");
+  // The note's actions are in a floating button now, not the headerbar; the AI ones need the AI chat model.
+  check(await alice.evaluate(() => !document.querySelector(".editor header button[aria-label='Note menu']")), "the headerbar has no note menu");
+  const plain = await openNoteActions(alice);
+  check(plain.join(",") === "Move to…,Move to Trash", `without AI, the note's actions are Move to… and Move to Trash (${plain})`);
   await alice.keyboard.press("Escape");
   await alice.waitForFunction(() => !document.querySelector("[role=menuitem]"));
+  check(await alice.evaluate(() => document.activeElement?.matches("button[aria-label='Note actions']")), "Escape closes the note's actions, back on their button");
 
   // Settings: an admin resets Bob's password, and Bob's open app drops to the login screen.
   await alice.click("nav button[aria-label='Settings']");
@@ -652,12 +684,18 @@ try {
   await alice.keyboard.press("Backspace");
   for (let i = 0; i < 7; i++) await alice.keyboard.press("Backspace");
 
-  // Tidy Up, from the note menu: a rendered preview, then Apply writes it into the note, and Undo takes it back.
+  // The note's actions with AI: Edit with AI and Tidy Up come first. Tapping outside closes them.
   await new Promise((r) => setTimeout(r, 600));
   const untidy = await markdown(alice);
-  await alice.click(".editor header button[aria-label='Note menu']");
-  await alice.waitForSelector("[role=menuitem]");
-  await alice.evaluate(() => [...document.querySelectorAll("[role=menuitem]")].find((b) => b.textContent.includes("Tidy Up")).click());
+  const withAI = await openNoteActions(alice);
+  check(withAI.join(",") === "Edit with AI,Tidy Up,Move to…,Move to Trash", `with AI, the note's actions start with Edit with AI and Tidy Up (${withAI})`);
+  if (process.env.SHOTS) await (await new Promise((r) => setTimeout(r, 400)), alice.screenshot({ path: join(process.env.SHOTS, "desktop-note-actions.png") }));
+  await alice.mouse.click(400, 300);
+  await alice.waitForFunction(() => !document.querySelector("[role=menuitem]"));
+  check(true, "tapping outside closes the note's actions");
+
+  // Tidy Up, from the note's actions: a rendered preview, then Apply writes it into the note, and Undo takes it back.
+  await noteAction(alice, "Tidy Up");
   await alice.waitForSelector("dialog .tidy-state .spinner");
   await alice.waitForFunction(() => document.querySelector("dialog .tidy-page .cm-content")?.innerText.includes("To buy"), { timeout: 5000 });
   check(await alice.evaluate(() => !document.querySelector("dialog .tidy-page").innerText.includes("##")), "Tidy Up shows the tidied note, drawn like a note");
@@ -689,6 +727,95 @@ try {
   await alice.keyboard.down("Control");
   await alice.keyboard.press("End");
   await alice.keyboard.up("Control");
+  await alice.keyboard.press("Backspace");
+
+  // Edit with AI: say what to change, see the result like Tidy Up's, and Apply it; it may remove things.
+  await new Promise((r) => setTimeout(r, 600));
+  await noteAction(alice, "Edit with AI");
+  await alice.waitForFunction(() => document.activeElement?.matches("dialog .ai-ask input"));
+  check(
+    await alice.evaluate(() => document.querySelector("dialog h2").textContent === "Edit with AI" && document.querySelectorAll("dialog .ai-chip").length >= 3 && document.querySelector("dialog button[form=ai-edit]").disabled),
+    "Edit with AI asks what to change, with ideas to tap, and can't start on nothing",
+  );
+  if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-edit-ai.png") });
+  await alice.keyboard.type("Drop the last line");
+  await alice.keyboard.press("Enter");
+  await alice.waitForSelector("dialog .tidy-state .spinner");
+  await alice.waitForFunction(() => document.querySelector("dialog .tidy-page .cm-content")?.innerText.includes("Edited: Drop the last line"), { timeout: 5000 });
+  check(await alice.evaluate(() => document.querySelector("dialog .tidy-hint").textContent.includes("Drop the last line")), "the edit shows in the same preview, saying what was asked");
+  if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-edit-ai-preview.png") });
+  check(await markdown(alice) === untidy, "the note doesn't change until Apply");
+  await alice.click("dialog ::-p-text(Apply)");
+  await closed(alice);
+  const edited = await markdown(alice);
+  const untidyLines = untidy.split("\n");
+  check(edited === `${untidyLines.slice(0, -1).join("\n")}\n\nEdited: Drop the last line`, `Apply writes the edit in, last line gone (${JSON.stringify(edited.slice(-40))})`);
+  await alice.click(".toast ::-p-text(Undo)");
+  await alice.waitForFunction((t) => document.querySelector(".cm-content").cmTile.root.view.state.doc.toString() === t, { timeout: 3000 }, untidy);
+  check(true, "Undo takes the edit back");
+  // An idea chip asks straight away; Cancel leaves the note alone.
+  await noteAction(alice, "Edit with AI");
+  await alice.waitForSelector("dialog .ai-chip");
+  await alice.click("dialog .ai-chip");
+  await alice.waitForFunction(() => document.querySelector("dialog .tidy-page .cm-content")?.innerText.includes("Edited: Restructure it"), { timeout: 5000 });
+  check(true, "an idea chip asks for that change");
+  await alice.click("dialog ::-p-text(Cancel)");
+  await closed(alice);
+  check(await markdown(alice) === untidy, "Cancel leaves the note as it was");
+
+  // The AI Prompt block: from the / menu, a field in the note that isn't part of its text; Enter writes there.
+  await alice.click(".cm-content");
+  await alice.keyboard.down("Control");
+  await alice.keyboard.press("End");
+  await alice.keyboard.up("Control");
+  await alice.keyboard.type("\n/write");
+  await alice.waitForFunction(() => document.querySelector(".cm-slash li[aria-selected]")?.textContent === "AI Prompt");
+  await new Promise((r) => setTimeout(r, 150));
+  await alice.keyboard.press("Enter");
+  await alice.waitForFunction(() => document.activeElement?.closest(".cm-ai-prompt"));
+  check(await markdown(alice) === `${untidy}\n`, "/write opens an AI Prompt block with the cursor in it, and it isn't in the note's text");
+  await carol.waitForFunction((t) => document.querySelector(".cm-content")?.cmTile.root.view.state.doc.toString() === t, { timeout: 5000 }, `${untidy}\n`);
+  check(await carol.evaluate(() => !document.querySelector(".cm-ai-prompt")), "someone else in the note doesn't see the AI Prompt block");
+  // Escape takes it away; so does Enter with nothing typed.
+  await alice.keyboard.press("Escape");
+  await alice.waitForFunction(() => !document.querySelector(".cm-ai-prompt") && document.activeElement?.matches(".cm-content"));
+  await alice.keyboard.type("/ai");
+  await alice.waitForFunction(() => document.querySelector(".cm-slash li[aria-selected]")?.textContent === "AI Prompt");
+  await new Promise((r) => setTimeout(r, 150));
+  await alice.keyboard.press("Enter");
+  await alice.waitForFunction(() => document.activeElement?.closest(".cm-ai-prompt"));
+  await alice.keyboard.press("Enter");
+  await alice.waitForFunction(() => !document.querySelector(".cm-ai-prompt"));
+  check(await markdown(alice) === `${untidy}\n`, "Escape or an empty Enter removes the AI Prompt block, leaving the note as it was");
+  // A failed request says why and keeps the prompt.
+  await alice.keyboard.type("/ai");
+  await alice.waitForFunction(() => document.querySelector(".cm-slash li[aria-selected]")?.textContent === "AI Prompt");
+  await new Promise((r) => setTimeout(r, 150));
+  await alice.keyboard.press("Enter");
+  await alice.waitForFunction(() => document.activeElement?.closest(".cm-ai-prompt"));
+  if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-ai-prompt.png") });
+  await alice.keyboard.type("break it");
+  await alice.keyboard.press("Enter");
+  await alice.waitForFunction(() => [...document.querySelectorAll(".toast")].some((t) => t.textContent.includes("AI")) && !document.querySelector(".cm-ai-prompt.busy"), { timeout: 8000 });
+  check(
+    await alice.evaluate(() => document.querySelector(".cm-ai-prompt input")?.value === "break it" && !!document.activeElement?.closest(".cm-ai-prompt")),
+    "when writing fails, a toast says so and the prompt stays to try again",
+  );
+  await alice.keyboard.down("Control");
+  await alice.keyboard.press("a");
+  await alice.keyboard.up("Control");
+  await alice.keyboard.type("two more things");
+  await alice.keyboard.press("Enter");
+  await alice.waitForSelector(".cm-ai-prompt.busy");
+  if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-ai-prompt-writing.png") });
+  await alice.waitForFunction(() => !document.querySelector(".cm-ai-prompt"), { timeout: 5000 });
+  const written = await markdown(alice);
+  check(written === `${untidy}\n- Olive oil\n- Coffee beans`, `the answer replaces the field as text in the note (${JSON.stringify(written.slice(-40))})`);
+  await alice.keyboard.down("Control");
+  await alice.keyboard.press("z");
+  await alice.keyboard.up("Control");
+  await alice.waitForFunction((t) => document.querySelector(".cm-content").cmTile.root.view.state.doc.toString() === `${t}\n`, { timeout: 3000 }, untidy);
+  check(true, "one Undo takes the written text back");
   await alice.keyboard.press("Backspace");
 
   // Finding by meaning is Ask's: "dairy" isn't in Groceries, but milk and cheese are. The list's search is words only, and offers Ask.
@@ -1096,9 +1223,7 @@ try {
   check(true, "a notebook lists its sub-notebooks as folders");
   await alice.evaluate((id) => (location.hash = `${location.hash}/note/${id}`), pantry);
   await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("Pantry"));
-  await alice.click(".editor header button[aria-label='Note menu']");
-  await alice.waitForFunction(() => [...document.querySelectorAll("[role=menuitem]")].some((b) => b.textContent.includes("Move to")));
-  await alice.evaluate(() => [...document.querySelectorAll("[role=menuitem]")].find((b) => b.textContent.includes("Move to")).click());
+  await noteAction(alice, "Move to…");
   await alice.waitForSelector("dialog [aria-label=Destinations]");
   await alice.evaluate(() => [...document.querySelectorAll("dialog [aria-label=Destinations] button")].find((b) => b.textContent.trim() === "Garage").click());
   await closed(alice);
@@ -1106,9 +1231,7 @@ try {
   check(true, "a note moves to another notebook");
 
   // Trash: a deleted note waits in the Trash screen and Restore puts it back where it was.
-  await alice.click(".editor header button[aria-label='Note menu']");
-  await alice.waitForFunction(() => [...document.querySelectorAll("[role=menuitem]")].some((b) => b.textContent.includes("Move to Trash")));
-  await alice.evaluate(() => [...document.querySelectorAll("[role=menuitem]")].find((b) => b.textContent.includes("Move to Trash")).click());
+  await noteAction(alice, "Move to Trash");
   await alice.waitForFunction(() => [...document.querySelectorAll(".toast")].some((t) => t.textContent.includes("moved to trash")));
   await alice.evaluate(() => [...document.querySelectorAll("nav .row")].find((b) => b.textContent.trim() === "Trash").click());
   await alice.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Trash" && document.querySelector(".boxed-list .row")?.textContent.includes("Pantry"));
@@ -1350,7 +1473,16 @@ try {
     await shot("phone-share");
     await alice.tap("dialog .actions button");
     await closed(alice);
+    check(
+      await alice.evaluate(() => {
+        const fab = document.querySelector(".editor button[aria-label='Note actions']").getBoundingClientRect();
+        return fab.bottom <= document.querySelector(".tabbar").getBoundingClientRect().top && fab.right > innerWidth - 40;
+      }),
+      "on a phone the note's actions button sits at the bottom right, above the tab bar",
+    );
     await alice.tap(".cm-content");
+    await alice.waitForFunction(() => !document.querySelector(".editor button[aria-label='Note actions']"));
+    check(true, "on a phone the note's actions button steps aside while typing");
     await shot("phone-editing");
     // Typing a long note on a phone keeps the cursor clear of the format bar, with room below it.
     await alice.keyboard.down("Control");
@@ -1451,10 +1583,13 @@ try {
     await alice.waitForFunction(() => document.querySelector(".summary-page.shown .cm-content")?.innerText.includes("Things to buy"), { timeout: 5000 });
     await shot("phone-summary-dark");
     await alice.tap(".tabs button:first-child");
-    // Tidy Up on a phone: the note menu's sheet, then the preview as a bottom sheet with Apply in reach.
-    await alice.tap(".editor header button[aria-label='Note menu']");
-    await alice.waitForSelector("[role=menuitem]");
-    await shot("phone-note-menu-dark");
+    // Tidy Up on a phone: the note's actions fanned out, then the preview as a bottom sheet with Apply in reach.
+    await openNoteActions(alice);
+    await shot("phone-note-actions-dark");
+    check(
+      await alice.evaluate(() => [...document.querySelectorAll(".editor [role=menuitem]")].every((b) => b.getBoundingClientRect().right <= innerWidth && b.getBoundingClientRect().top > 0)),
+      "on a phone the note's actions fit on screen above their button",
+    );
     await alice.evaluate(() => [...document.querySelectorAll("[role=menuitem]")].find((b) => b.textContent.includes("Tidy Up")).click());
     await alice.waitForFunction(() => document.querySelector("dialog .tidy-page .cm-content")?.innerText.includes("To buy"), { timeout: 5000 });
     await shot("phone-tidy-dark");
@@ -1467,6 +1602,47 @@ try {
     );
     await alice.evaluate(() => [...document.querySelectorAll("dialog button")].find((b) => b.textContent.trim() === "Cancel").click());
     await closed(alice);
+    // Edit with AI on a phone: a bottom sheet asking what to change, then the same preview.
+    await noteAction(alice, "Edit with AI");
+    await alice.waitForSelector("dialog .ai-chip");
+    await shot("phone-edit-ai-dark");
+    await alice.type("dialog .ai-ask input", "Make it shorter");
+    await alice.keyboard.press("Enter");
+    await alice.waitForFunction(() => document.querySelector("dialog .tidy-page .cm-content")?.innerText.includes("Edited: Make it shorter"), { timeout: 5000 });
+    await shot("phone-edit-ai-preview-dark");
+    await alice.evaluate(() => [...document.querySelectorAll("dialog button")].find((b) => b.textContent.trim() === "Cancel").click());
+    await closed(alice);
+    // The AI Prompt block on a phone: typing in it counts as typing, so the tab bar and the actions button stay away.
+    await alice.tap(".cm-line"); // The title line: the middle of this note is a photo, which taps open full size.
+    await alice.keyboard.down("Control");
+    await alice.keyboard.press("End");
+    await alice.keyboard.up("Control");
+    await alice.keyboard.type("\n/ai");
+    await alice.waitForFunction(() => document.querySelector(".cm-slash li[aria-selected]")?.textContent === "AI Prompt");
+    await new Promise((r) => setTimeout(r, 150));
+    await alice.keyboard.press("Enter");
+    await alice.waitForFunction(() => document.activeElement?.closest(".cm-ai-prompt"));
+    await shot("phone-ai-prompt-dark");
+    check(
+      await alice.evaluate(() => !document.querySelector(".tabbar") && !document.querySelector(".editor button[aria-label='Note actions']") && !!document.querySelector(".editor button.done")),
+      "on a phone, typing in the AI Prompt block keeps the keyboard layout: Done up top, no tab bar or actions button",
+    );
+    const box = await alice.evaluate(() => {
+      const r = document.querySelector(".cm-ai-prompt").getBoundingClientRect();
+      return { left: r.left, right: r.right };
+    });
+    check(box.left >= 0 && box.right <= 390, `the AI Prompt block fits the phone's width (${box.left}–${box.right})`);
+    await alice.keyboard.type("two more things");
+    await alice.keyboard.press("Enter");
+    await alice.waitForSelector(".cm-ai-prompt.busy");
+    await shot("phone-ai-prompt-writing-dark");
+    await alice.waitForFunction(() => !document.querySelector(".cm-ai-prompt"), { timeout: 5000 });
+    await alice.keyboard.down("Control");
+    await alice.keyboard.press("z");
+    await alice.keyboard.up("Control");
+    await alice.keyboard.press("Backspace");
+    await alice.tap("button[aria-label='Hide keyboard']");
+    await alice.waitForSelector(".tabbar");
     // The tab bar is Notes, Recent, +, Ask, Shared; Account is your avatar at the top right of each tab.
     check(
       await alice.evaluate(() => [...document.querySelectorAll(".tabbar > *")].map((t) => t.textContent.trim() || "+").join(",") === "Notes,Recent,+,Ask,Shared"),
