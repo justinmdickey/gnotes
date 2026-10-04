@@ -133,6 +133,11 @@ class LanguagePicker extends WidgetType {
 }
 
 const codeLine = Decoration.line({ class: "cm-code" });
+/**
+ * A line of code, unwrapped. Each line scrolls sideways on its own, so every line in a block gets the
+ * block's widest line as --code-cols to scroll as far, and they're kept scrolled together (see syncScroll).
+ */
+const bodyLine = (cols: number) => Decoration.line({ class: "cm-code cm-code-body", attributes: { style: `--code-cols: ${cols}` } });
 const firstLine = Decoration.line({ class: "cm-code cm-code-first" });
 const lastLine = Decoration.line({ class: "cm-code cm-code-last" });
 const closedLine = Decoration.line({ class: "cm-code cm-code-last cm-code-closed" });
@@ -153,6 +158,44 @@ function colors(lang: LanguageDescription, code: string): [number, number, strin
     colorCache.set(key, spans);
   }
   return spans;
+}
+
+/** How many monospace columns a line of code takes, with tabs to the next stop of 4. */
+function columns(text: string): number {
+  let n = 0;
+  for (const c of text) n = c === "\t" ? n + 4 - (n % 4) : n + 1;
+  return n;
+}
+
+/**
+ * Lines of the same block scroll sideways together: scrolling one scrolls the others, and lines
+ * drawn afresh (typing, scrolling into view) catch up with the rest of their block.
+ */
+function bodyRuns(view: EditorView): HTMLElement[][] {
+  const runs: HTMLElement[][] = [];
+  let run: HTMLElement[] = [];
+  for (const el of view.contentDOM.children) {
+    if (el instanceof HTMLElement && el.classList.contains("cm-code-body")) run.push(el);
+    else if (run.length) (runs.push(run), (run = []));
+  }
+  if (run.length) runs.push(run);
+  return runs;
+}
+
+/** Where each line was last scrolled to by us, so its own scroll event isn't taken for a new scroll. */
+const scrolledTo = new WeakMap<Element, number>();
+
+function syncScroll(e: Event) {
+  const line = e.target as HTMLElement;
+  if (!line.classList?.contains("cm-code-body") || scrolledTo.get(line) === line.scrollLeft) return;
+  const x = line.scrollLeft;
+  scrolledTo.set(line, x);
+  for (const step of ["previousElementSibling", "nextElementSibling"] as const) {
+    for (let el = line[step]; el?.classList.contains("cm-code-body"); el = el[step]) {
+      scrolledTo.set(el, x);
+      el.scrollLeft = x;
+    }
+  }
 }
 
 function build(view: EditorView, onLoaded: () => void): { decorations: DecorationSet; atomic: DecorationSet } {
@@ -180,9 +223,12 @@ function build(view: EditorView, onLoaded: () => void): { decorations: Decoratio
         const code = textNode ? state.sliceDoc(textNode.from, textNode.to) : "";
         const guess = info ? null : guessLanguage(code);
 
+        let cols = 0;
+        for (let l = open.number + 1; l <= (closed ? close.number - 1 : close.number); l++) cols = Math.max(cols, columns(state.doc.line(l).text));
+        const body = bodyLine(cols);
         for (let l = open.number; l <= close.number; l++) {
           const line = state.doc.line(l);
-          const last = l === close.number && closed ? (active.has(l) ? lastLine : closedLine) : codeLine;
+          const last = l === close.number && closed ? (active.has(l) ? lastLine : closedLine) : body;
           decos.push((l === open.number ? firstLine : last).range(line.from));
         }
         if (!active.has(open.number)) {
@@ -220,6 +266,8 @@ const codeBlocksPlugin = ViewPlugin.fromClass(
         view.dispatch({});
       };
       ({ decorations: this.decorations, atomic: this.atomic } = build(view, this.redraw));
+      // Scroll events don't bubble, so they're caught on the way down.
+      view.contentDOM.addEventListener("scroll", syncScroll, true);
     }
 
     update(u: ViewUpdate) {
@@ -227,6 +275,18 @@ const codeBlocksPlugin = ViewPlugin.fromClass(
       if (u.docChanged || u.viewportChanged || u.selectionSet || u.focusChanged || editableChanged) {
         ({ decorations: this.decorations, atomic: this.atomic } = build(u.view, this.redraw));
       }
+      // Once the lines are drawn, any that came back unscrolled line up with their block again.
+      u.view.requestMeasure({
+        key: this,
+        read: (v) => bodyRuns(v).map((run) => ({ run, x: Math.max(...run.map((el) => el.scrollLeft)) })),
+        write: (runs) => {
+          for (const { run, x } of runs) for (const el of run) if (el.scrollLeft !== x) (scrolledTo.set(el, x), (el.scrollLeft = x));
+        },
+      });
+    }
+
+    destroy() {
+      this.view.contentDOM.removeEventListener("scroll", syncScroll, true);
     }
   },
   { decorations: (v) => v.decorations },

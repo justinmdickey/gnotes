@@ -14,7 +14,6 @@
     onredo,
     onphoto,
     onrecord,
-    ondone,
   }: {
     view: EditorView;
     block: Block;
@@ -25,7 +24,6 @@
     onredo: () => void;
     onphoto: () => void;
     onrecord: () => void;
-    ondone: () => void;
   } = $props();
 
   const styles: [Block, string][] = [
@@ -49,14 +47,31 @@
   const keep = (e: Event) => e.preventDefault();
   /** Phone only: text styles, quote and code sit behind an "Aa" button, like Apple Notes. */
   let stylesOpen = $state(false);
+
+  // A row wider than the screen fades out at the edge it continues past, so it's clear it scrolls.
+  let bar: HTMLDivElement;
+  let more = $state({ before: false, after: false });
+  function edges() {
+    if (!bar) return;
+    const overflow = bar.scrollWidth - bar.clientWidth > 1;
+    more = { before: overflow && bar.scrollLeft > 1, after: overflow && bar.scrollLeft < bar.scrollWidth - bar.clientWidth - 1 };
+  }
+  $effect(() => {
+    void stylesOpen;
+    // Once the row has been redrawn for the new set of buttons.
+    requestAnimationFrame(edges);
+  });
 </script>
+
+<svelte:window onresize={edges} />
 
 <!--
   Class hints for the compact layout: .main shows in the everyday row, .extra only
   while "Aa" is open. With room for everything, all show except the Aa toggle.
   Bold and italic sit behind "Aa" there, as in Apple Notes, to leave room for undo and redo.
 -->
-<div class="bar" class:styles-open={stylesOpen} role="toolbar" aria-label="Formatting" tabindex="-1" onmousedown={keep} onpointerdown={keep}>
+<div bind:this={bar} class="bar" class:styles-open={stylesOpen} class:more-before={more.before} class:more-after={more.after} role="toolbar" aria-label="Formatting" tabindex="-1"
+  onmousedown={keep} onpointerdown={keep} onscroll={edges}>
   <button class="flat icon aa main extra" class:active={stylesOpen} aria-label="Text styles" aria-expanded={stylesOpen} onclick={() => (stylesOpen = !stylesOpen)}>
     <Icon name="textformat" />
   </button>
@@ -94,12 +109,12 @@
 
   <button class="flat icon main attach" title="Add photo" aria-label="Add photo" onclick={onphoto}><Icon name="camera" /></button>
   <button class="flat icon main attach" title="Record voice memo" aria-label="Record voice memo" onclick={onrecord}><Icon name="mic" /></button>
-  <!-- Phone: finish typing from down here instead of reaching for Done at the top. -->
-  <button class="flat icon main extra done" title="Hide keyboard" aria-label="Hide keyboard" onclick={ondone}><Icon name="keyboardhide" /></button>
 </div>
 
 <style>
   .bar {
+    --fade-before: 0px;
+    --fade-after: 0px;
     display: flex;
     align-items: center;
     gap: 2px;
@@ -109,6 +124,19 @@
     scrollbar-width: none;
     border-radius: var(--radius-md);
     background: var(--hover);
+  }
+
+  .bar.more-before,
+  .bar.more-after {
+    mask-image: linear-gradient(to right, transparent, #000 var(--fade-before), #000 calc(100% - var(--fade-after)), transparent);
+  }
+
+  .bar.more-before {
+    --fade-before: 32px;
+  }
+
+  .bar.more-after {
+    --fade-after: 32px;
   }
 
   .bar button {
@@ -142,8 +170,7 @@
   .style-subheading { font-weight: 600; }
 
 
-  .aa,
-  .done {
+  .aa {
     display: none;
   }
 
@@ -186,23 +213,11 @@
     .aa { order: 0; }
     .list { order: 1; }
     .history { order: 2; }
-    .attach { order: 3; color: var(--accent); }
-    .done { order: 4; }
-  }
-
-  /* Only phones have an on-screen keyboard to hide. */
-  @media (min-width: 701px) {
-    .bar > .done {
-      display: none !important;
-    }
+    .attach { order: 3; }
   }
 
   /* Phone: a full-width bar on the keyboard with big, evenly spaced targets. */
   @media (max-width: 700px) {
-    .done {
-      color: var(--dim-fg);
-    }
-
     .bar {
       padding: 2px 4px;
       border-radius: 0;

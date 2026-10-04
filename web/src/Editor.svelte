@@ -82,6 +82,12 @@
   let scroller: HTMLDivElement;
   /** Phone: space kept between the cursor and whatever covers the bottom of the note. */
   const CURSOR_ROOM = 120;
+  /** Phone: the title line has scrolled away, so the headerbar names the note instead. */
+  let compact = $state(false);
+  function onScroll() {
+    const title = parent?.querySelector(".cm-line");
+    compact = !!title && title.getBoundingClientRect().bottom < scroller.getBoundingClientRect().top;
+  }
 
   /** Opened from the copy saved on this device, before (or without) the server answering. */
   let fromCache = $state(false);
@@ -141,8 +147,12 @@
     loaded = true;
     refreshEditable();
     if (app.freshNote === ownId && canEdit) {
-      app.freshNote = null;
-      view?.focus();
+      // Made to hold a memo or photos (the tab bar's long-press menu): start on that instead of typing.
+      const add = app.freshAdd;
+      app.freshNote = app.freshAdd = null;
+      if (add === "memo") startRecording();
+      else if (add && view) void withBusy(() => addImages(view!, ownId, add, true));
+      else view?.focus();
     }
   }
 
@@ -170,14 +180,13 @@
     EditorView.contentAttributes.of({ "aria-label": label }),
   ];
 
-  // The Summary tab: an AI summary of the whole note, made the first time the tab is opened (and again
-  // on request), shown read-only with the note's own styling. The note's editor stays as it is underneath.
-  let tab = $state<"note" | "summary">("note");
+  // Summary, from the note's actions: an AI summary of the whole note, made the first time it's asked
+  // for (and again on request), shown read-only with the note's own styling in a sheet over the note.
+  let summaryOpen = $state(false);
   let summary = $state<{ text: string; stale: boolean; at: number } | null>(null);
   let summarizing = $state(false);
   let summaryError = $state("");
   let summaryParent = $state<HTMLDivElement>();
-  let summaryView: EditorView | null = null;
 
   function keep(s: { summary: string | null; stale?: boolean; created_at?: number }) {
     summary = s.summary ? { text: s.summary, stale: !!s.stale, at: s.created_at ?? Date.now() } : null;
@@ -194,16 +203,16 @@
     summarizing = false;
   }
 
-  // Fetched up front, so the tab can say whether opening it shows a summary or makes one.
+  // Fetched up front, so the action can say whether it shows a summary or makes one.
   $effect(() => {
     if (!app.features.summaries) return;
     const id = noteId;
     untrack(() => api.summary(id).then((s) => { if (!summarizing && s.summary) keep(s); }, () => {}));
   });
 
-  /** Opening the tab is the trigger: it shows the saved summary, or makes one when there's none. */
+  /** Opening it is the trigger: it shows the saved summary, or makes one when there's none. */
   async function openSummary() {
-    tab = "summary";
+    summaryOpen = true;
     view?.contentDOM.blur();
     if (summarizing) return;
     try {
@@ -219,15 +228,10 @@
     const text = summary?.text;
     const el = summaryParent;
     if (!text || !el) return;
-    untrack(() => {
-      // Titled like a note, so the first line gets the title style and the summary reads as body text.
-      const doc = `Summary\n${text}`;
-      if (summaryView) return void summaryView.dispatch({ changes: { from: 0, to: summaryView.state.doc.length, insert: doc } });
-      summaryView = new EditorView({
-        parent: el,
-        state: EditorState.create({ doc, extensions: readOnlyLook("Summary") }),
-      });
-    });
+    // Under the note's title, so the first line gets the title style and the summary reads as body text.
+    const doc = `${untrack(() => note?.title) || "Summary"}\n${text}`;
+    const shown = untrack(() => new EditorView({ parent: el, state: EditorState.create({ doc, extensions: readOnlyLook("Summary") }) }));
+    return () => shown.destroy();
   });
 
   // Tidy Up and Edit with AI: the summary chat model rewrites the note. Tidy Up improves its structure
@@ -242,7 +246,7 @@
   let aiParent = $state<HTMLDivElement>();
   /** Which request is current, so an answer for a closed dialog is dropped. */
   let aiRun = 0;
-  const SUGGESTIONS = ["Restructure it", "Make it all bullets", "Add action items at the end", "Fix spelling and grammar"];
+  const SUGGESTIONS = ["Make it all bullets", "Add action items at the end", "Fix spelling and grammar"];
 
   async function runAiEdit(kind: AiEdit["kind"], asked = "") {
     if (!view) return;
@@ -295,6 +299,12 @@
     toast(t.kind === "tidy" ? "Note tidied up" : "Note edited", { label: "Undo", run: steps.undo });
   }
 
+  // A preview that's ready puts focus on Apply, the suggested choice, rather than leaving it on Cancel.
+  let applyButton = $state<HTMLButtonElement>();
+  $effect(() => {
+    if (aiEdit?.text && !aiEdit.busy) applyButton?.focus();
+  });
+
   $effect(() => {
     const text = aiEdit?.text;
     const el = aiParent;
@@ -322,8 +332,18 @@
     },
   };
 
-  /** The note's actions, in the floating button: AI first, then Move to and Trash. */
+  /**
+   * The note's actions, in the floating button: adding a photo or memo (reachable without the keyboard
+   * up), then AI, then Move to and Trash.
+   */
   const actions = $derived<MenuItem[]>([
+    ...(canEdit
+      ? [
+          { label: "Photo", icon: "camera" as const, onselect: pickPhoto },
+          { label: "Voice Memo", icon: "mic" as const, onselect: startRecording },
+        ]
+      : []),
+    ...(app.features.summaries && loaded && !lost ? [{ label: summary ? "Summary" : "Summarize", icon: "note" as const, onselect: () => void openSummary() }] : []),
     ...(canAI
       ? [
           { label: "Edit with AI", icon: "sparkle" as const, onselect: startEdit },
@@ -362,7 +382,7 @@
    * at the start. Beside the text is part of the editor itself, so it never gets here.
    */
   function focusEnd(e: MouseEvent) {
-    if (!view || !canEdit || tab !== "note" || view.contentDOM.contains(e.target as Node)) return;
+    if (!view || !canEdit || view.contentDOM.contains(e.target as Node)) return;
     const above = e.clientY < view.contentDOM.getBoundingClientRect().top;
     view.dispatch({ selection: EditorSelection.cursor(above ? 0 : view.state.doc.length), scrollIntoView: true });
     view.focus();
@@ -504,7 +524,6 @@
       if (!blank) save();
       editing.delete(noteId);
       sync.close(noteId, handler);
-      summaryView?.destroy();
       if (blank && isQueued(noteId)) {
         void dropQueued(noteId);
         app.tree.notes = app.tree.notes.filter((n) => n.id !== noteId);
@@ -650,7 +669,7 @@
           <Icon name="back" />
         </button>
       {/if}
-      <div class="title"><strong>{note?.title || "New Note"}</strong></div>
+      <div class="title" class:shown={compact} aria-hidden={media.phone && !compact}><strong>{note?.title || "New Note"}</strong></div>
       <div class="peers">
         {#each peers as peer (peer.name)}
           <span class="avatar small {peer.color}" title="{peer.name} is here" transition:bloom>{peer.name.slice(0, 1).toUpperCase()}</span>
@@ -672,9 +691,9 @@
       {/if}
     </header>
 
-    {#if canEdit && view && tab === "note"}
+    {#if canEdit && view}
       <div class="format" style:bottom="{keyboard}px" bind:offsetHeight={formatHeight}>
-        <FormatBar {view} {block} {inline} {history} onundo={steps.undo} onredo={steps.redo} onphoto={pickPhoto} onrecord={startRecording} ondone={blurNote} />
+        <FormatBar {view} {block} {inline} {history} onundo={steps.undo} onredo={steps.redo} onphoto={pickPhoto} onrecord={startRecording} />
       </div>
     {/if}
   </div>
@@ -695,51 +714,20 @@
   {/if}
 
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-  <div class="scroll" class:gone={lost} onclick={focusEnd} use:scrollEdge bind:this={scroller}>
+  <div class="scroll" class:gone={lost} onclick={focusEnd} onscroll={onScroll} use:scrollEdge bind:this={scroller}>
     <div class="column" class:hidden={!loaded}>
-      {#if place || app.features.summaries}
-        <!-- Where the note lives, and its Note / Summary tabs. -->
+      {#if place}
+        <!-- Where the note lives. -->
         <div class="note-head">
-          {#if place}
-            <button class="chip-link notebook-chip" title="Open {place.label}" onclick={(e) => (e.stopPropagation(), openPlace())}>
-              <Icon name={place.icon} size={14} /><span>{place.label}</span><Icon name="next" size={12} />
-            </button>
-          {/if}
-          {#if app.features.summaries}
-            <div class="tabs" role="tablist" aria-label="Note or summary">
-              <button role="tab" aria-selected={tab === "note"} class:on={tab === "note"} onclick={(e) => (e.stopPropagation(), (tab = "note"))}>Note</button>
-              <button role="tab" aria-selected={tab === "summary"} class:on={tab === "summary"} title={summary ? "Show the summary" : "Make a summary of this note"}
-                onclick={(e) => (e.stopPropagation(), void openSummary())}>
-                {#if summary || summarizing}Summary{:else}<Icon name="sparkle" size={14} />Summarize{/if}
-              </button>
-            </div>
-          {/if}
+          <button class="chip-link notebook-chip" title="Open {place.label}" onclick={(e) => (e.stopPropagation(), openPlace())}>
+            <Icon name={place.icon} size={14} /><span>{place.label}</span><Icon name="next" size={12} />
+          </button>
         </div>
       {/if}
-      {#if tab === "summary"}
-        <div class="summary-state">
-          {#if summarizing}
-            <span class="dim"><span class="spinner"></span> Summarizing…</span>
-          {:else if summaryError}
-            <span class="error-text">{summaryError}</span>
-            <button class="flat" onclick={(e) => (e.stopPropagation(), void makeSummary())}>Try Again</button>
-          {:else if summary}
-            {#if summary.stale}
-              <span class="stale">The note has changed since this summary.</span>
-              <button class="suggested" onclick={(e) => (e.stopPropagation(), void makeSummary())}>Update</button>
-            {:else}
-              <span class="dim">Made {madeAt(summary.at)}</span>
-              <button class="flat" onclick={(e) => (e.stopPropagation(), void makeSummary())}>Regenerate</button>
-            {/if}
-          {/if}
-        </div>
-      {/if}
-      <div class="page" class:with-chip={place || app.features.summaries} class:tab-hidden={tab !== "note"} class:can-edit={canEdit}
+      <div class="page" class:with-chip={place} class:can-edit={canEdit}
         class:can-read={canEdit && app.features.photo_text}
         class:can-transcribe={canEdit && app.features.transcription}
         bind:this={parent}></div>
-      <!-- After the note's editor, so it stays the first .cm-content on the page. -->
-      <div class="page summary-page" class:shown={tab === "summary" && !!summary} bind:this={summaryParent}></div>
     </div>
   </div>
   {#if recording}
@@ -798,7 +786,36 @@
         <button onclick={() => aiEdit && tryAgain(aiEdit)}>Try Again</button>
       {:else}
         {#if aiEdit?.text}<button onclick={() => aiEdit && tryAgain(aiEdit)}>Try Again</button>{/if}
-        <button class="suggested" disabled={!aiEdit?.text} onclick={applyAiEdit}>Apply</button>
+        <button bind:this={applyButton} class="suggested" disabled={!aiEdit?.text} onclick={applyAiEdit}>Apply</button>
+      {/if}
+    {/snippet}
+  </Dialog>
+{/if}
+
+{#if summaryOpen}
+  <Dialog title="Summary" wide onclose={() => (summaryOpen = false)}>
+    <div class="summary-state" aria-live="polite">
+      {#if summarizing}
+        <span class="dim"><span class="spinner"></span> Summarizing…</span>
+      {:else if summaryError}
+        <span class="error-text">{summaryError}</span>
+      {:else if summary?.stale}
+        <span class="stale">The note has changed since this summary.</span>
+      {:else if summary}
+        <span class="dim">Made {madeAt(summary.at)}</span>
+      {/if}
+    </div>
+    {#if summary && !summarizing}
+      <div class="page tidy-page summary-page" bind:this={summaryParent}></div>
+    {/if}
+    {#snippet actions()}
+      <button onclick={() => (summaryOpen = false)}>Close</button>
+      {#if summaryError}
+        <button onclick={() => void makeSummary()}>Try Again</button>
+      {:else if summary?.stale}
+        <button class="suggested" disabled={summarizing} onclick={() => void makeSummary()}>Update</button>
+      {:else}
+        <button disabled={summarizing || !summary} onclick={() => void makeSummary()}>Regenerate</button>
       {/if}
     {/snippet}
   </Dialog>
@@ -1255,7 +1272,7 @@
     padding-top: 10px;
   }
 
-  /* Which notebook this note lives in (tap to open it), and the Note / Summary tabs, lined up with the text. */
+  /* Which notebook this note lives in (tap to open it), lined up with the text. */
   .note-head {
     display: flex;
     align-items: center;
@@ -1268,47 +1285,17 @@
     max-width: 100%;
   }
 
-  .tabs {
-    flex: none;
-    display: flex;
-    gap: 2px;
-    margin-left: auto;
-    padding: 2px;
-    border-radius: var(--radius-pill);
-    background: var(--button-bg);
-  }
-
-  .tabs button {
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    min-height: 28px;
-    padding: 0 14px;
-    border-radius: var(--radius-pill);
-    background: transparent;
-    color: var(--dim-fg);
-    font-size: var(--text-sm);
-    font-weight: 700;
-  }
-
-  .tabs button.on {
-    background: var(--view-bg);
-    color: var(--accent);
-    box-shadow: var(--shadow-sm);
-  }
-
   /* Summarizing…, when it was made, or that the note has moved on since. */
   .summary-state {
     display: flex;
     align-items: center;
-    gap: 12px;
-    min-height: 40px;
-    padding: 14px max(var(--gutter), calc((100% - var(--measure)) / 2)) 0;
+    justify-content: center;
+    margin: -8px 0 12px;
     font-size: var(--text-sm);
+    text-align: center;
   }
 
-  .summary-state > span:first-child {
-    flex: 1;
+  .summary-state > span {
     display: flex;
     align-items: center;
     gap: 8px;
@@ -1327,11 +1314,6 @@
 
   .summary-state .error-text {
     color: var(--destructive);
-  }
-
-  .summary-page,
-  .tab-hidden {
-    display: none;
   }
 
   .tidy-state {
@@ -1402,6 +1384,10 @@
     animation: rise 220ms var(--ease-out) both;
   }
 
+  .page :global(.cm-line.cm-ai-absorbed) {
+    display: none;
+  }
+
   .page :global(.cm-ai-prompt:focus-within) {
     box-shadow: var(--shadow-sm), 0 0 0 2px color-mix(in srgb, var(--accent-bg) 60%, transparent);
   }
@@ -1444,11 +1430,6 @@
     width: 14px;
     height: 14px;
     color: var(--accent);
-  }
-
-  .summary-page.shown {
-    display: block;
-    padding-top: 10px;
   }
 
   .hidden {
@@ -1732,6 +1713,34 @@
     font-family: "Adwaita Mono", "Source Code Pro", monospace;
     font-size: 0.85em;
     line-height: 1.6;
+  }
+
+  /*
+    Code keeps its lines whole: a long one scrolls sideways inside the block, never wrapping mid-token
+    or widening the page. A spacer at the block's widest line (--code-cols) lets every line scroll as far.
+  */
+  .page :global(.cm-line.cm-code-body) {
+    position: relative;
+    /* Its text never widens the note; it scrolls instead. */
+    contain: inline-size;
+    white-space: pre;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+  }
+
+  .page :global(.cm-line.cm-code-body::after) {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: calc(var(--code-cols) * 1ch);
+    width: 28px;
+    height: 1px;
+  }
+
+  /* Who wrote a line of code: its bar goes inside the block, where the line's scrolling can't clip it. */
+  .page :global(.cm-code-body .cm-blame) {
+    left: 4px;
   }
 
   .page :global(.cm-code-first) {
@@ -2120,8 +2129,20 @@
 
   /* Phone: the formatting bar floats on top of the keyboard while typing. */
   @media (max-width: 700px) {
+    /* The title line says what the note is; once it scrolls away, the headerbar does. */
     header .title {
-      visibility: hidden;
+      align-items: center;
+      text-align: center;
+      opacity: 0;
+      transform: translateY(4px);
+      transition:
+        opacity var(--fast) ease,
+        transform var(--fast) ease;
+    }
+
+    header .title.shown {
+      opacity: 1;
+      transform: none;
     }
 
     .format {
@@ -2168,8 +2189,7 @@
       --gutter-left: 40px;
     }
 
-    .page :global(.cm-content),
-    .summary-state {
+    .page:not(.tidy-page) :global(.cm-content) {
       padding-left: var(--gutter-left);
     }
   }

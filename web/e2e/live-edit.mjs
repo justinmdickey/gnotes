@@ -578,8 +578,18 @@ try {
   await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("bread"));
   // The note's actions are in a floating button now, not the headerbar; the AI ones need the AI chat model.
   check(await alice.evaluate(() => !document.querySelector(".editor header button[aria-label='Note menu']")), "the headerbar has no note menu");
+  check(
+    await alice.evaluate(() => {
+      const fab = getComputedStyle(document.querySelector(".editor button[aria-label='Note actions']")).backgroundColor;
+      const probe = document.body.appendChild(Object.assign(document.createElement("div"), { style: "background: var(--popover-bg)" }));
+      const neutral = getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      return fab === neutral;
+    }),
+    "the note's actions button is neutral, leaving blue to the main action",
+  );
   const plain = await openNoteActions(alice);
-  check(plain.join(",") === "Move to…,Move to Trash", `without AI, the note's actions are Move to… and Move to Trash (${plain})`);
+  check(plain.join(",") === "Photo,Voice Memo,Move to…,Move to Trash", `without AI, the note's actions are Photo, Voice Memo, Move to… and Move to Trash (${plain})`);
   await alice.keyboard.press("Escape");
   await alice.waitForFunction(() => !document.querySelector("[role=menuitem]"));
   check(await alice.evaluate(() => document.activeElement?.matches("button[aria-label='Note actions']")), "Escape closes the note's actions, back on their button");
@@ -647,48 +657,53 @@ try {
   await alice.waitForFunction(() => !document.querySelector(".settings-layer"));
   await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("bread"));
 
-  // The Summary tab summarizes the note the first time it's opened, and says when the note has moved on.
-  await alice.waitForFunction(() => document.querySelector(".tabs button:last-child")?.innerText.trim() === "Summarize");
-  check(true, "with no summary yet, the tab offers to Summarize");
-  if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-summarize-tab.png") });
-  await alice.click(".tabs button:last-child");
-  await alice.waitForSelector(".summary-state .spinner");
-  await alice.waitForFunction(() => document.querySelector(".summary-page.shown .cm-content")?.innerText.includes("Things to buy this week."), { timeout: 5000 });
+  // Summarize, in the note's actions, makes a summary in a sheet the first time, and says when the note has moved on.
+  check(await alice.evaluate(() => !document.querySelector(".editor [role=tablist]")), "the note has no Note / Summary row of its own");
+  check((await openNoteActions(alice)).includes("Summarize"), "with no summary yet, the note's actions offer to Summarize");
+  await alice.evaluate(() => [...document.querySelectorAll(".editor [role=menuitem]")].find((b) => b.textContent.includes("Summarize")).click());
+  await alice.waitForSelector("dialog .summary-state .spinner");
+  await alice.waitForFunction(() => document.querySelector("dialog .summary-page .cm-content")?.innerText.includes("Things to buy this week."), { timeout: 5000 });
   check(
     await alice.evaluate(() => {
-      const page = document.querySelector(".summary-page.shown");
-      return !!page.querySelector(".cm-checkbox") && page.innerText.includes("Key points") && !page.innerText.includes("##") && !document.querySelector(".format");
+      const page = document.querySelector("dialog .summary-page");
+      return !!page.querySelector(".cm-checkbox") && page.innerText.includes("Key points") && !page.innerText.includes("##") && document.querySelector("dialog h2").textContent === "Summary";
     }),
-    "opening Summary makes one, drawn like a note, with the format bar put away",
+    "Summarize makes a summary, drawn like a note, in a sheet over it",
   );
   if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-summary.png") });
-  await alice.click(".tabs ::-p-text(Note)");
-  await alice.waitForFunction(() => !document.querySelector(".summary-page.shown") && !!document.querySelector(".format"));
+  await alice.click("dialog ::-p-text(Close)");
+  await closed(alice);
   await alice.reload();
-  await alice.waitForFunction(() => document.querySelector(".tabs button:last-child")?.innerText.trim() === "Summary");
-  check(true, "once a note has a summary, the tab reads Summary before it's opened");
   await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("bread"));
+  await new Promise((r) => setTimeout(r, 300));
+  check((await openNoteActions(alice)).includes("Summary"), "once a note has a summary, the action reads Summary before it's opened");
+  await alice.keyboard.press("Escape");
+  await alice.waitForFunction(() => !document.querySelector("[role=menuitem]"));
   await alice.click(".cm-content");
   await alice.keyboard.down("Control");
   await alice.keyboard.press("End");
   await alice.keyboard.up("Control");
   await alice.keyboard.type(" and jam");
   await new Promise((r) => setTimeout(r, 600));
-  await alice.click(".tabs ::-p-text(Summary)");
-  await alice.waitForFunction(() => document.querySelector(".summary-state")?.innerText.includes("changed since"), { timeout: 5000 });
+  await noteAction(alice, "Summary");
+  await alice.waitForFunction(() => document.querySelector("dialog .summary-state")?.innerText.includes("changed since"), { timeout: 5000 });
   check(true, "reopening Summary after an edit says the note has changed");
-  await alice.click(".summary-state ::-p-text(Update)");
-  await alice.waitForFunction(() => document.querySelector(".summary-state")?.innerText.includes("Made"), { timeout: 5000 });
+  await alice.click("dialog ::-p-text(Update)");
+  await alice.waitForFunction(() => document.querySelector("dialog .summary-state")?.innerText.includes("Made"), { timeout: 5000 });
   check(true, "Update makes a fresh summary");
-  await alice.click(".tabs ::-p-text(Note)");
-  await alice.keyboard.press("Backspace");
-  for (let i = 0; i < 7; i++) await alice.keyboard.press("Backspace");
+  await alice.click("dialog ::-p-text(Close)");
+  await closed(alice);
+  await alice.click(".cm-content");
+  await alice.keyboard.down("Control");
+  await alice.keyboard.press("End");
+  await alice.keyboard.up("Control");
+  for (let i = 0; i < 8; i++) await alice.keyboard.press("Backspace");
 
   // The note's actions with AI: Edit with AI and Tidy Up come first. Tapping outside closes them.
   await new Promise((r) => setTimeout(r, 600));
   const untidy = await markdown(alice);
   const withAI = await openNoteActions(alice);
-  check(withAI.join(",") === "Edit with AI,Tidy Up,Move to…,Move to Trash", `with AI, the note's actions start with Edit with AI and Tidy Up (${withAI})`);
+  check(withAI.join(",") === "Photo,Voice Memo,Summary,Edit with AI,Tidy Up,Move to…,Move to Trash", `with AI, the note's actions add Summary, Edit with AI and Tidy Up (${withAI})`);
   if (process.env.SHOTS) await (await new Promise((r) => setTimeout(r, 400)), alice.screenshot({ path: join(process.env.SHOTS, "desktop-note-actions.png") }));
   await alice.mouse.click(400, 300);
   await alice.waitForFunction(() => !document.querySelector("[role=menuitem]"));
@@ -743,6 +758,7 @@ try {
   await alice.waitForSelector("dialog .tidy-state .spinner");
   await alice.waitForFunction(() => document.querySelector("dialog .tidy-page .cm-content")?.innerText.includes("Edited: Drop the last line"), { timeout: 5000 });
   check(await alice.evaluate(() => document.querySelector("dialog .tidy-hint").textContent.includes("Drop the last line")), "the edit shows in the same preview, saying what was asked");
+  check(await alice.evaluate(() => document.activeElement?.textContent.trim() === "Apply"), "a ready preview puts focus on Apply, not Cancel");
   if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-edit-ai-preview.png") });
   check(await markdown(alice) === untidy, "the note doesn't change until Apply");
   await alice.click("dialog ::-p-text(Apply)");
@@ -757,7 +773,7 @@ try {
   await noteAction(alice, "Edit with AI");
   await alice.waitForSelector("dialog .ai-chip");
   await alice.click("dialog .ai-chip");
-  await alice.waitForFunction(() => document.querySelector("dialog .tidy-page .cm-content")?.innerText.includes("Edited: Restructure it"), { timeout: 5000 });
+  await alice.waitForFunction(() => document.querySelector("dialog .tidy-page .cm-content")?.innerText.includes("Edited: Make it all bullets"), { timeout: 5000 });
   check(true, "an idea chip asks for that change");
   await alice.click("dialog ::-p-text(Cancel)");
   await closed(alice);
@@ -817,6 +833,26 @@ try {
   await alice.waitForFunction((t) => document.querySelector(".cm-content").cmTile.root.view.state.doc.toString() === `${t}\n`, { timeout: 3000 }, untidy);
   check(true, "one Undo takes the written text back");
   await alice.keyboard.press("Backspace");
+  // Opened on a fresh list item, the field takes that item's place instead of leaving an empty one above it.
+  await alice.keyboard.type("\n- jam\n");
+  // The list's new item settles before the menu is asked for.
+  await new Promise((r) => setTimeout(r, 300));
+  await alice.keyboard.type("/ai");
+  await alice.waitForFunction(() => document.querySelector(".cm-slash li[aria-selected]")?.textContent === "AI Prompt");
+  await new Promise((r) => setTimeout(r, 150));
+  await alice.keyboard.press("Enter");
+  await alice.waitForFunction(() => document.activeElement?.closest(".cm-ai-prompt"));
+  check(
+    await alice.evaluate(() => {
+      const markerOnly = (l) => /^[-•]?$/.test(l.textContent.trim());
+      const item = document.querySelector(".cm-ai-prompt").previousElementSibling;
+      return markerOnly(item) && item.offsetHeight === 0 && ![...document.querySelectorAll(".cm-line")].some((l) => l.textContent.trim() && markerOnly(l) && l.offsetHeight > 0);
+    }),
+    "an AI Prompt opened on a fresh list item hides that empty item while it's open",
+  );
+  await alice.keyboard.press("Escape");
+  for (let i = 0; i < 12 && (await markdown(alice)) !== untidy; i++) await alice.keyboard.press("Backspace");
+  check(await markdown(alice) === untidy, "Escape gives the empty item back, and it deletes like any other");
 
   // Finding by meaning is Ask's: "dairy" isn't in Groceries, but milk and cheese are. The list's search is words only, and offers Ask.
   await alice.evaluate(() => document.activeElement?.blur());
@@ -1307,6 +1343,9 @@ try {
   await chooser.accept([png]);
   await alice.waitForFunction(() => document.querySelector(".cm-attachment img")?.naturalWidth === 320, { timeout: 5000 });
   check(true, "a picked photo uploads and shows in the note");
+  const [fromActions] = await Promise.all([alice.waitForFileChooser({ timeout: 3000 }), noteAction(alice, "Photo")]);
+  await fromActions.cancel();
+  check(true, "Photo in the note's actions opens the photo picker");
   // Reading its text is on demand: nothing happens until Get Text, shown while pointing at the photo.
   await new Promise((r) => setTimeout(r, 1200));
   check(await alice.evaluate(() => !document.querySelector(".cm-content").innerText.includes("SHOPPING LIST") && !document.querySelector(".cm-attachment.reading")), "a photo isn't read until asked");
@@ -1341,6 +1380,12 @@ try {
   await alice.waitForFunction(() => document.querySelector(".cm-attachment.is-image img")?.naturalWidth === 320);
   check(true, "Undo brings the photo back");
 
+  // Voice Memo in the note's actions starts recording, without the keyboard or format bar.
+  await noteAction(alice, "Voice Memo");
+  await alice.waitForSelector(".recorder .stop:not([disabled])");
+  check(await alice.evaluate(() => !document.querySelector(".editor button[aria-label='Note actions']")), "Voice Memo in the note's actions starts recording, and the actions button steps aside");
+  await alice.click(".recorder button[aria-label='Discard recording']");
+  await alice.waitForFunction(() => !document.querySelector(".recorder") && !document.querySelector(".cm-listening"));
   // A voice memo records, embeds a player, and gets its transcript underneath.
   // With the cursor on the title, the memo goes on the line right under it, marked before any words come.
   await alice.click(".cm-content");
@@ -1460,6 +1505,7 @@ try {
     await alice.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true });
     await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("bread"));
     await shot("phone-editor");
+    check(await alice.evaluate(() => !document.querySelector(".editor header .title.shown")), "on a phone the headerbar leaves the title to the note's first line");
     const noteUrl = alice.url();
     await alice.goto(`${base}/#/settings`);
     await alice.waitForSelector("button[aria-label='Manage Bob']");
@@ -1480,6 +1526,10 @@ try {
       }),
       "on a phone the note's actions button sits at the bottom right, above the tab bar",
     );
+    check(
+      await alice.evaluate(() => innerHeight - parseFloat(getComputedStyle(document.querySelector(".toasts")).bottom) <= document.querySelector(".fab-box").getBoundingClientRect().top),
+      "on a phone, toasts on a note show above its actions button",
+    );
     await alice.tap(".cm-content");
     await alice.waitForFunction(() => !document.querySelector(".editor button[aria-label='Note actions']"));
     check(true, "on a phone the note's actions button steps aside while typing");
@@ -1497,9 +1547,23 @@ try {
     });
     await shot("phone-typing-long");
     check(gap >= 100, `cursor stays above the phone format bar with room (${gap}px)`);
+    await alice.waitForSelector(".editor header .title.shown");
+    check(await alice.$eval(".editor header .title.shown", (t) => t.textContent.trim() === "Groceries"), "once the title line scrolls away, the phone headerbar shows the note's title");
     await shot("phone-typing-long");
+    check(
+      await alice.evaluate(() => {
+        const color = (l) => getComputedStyle(document.querySelector(`.format button[aria-label='${l}']`)).color;
+        return color("Add photo") === color("Undo") && color("Record voice memo") === color("Undo") && !document.querySelector("button[aria-label='Hide keyboard']");
+      }),
+      "the phone format bar's photo and memo buttons are plain like its other tools, with no second way to hide the keyboard",
+    );
     await alice.tap("button[aria-label='Text styles']");
+    await alice.waitForSelector(".format .bar.more-after:not(.more-before)");
     await shot("phone-editing-styles");
+    await alice.evaluate(() => document.querySelector(".format .bar").scrollBy(1000, 0));
+    await alice.waitForSelector(".format .bar.more-before:not(.more-after)");
+    check(true, "the phone's text styles row fades out on the side it continues past");
+    await shot("phone-editing-styles-end");
     await alice.tap("button[aria-label='Text styles']");
     await alice.keyboard.type("\n/");
     await alice.waitForSelector(".cm-slash li");
@@ -1510,10 +1574,10 @@ try {
     await alice.waitForSelector(".cm-drag-grip.shown");
     check(true, "on a phone the line being typed on shows its grip");
     await shot("phone-drag-grip");
-    // The keyboard bar has its own way out, so Done at the top isn't the only one.
-    await alice.tap("button[aria-label='Hide keyboard']");
+    // Done at the top puts the keyboard away.
+    await alice.tap(".editor header button.done");
     await alice.waitForSelector(".tabbar");
-    check(await alice.evaluate(() => !document.querySelector(".cm-editor.cm-focused")), "the phone keyboard bar can hide the keyboard");
+    check(await alice.evaluate(() => !document.querySelector(".cm-editor.cm-focused")), "Done hides the phone keyboard");
     await alice.click(".editor .back-icon");
     await new Promise((r) => setTimeout(r, 500));
     await shot("phone-list");
@@ -1567,6 +1631,31 @@ try {
     await alice.tap(".recorder button[aria-label='Discard recording']");
     await alice.waitForFunction(() => !document.querySelector(".recorder"));
     check(await alice.evaluate(() => !document.querySelector(".cm-listening") && !document.querySelector(".cm-content").innerText.includes("remember")), "discarding takes back the marker and any live text");
+    // Holding the tab bar's + offers a new note, a voice memo or a photo; a memo note starts recording straight away.
+    const hold = async () => {
+      const plus = await (await alice.waitForSelector(".tabbar .compose")).boundingBox();
+      await alice.touchscreen.touchStart(plus.x + plus.width / 2, plus.y + plus.height / 2);
+      await new Promise((r) => setTimeout(r, 650));
+      await alice.touchscreen.touchEnd();
+      await alice.waitForSelector("dialog [role=menu]");
+      await new Promise((r) => setTimeout(r, 400));
+      return alice.evaluate(() => [...document.querySelectorAll("dialog [role=menuitem]")].map((b) => b.textContent.trim()).join(","));
+    };
+    const lint = await alice.evaluate(() => location.hash);
+    const offered = await hold();
+    check(offered === "New Note,Voice Memo,Photo" && (await alice.evaluate(() => location.hash)) === lint, `holding the tab bar + offers New Note, Voice Memo and Photo, without making a note (${offered})`);
+    await shot("phone-compose-menu-dark");
+    await alice.tap("dialog ::-p-text(Voice Memo)");
+    await alice.waitForSelector(".recorder .stop:not([disabled])");
+    check((await alice.evaluate(() => location.hash)) !== lint, "Voice Memo from the + makes a note and starts recording in one step");
+    await shot("phone-compose-memo-dark");
+    await alice.tap(".recorder button[aria-label='Discard recording']");
+    await alice.waitForFunction(() => !document.querySelector(".recorder"));
+    await hold();
+    const [picker] = await Promise.all([alice.waitForFileChooser({ timeout: 3000 }), alice.tap("dialog ::-p-text(Photo)")]);
+    await picker.accept([png]);
+    await alice.waitForFunction(() => document.querySelector(".cm-attachment img")?.naturalWidth === 320, { timeout: 5000 });
+    check(true, "Photo from the + makes a note with the picked photo in it");
     // A note with a photo and a memo: on a touch screen their tools are always there.
     await alice.evaluate(async () => {
       const tree = await fetch("/api/tree").then((r) => r.json());
@@ -1578,17 +1667,52 @@ try {
     const sideways = () => alice.evaluate(() => [document.scrollingElement, document.querySelector(".pane.editor .scroll")].every((el) => el.scrollWidth <= el.clientWidth));
     check(await sideways(), "a note with a memo and a photo doesn't scroll sideways on a phone");
     await shot("phone-attachments-dark");
-    // The Summary tab on a phone, on a note with plenty in it.
-    await alice.tap(".tabs button:last-child");
-    await alice.waitForFunction(() => document.querySelector(".summary-page.shown .cm-content")?.innerText.includes("Things to buy"), { timeout: 5000 });
+    // A long code line scrolls sideways inside its block, all its lines together, and never widens the page.
+    await alice.evaluate(async () => {
+      const tree = await fetch("/api/tree").then((r) => r.json());
+      location.hash = `#/all/note/${tree.notes.find((n) => n.title === "Snippets").id}`;
+    });
+    await alice.waitForSelector(".cm-code-body");
+    await (await alice.evaluateHandle(() => [...document.querySelectorAll(".cm-code-body")].find((l) => l.textContent.includes("const greet")))).tap();
+    await alice.keyboard.press("End");
+    await alice.keyboard.type(" // a long comment that runs well past the edge of a phone\nreturn greet;");
+    await alice.tap(".editor header button.done");
+    await alice.waitForSelector(".tabbar");
+    const code = await alice.evaluate(async () => {
+      const lines = [...document.querySelectorAll(".cm-code-body")];
+      const long = lines.find((l) => l.textContent.includes("a long comment"));
+      const other = lines.find((l) => l.textContent.includes("return greet"));
+      long.scrollLeft = 80;
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      return { scrolls: long.scrollWidth > long.clientWidth, oneLine: Math.abs(long.offsetHeight - other.offsetHeight) < 2, together: other.scrollLeft === long.scrollLeft && long.scrollLeft > 0 };
+    });
+    check(code.scrolls && code.oneLine && code.together, `a long code line stays one line and scrolls sideways with its block (${JSON.stringify(code)})`);
+    check(await sideways(), "a note with a long code line doesn't scroll sideways on a phone");
+    await shot("phone-code-scrolled-dark");
+    await alice.evaluate(async () => {
+      const tree = await fetch("/api/tree").then((r) => r.json());
+      location.hash = `#/all/note/${tree.notes.find((n) => n.title === "Pantry").id}`;
+    });
+    await alice.waitForSelector(".cm-attachment.is-image img");
+    // Summarize on a phone, from the note's actions, on a note with plenty in it.
+    await noteAction(alice, "Summarize");
+    await alice.waitForFunction(() => document.querySelector("dialog .summary-page .cm-content")?.innerText.includes("Things to buy"), { timeout: 5000 });
     await shot("phone-summary-dark");
-    await alice.tap(".tabs button:first-child");
+    await alice.tap("dialog ::-p-text(Close)");
+    await closed(alice);
     // Tidy Up on a phone: the note's actions fanned out, then the preview as a bottom sheet with Apply in reach.
     await openNoteActions(alice);
     await shot("phone-note-actions-dark");
     check(
       await alice.evaluate(() => [...document.querySelectorAll(".editor [role=menuitem]")].every((b) => b.getBoundingClientRect().right <= innerWidth && b.getBoundingClientRect().top > 0)),
       "on a phone the note's actions fit on screen above their button",
+    );
+    check(
+      await alice.evaluate(() => {
+        const labels = [...document.querySelectorAll(".editor [role=menuitem]")].map((b) => b.textContent.trim());
+        return labels.includes("Photo") && labels.includes("Voice Memo");
+      }),
+      "on a phone the note's actions offer Photo and Voice Memo, with the keyboard down",
     );
     await alice.evaluate(() => [...document.querySelectorAll("[role=menuitem]")].find((b) => b.textContent.includes("Tidy Up")).click());
     await alice.waitForFunction(() => document.querySelector("dialog .tidy-page .cm-content")?.innerText.includes("To buy"), { timeout: 5000 });
@@ -1641,7 +1765,7 @@ try {
     await alice.keyboard.press("z");
     await alice.keyboard.up("Control");
     await alice.keyboard.press("Backspace");
-    await alice.tap("button[aria-label='Hide keyboard']");
+    await alice.tap(".editor header button.done");
     await alice.waitForSelector(".tabbar");
     // The tab bar is Notes, Recent, +, Ask, Shared; Account is your avatar at the top right of each tab.
     check(

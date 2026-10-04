@@ -208,7 +208,7 @@ button:active:not(:disabled) {
   }
 
   button.fab:hover {
-    background: color-mix(in srgb, var(--accent-bg) 88%, white);
+    background: color-mix(in srgb, var(--popover-bg) 92%, var(--fg));
   }
 }
 
@@ -395,19 +395,22 @@ button:focus-visible {
   background: color-mix(in srgb, var(--user-color, var(--accent)) 25%, transparent);
 }
 
-/* A floating action button (lib/Fab.svelte): the screen's actions, in thumb reach at the bottom right. */
+/*
+  A floating action button (lib/Fab.svelte): the screen's actions, in thumb reach at the bottom right.
+  Neutral and round, so the tab bar's blue + stays the one primary action on screen.
+*/
 button.fab {
   width: var(--fab-size);
   height: var(--fab-size);
   padding: 0;
-  border-radius: var(--radius-lg);
-  background: var(--accent-bg);
-  color: var(--accent-fg);
+  border-radius: 50%;
+  background: var(--popover-bg);
+  color: var(--fg);
   box-shadow: var(--shadow-fab);
 }
 
 button.fab:active:not(:disabled) {
-  background: color-mix(in srgb, var(--accent-bg) 85%, black);
+  background: color-mix(in srgb, var(--popover-bg) 85%, var(--fg));
   transform: scale(0.95);
 }
 
