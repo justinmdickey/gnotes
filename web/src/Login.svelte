@@ -73,6 +73,14 @@
     padding: 16px;
   }
 
+  /* Phones put it in the top third, so it doesn't float in empty space or jump when the keyboard opens. */
+  @media (max-width: 700px) {
+    main {
+      align-items: start;
+      padding-top: calc(var(--safe-top) + 10svh);
+    }
+  }
+
   form {
     display: flex;
     flex-direction: column;
