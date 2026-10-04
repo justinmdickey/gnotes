@@ -324,8 +324,8 @@
           <ServiceForm
             name="embed"
             title="Semantic Search"
-            subtitle="Find notes by meaning"
-            explain="Search also finds notes by meaning, not just matching words, and Ask Your Notes answers questions from them with the AI Summaries service. Notes are sent here in pieces to be indexed, and again after edits. Any OpenAI-compatible embeddings service works, such as Ollama with nomic-embed-text."
+            subtitle="Find notes by meaning in Ask"
+            explain="Powers Ask: when you ask a question, it finds notes by meaning, not just matching words, and the AI Summaries service answers from them. Notes are sent here in pieces to be indexed, and again after edits. Any OpenAI-compatible embeddings service works, such as Ollama with nomic-embed-text."
             urlPlaceholder="http://ollama:11434/v1"
             modelPlaceholder="nomic-embed-text"
             bind:settings={embed}

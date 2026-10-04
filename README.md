@@ -13,7 +13,7 @@ Self-hosted Markdown notes with live shared editing. Write on your phone or desk
 - **Notebooks inside notebooks,** drag and drop, full-text search, trash, and import from a zip of Markdown files.
 - **Sharing** with other accounts on the server, as editor or viewer. Accounts are made by invite link only.
 - **Photos and voice memos** in notes.
-- **Optional AI, on your own hardware or a hosted API:** transcribe voice memos (or a meeting, live), pull text out of photos, summarize a note, and find notes by meaning. Nothing runs until an admin sets it up.
+- **Optional AI, on your own hardware or a hosted API:** transcribe voice memos (or a meeting, live), pull text out of photos, summarize a note, and ask your notes questions, which finds them by meaning. Nothing runs until an admin sets it up.
 - **Plain Markdown copies** of every note in the data folder, so your notes are never locked in.
 - **Installable app** (PWA) on phones and desktops, light and dark.
 - **Easy to run:** one Docker image, one SQLite database, one data folder.
@@ -130,7 +130,7 @@ Each one talks to an **OpenAI-compatible API**, so it can be a local server (Oll
 | Live transcripts and meeting audio | Speech-to-Text › Live URL | `GNOTES_WHISPER_REALTIME_URL` | `ws://speaches:8000/v1/realtime` |
 | Text from photos | Text from Photos | `GNOTES_VISION_URL`, `_MODEL`, `_KEY` | `http://ollama:11434/v1`, `qwen2.5vl` |
 | Note summaries | AI Summaries | `GNOTES_SUMMARY_URL`, `_MODEL`, `_KEY` | `http://ollama:11434/v1`, `llama3.2` |
-| Find notes by meaning | Semantic Search | `GNOTES_EMBED_URL`, `_MODEL`, `_KEY` | `http://ollama:11434/v1`, `nomic-embed-text` |
+| Find notes by meaning, for Ask | Semantic Search | `GNOTES_EMBED_URL`, `_MODEL`, `_KEY` | `http://ollama:11434/v1`, `nomic-embed-text` |
 | Ask your notes | Semantic Search and AI Summaries | both of the above | |
 
 - URLs include the API version (`/v1`).

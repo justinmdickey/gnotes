@@ -357,5 +357,5 @@ docker run -v gnotes-data:/data -p 8080:8080 gnotes
 ## Decided
 
 - **Search:** the server does full-text search (SQLite FTS5). Offline, the app falls back to matching titles and previews of the notes it has cached.
-- **AI search:** optional, set up by an admin like Speech-to-Text. Semantic search finds notes by meaning through an OpenAI-compatible embeddings endpoint; Ask is a conversation that finds notes by words and meaning and writes answers from them, linking them. The app keeps the conversation; the server stores none of it.
+- **AI search:** optional, set up by an admin like Speech-to-Text. Semantic search embeds notes through an OpenAI-compatible embeddings endpoint so Ask can find them by meaning (the notes list searches words only); Ask is a conversation that finds notes by words and meaning and writes answers from them, linking them. The app keeps the conversation; the server stores none of it.
 - **Accounts:** sign-up is by admin-made invite link only. Letting anyone with an email at an allowed domain join is planned after 1.0; it needs email addresses and a way to verify them.

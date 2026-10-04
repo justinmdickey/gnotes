@@ -111,7 +111,7 @@
   async function runReindex() {
     const ok = await ask({
       title: "Re-index All Notes?",
-      body: "Every note is sent to the service again. Search by meaning is incomplete until it finishes.",
+      body: "Every note is sent to the service again. Ask may miss notes until it finishes.",
       confirm: "Re-index",
     });
     if (!ok || !reindex) return;

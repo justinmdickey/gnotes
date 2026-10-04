@@ -176,7 +176,7 @@ export interface Features {
   photo_text: boolean;
   /** Notes can be summarized, on request, in their Summary tab. */
   summaries: boolean;
-  /** Search also finds notes by meaning. Absent from older servers. */
+  /** Notes are embedded, so Ask finds them by meaning. Absent from older servers. */
   semantic_search?: boolean;
   /** Questions can be asked of your notes (semantic search plus the summary chat model). */
   ask?: boolean;
