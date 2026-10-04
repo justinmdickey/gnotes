@@ -146,12 +146,16 @@ export function openAiPrompt(view: EditorView) {
   view.dispatch({ effects: setPrompt.of({ id: ++ids, pos: view.state.selection.main.head, busy: false }) });
 }
 
+/** A blank line the field was opened on, which the written text replaces: hidden meanwhile, so no stray empty item shows above the field. */
+const absorbed = Decoration.line({ class: "cm-ai-absorbed" });
+
 export function aiPrompt(actions: AiPromptActions) {
-  const decorations = EditorView.decorations.compute([promptField], (state): DecorationSet => {
+  const decorations = EditorView.decorations.compute(["doc", promptField], (state): DecorationSet => {
     const prompt = state.field(promptField);
     if (!prompt) return Decoration.none;
+    const line = state.doc.lineAt(prompt.pos);
     const widget = Decoration.widget({ widget: new PromptWidget(prompt, actions), block: true, side: 1 });
-    return Decoration.set([widget.range(state.doc.lineAt(prompt.pos).to)]);
+    return Decoration.set(BLANK.test(line.text) ? [absorbed.range(line.from), widget.range(line.to)] : [widget.range(line.to)]);
   });
   return [promptField, decorations];
 }

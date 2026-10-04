@@ -24,6 +24,8 @@ export const app = $state({
   pane: "list" as "sidebar" | "list" | "editor",
   /** A note just created here, which should open with the cursor ready. */
   freshNote: null as string | null,
+  /** What the fresh note was made for instead of typing: a voice memo, or photos already picked. */
+  freshAdd: null as "memo" | File[] | null,
   /** The Settings screen covers the whole app while open. */
   settings: false,
   /** The note editor or Ask's field has focus, so the phone's tab bar steps aside for the keyboard. */
@@ -64,8 +66,11 @@ export function addableView(view: View): View {
   return view;
 }
 
-/** Apple Notes-style compose: make the note and drop straight into it. Offline, it's made on the device and sent later. */
-export async function composeNote(view: View = app.view) {
+/**
+ * Apple Notes-style compose: make the note and drop straight into it. Offline, it's made on the device and sent later.
+ * `add` starts it with a voice memo recording or the picked photos instead of the cursor.
+ */
+export async function composeNote(view: View = app.view, add: "memo" | File[] | null = null) {
   view = addableView(view);
   const notebook = view.kind === "notebook" ? view.id : null;
   const id = uuidv7();
@@ -85,6 +90,7 @@ export async function composeNote(view: View = app.view) {
     saveTree();
   }
   app.freshNote = id;
+  app.freshAdd = add;
   navigate(view, id);
   if (!queued) void refreshTree();
 }

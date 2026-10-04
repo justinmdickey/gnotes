@@ -43,6 +43,11 @@
     bottom: calc(76px + env(safe-area-inset-bottom));
   }
 
+  /* On a note, toasts sit above its floating actions button instead of beside or on it. */
+  :global(body:has(.fab-box)) .toasts.phone {
+    bottom: calc(76px + var(--fab-size) + 16px + env(safe-area-inset-bottom));
+  }
+
   /* While a voice memo records, toasts sit above its bar instead of on it. */
   :global(body:has(.recorder)) .toasts {
     bottom: calc(84px + env(safe-area-inset-bottom));
