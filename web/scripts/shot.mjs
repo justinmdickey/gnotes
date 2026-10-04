@@ -3,7 +3,8 @@
 //
 // Usage: npm run build && cargo build -p gnotes-server && node scripts/shot.mjs [options] [screen...]
 //   screens: home recent shared account trash notebook:<name> note:<title> edit:<title> search:<query>
-//            ask (the Ask tab, empty; Search without --ai) find:<query> (typed in Ask's field, not sent)
+//            ask (the Ask tab, empty; without --ai, the page saying it isn't set up)
+//            find:<query> (typed in Ask's field, not sent, with --ai)
 //            ask:<question>[|<follow-up>...] (with --ai) service:<form> (a Settings service form, e.g. service:embed)
 //            fab:<title> (a note with its actions open) tidy:<title> (Tidy Up's preview, with --ai)
 //            editai:<title>[|<instruction>] (Edit with AI asking, or its preview for that, with --ai)
@@ -11,7 +12,7 @@
 //            (default: home notebook:Kitchen note:Groceries account)
 //   --phone | --desktop   viewport (default: both)
 //   --dark | --light      color scheme (default: dark)
-//   --ai                  stand-in AI services: summaries, search by meaning and Ask
+//   --ai                  stand-in AI services: summaries, embeddings and Ask
 //   --out <dir>           where PNGs go (default: /tmp/gnotes-shots)
 //   --offline             visit each screen, then stop the server and shoot them offline
 // Env: CHROME (default /usr/bin/chromium).
@@ -208,6 +209,7 @@ async function go(page, target) {
     prompt: `#/note/${tree.notes.find((n) => n.title === arg.split("|")[0])?.id}`,
   }[kind];
   if (!hash || hash.endsWith("undefined")) throw new Error(`unknown screen ${target}`);
+  if ((kind === "find" || (kind === "ask" && arg)) && !flag("--ai")) throw new Error(`${target} needs --ai: without it Ask has no field to type in`);
   // No dialog left over from the screen before.
   if (await page.$("dialog")) {
     await page.keyboard.press("Escape");
@@ -225,20 +227,16 @@ async function go(page, target) {
     await page.$eval(".pane.list .search input", (el) => el.select());
     await page.keyboard.press("Backspace");
     await page.type(".pane.list .search input", arg);
-    // Meaning matches come a moment after the word matches.
-    if (flag("--ai")) await page.waitForSelector(".pane.list .meaning", { timeout: 5000 }).catch(() => {});
   }
-  if (kind === "ask" || kind === "find") {
+  // Without --ai, Ask has no field: the page says it isn't set up, and that's the shot.
+  if ((kind === "ask" || kind === "find") && flag("--ai")) {
     // Start from a new conversation and an empty field, whatever the screen before left.
     await page.waitForSelector(".pane.list .composer input");
     if (await page.$(".pane.list .new-chat")) await page.click(".pane.list .new-chat");
     await page.$eval(".pane.list .composer input", (el) => el.select());
     await page.keyboard.press("Backspace");
   }
-  if (kind === "find") {
-    await page.type(".pane.list .composer input", arg);
-    if (flag("--ai")) await page.waitForSelector(".pane.list .meaning", { timeout: 5000 }).catch(() => {});
-  }
+  if (kind === "find") await page.type(".pane.list .composer input", arg);
   // Shot as you'd see it with the keyboard down.
   if (kind === "ask" || kind === "find") await page.evaluate(() => document.activeElement?.blur());
   if (kind === "ask" && arg) {

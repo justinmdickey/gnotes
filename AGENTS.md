@@ -39,7 +39,7 @@ Add an e2e check for each new UI behavior, in the flow where it naturally happen
 
 Tests prove behavior, not looks. After a visual change, take screenshots and look at them:
 
-- `node web/scripts/shot.mjs [--phone|--desktop] [--light] [screen...]` starts a throwaway server with demo data (Home › Kitchen and Garage, Personal, a shared notebook, three notes: Groceries, Pantry and Snippets with code blocks), logs in, and writes PNGs to `/tmp/gnotes-shots`. Screens: `home recent shared account ask find:<query> notebook:<name> note:<title> fab:<title> search:<query>`; `--ai` adds stand-in AI services for `ask:<question>|<follow-up>`, `tidy:<title>`, `editai:<title>[|<instruction>]` and `prompt:<title>[|<prompt>]`. Build `web/dist` first.
+- `node web/scripts/shot.mjs [--phone|--desktop] [--light] [screen...]` starts a throwaway server with demo data (Home › Kitchen and Garage, Personal, a shared notebook, three notes: Groceries, Pantry and Snippets with code blocks), logs in, and writes PNGs to `/tmp/gnotes-shots`. Screens: `home recent shared account ask notebook:<name> note:<title> fab:<title> search:<query>`; `--ai` adds stand-in AI services for `find:<query>`, `ask:<question>|<follow-up>`, `tidy:<title>`, `editai:<title>[|<instruction>]` and `prompt:<title>[|<prompt>]`. Build `web/dist` first.
 - `SHOTS=/some/dir npm run e2e` also saves screenshots from inside the e2e flow (phone editing, keyboard bar, dialogs).
 - `magick a.png b.png +append side.png` puts shots side by side, to compare before/after or neighboring screens.
 - `node web/scripts/icon-sheet.mjs` renders every icon over its grid; check a new icon against its neighbors there.
