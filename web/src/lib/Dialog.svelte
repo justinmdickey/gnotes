@@ -10,9 +10,16 @@
     wide = false,
   }: { title?: string; onclose: () => void; children: Snippet; actions?: Snippet; wide?: boolean } = $props();
   let dialog: HTMLDialogElement;
+  let panel: HTMLDivElement;
 
   $effect(() => {
     dialog.showModal();
+    // Opening lands on a field to type in, else the suggested action, else nothing in particular:
+    // never Cancel, which would look like the choice being suggested.
+    const first = ["[autofocus]", "input:not([type=checkbox], [type=radio]), textarea", ".actions .suggested:enabled"]
+      .map((q) => panel.querySelector<HTMLElement>(q))
+      .find(Boolean);
+    (first ?? panel).focus();
   });
 
   // Never close natively: the parent removes the dialog, which lets the exit animation play.
@@ -26,7 +33,7 @@
 <dialog bind:this={dialog} oncancel={cancel}>
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
   <div class="scrim" transition:fadeIn onclick={onclose}></div>
-  <div class="panel" class:wide transition:sheet>
+  <div bind:this={panel} class="panel" class:wide tabindex="-1" transition:sheet>
     <div class="handle" aria-hidden="true"></div>
     <div class="body">
       {#if title}<h2>{title}</h2>{/if}
@@ -71,6 +78,7 @@
 
   .panel {
     position: relative;
+    outline: none;
     display: flex;
     flex-direction: column;
     width: min(420px, 100%);
