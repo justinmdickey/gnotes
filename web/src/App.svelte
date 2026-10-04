@@ -303,7 +303,7 @@
   {@const into = addableView(app.view)}
   <div class="drop-target" transition:fade={{ duration: 120 }}>
     <div class="drop-card">
-      <StatusPage icon="import" title="Drop to Import" description="Markdown files or a .zip go into {viewTitle(into, app.tree)}" />
+      <StatusPage icon="download" title="Drop to Import" description="Markdown files or a .zip go into {viewTitle(into, app.tree)}" />
     </div>
   </div>
 {/if}

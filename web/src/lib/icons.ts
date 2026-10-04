@@ -5,15 +5,13 @@
 const stroked = {
   plus: "M8 3v10M3 8h10",
   back: "M10.25 3 5.25 8l5 5",
-  menu: "M3 4.5h10M3 8h10M3 11.5h10",
   share: "M5.75 6.5H3.5v7h9v-7h-2.25M8 2.5v7.5M5.75 4.75 8 2.5l2.25 2.25",
-  import: "M5.75 6.5H3.5v7h9v-7h-2.25M8 2.5V10M5.75 7.75 8 10l2.25-2.25",
+  // Into a tray: download a file, or import (drop files to import).
   download: "M5.75 6.5H3.5v7h9v-7h-2.25M8 2.5V10M5.75 7.75 8 10l2.25-2.25",
   trash: "M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.7 8.5h5.6l.7-8.5",
   folder: "M2.25 3.25h4l1.5 1.75h6v7.75H2.25z",
   note: "M4 2.5h5.5l2.5 2.5v8.5H4zM9.5 2.5V5H12",
   people: "M6 7a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM2.5 13c0-2 1.5-3.5 3.5-3.5s3.5 1.5 3.5 3.5M10.5 7a1.7 1.7 0 1 0 0-3.4M11.5 9.5c1.3.3 2 1.6 2 3.5",
-  pencil: "M3 13l.5-2.5 7-7 2 2-7 7zM9.5 4.5l2 2",
   logout: "M9.5 3h-6v10h6M7 8h6.5M11 5.5 13.5 8 11 10.5",
   more: "M7.6 3.5h.8M7.6 8h.8M7.6 12.5h.8",
   newfolder: "M2.25 3.25h4l1.5 1.75h6v7.75H2.25zM8 7.25v3.5M6.25 9h3.5",
@@ -38,15 +36,14 @@ const stroked = {
   home: "M2.5 7.5 8 3l5.5 4.5M4 6.5v6.5h8V6.5",
   move: "M2.25 3.25h4l1.5 1.75h6v7.75H2.25zM5.75 9h4.5M8.75 7.25 10.5 9l-1.75 1.75",
   key: "M5.25 13.5a2.75 2.75 0 1 1 0-5.5 2.75 2.75 0 0 1 0 5.5zM7.2 8.8 13.5 2.5M11.25 4.75l1.75 1.75M9.5 6.5l1.25 1.25",
-  devices: "M2.5 3.5h8v6h-8zM4.5 12.5h4M6.5 9.5v3M11.5 6.5h2v6h-2z",
   rename: "M3 13l.5-2.5 7-7 2 2-7 7zM9.5 4.5l2 2",
   shield: "M8 2.5l5 2v3.5c0 3-2.2 5-5 5.5-2.8-.5-5-2.5-5-5.5V4.5z",
-  user: "M8 7.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM3 13.5c0-2.5 2.2-4.2 5-4.2s5 1.7 5 4.2",
   camera: "M2.5 5.5h2.5l1-1.5h4l1 1.5h2.5v7.5h-11zM8 11a2 2 0 1 0 0-4 2 2 0 0 0 0 4z",
   mic: "M8 2.5a2 2 0 0 0-2 2V8a2 2 0 1 0 4 0V4.5a2 2 0 0 0-2-2zM4 7.5a4 4 0 0 0 8 0M8 11.5v2",
-  image: "M2.5 3.5h11v9h-11zM2.5 10.5l3-3 3 3 2-2 3 3M10.5 6.5h.01",
   // Have AI make something, like a note's summary.
   sparkle: "M8 2.5c.4 2.9 2.6 5.1 5.5 5.5-2.9.4-5.1 2.6-5.5 5.5-.4-2.9-2.6-5.1-5.5-5.5 2.9-.4 5.1-2.6 5.5-5.5z",
+  // Start a new chat in Ask: a speech bubble with a plus, unlike compose (a new note).
+  newchat: "M4.5 3h7a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H7.5l-3 2.5V11a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zM8 5v4M6 7h4",
   // Send what's typed, like Ask's question: an arrow up.
   send: "M8 13.5V2.5M3.5 7 8 2.5 12.5 7",
   // Have AI tidy a note: a broom.

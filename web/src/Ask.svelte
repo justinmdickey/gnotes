@@ -88,7 +88,7 @@
     <div class="end">
       {#if chatting}
         <button class="flat icon new-chat" title="New chat" aria-label="New chat" onclick={() => (endChat(), field?.focus())}>
-          <Icon name="compose" />
+          <Icon name="newchat" />
         </button>
       {/if}
       <AccountButton class="phone-only" />
