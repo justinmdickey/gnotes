@@ -399,6 +399,11 @@ button:focus-visible {
   white-space: nowrap;
 }
 
+/* loro-codemirror's own theme puts a second, faded name under the cursor. */
+.loro-cursor::before {
+  display: none;
+}
+
 .loro-selection {
   background: color-mix(in srgb, var(--user-color, var(--accent)) 25%, transparent);
 }
