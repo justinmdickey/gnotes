@@ -83,12 +83,11 @@ pub async fn change_password(
         .bind(&me.id)
         .fetch_one(&state.db)
         .await?;
-    let current = body.current;
-    if !tokio::task::spawn_blocking(move || verify_password(&current, &hash)).await? {
+    if !verify_password(body.current, hash).await? {
         return Err(AppError::BadRequest("Current password is wrong".into()));
     }
     sqlx::query("UPDATE users SET password_hash = ? WHERE id = ?")
-        .bind(hash_password(&body.new)?)
+        .bind(hash_password(&body.new).await?)
         .bind(&me.id)
         .execute(&state.db)
         .await?;
@@ -183,7 +182,7 @@ pub async fn admin_reset_password(
     require_admin(&me)?;
     check_new_password(&body.password)?;
     let result = sqlx::query("UPDATE users SET password_hash = ? WHERE id = ?")
-        .bind(hash_password(&body.password)?)
+        .bind(hash_password(&body.password).await?)
         .bind(&id)
         .execute(&state.db)
         .await?;

@@ -218,6 +218,16 @@ async fn login_me_logout() {
         .unwrap();
     assert_eq!(bad.status(), 401);
 
+    // A burst of bad logins queues for the few password checks that run at once, and every one is still answered.
+    let burst = (0..40).map(|_| {
+        http.post(format!("http://{}/api/auth/login", server.base))
+            .json(&json!({ "username": "alice", "password": "wrong-password" }))
+            .send()
+    });
+    for res in futures_util::future::join_all(burst).await {
+        assert_eq!(res.unwrap().status(), 401);
+    }
+
     let alice = login(&server.base, "alice").await;
     let body = alice.get("/me").await;
     assert_eq!(body["username"], "alice");

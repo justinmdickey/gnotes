@@ -12,6 +12,7 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use tokio::sync::Semaphore;
 
 use crate::{
     AppState,
@@ -30,17 +31,34 @@ pub struct User {
     pub is_admin: bool,
 }
 
-pub fn hash_password(password: &str) -> anyhow::Result<String> {
-    Argon2::default()
-        .hash_password(password.as_bytes())
-        .map(|h| h.to_string())
-        .map_err(|e| anyhow::anyhow!("hashing password: {e}"))
+/// Each argon2 hash takes about 19 MiB, so only a few run at once: a burst of logins waits its turn
+/// instead of running the server out of memory.
+static PASSWORD_WORK: Semaphore = Semaphore::const_new(4);
+
+/// Runs argon2 work off the async threads, a few at a time.
+async fn password_work<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> anyhow::Result<T> {
+    let _permit = PASSWORD_WORK.acquire().await?;
+    Ok(tokio::task::spawn_blocking(work).await?)
 }
 
-pub fn verify_password(password: &str, hash: &str) -> bool {
-    PasswordHash::new(hash)
-        .map(|parsed| Argon2::default().verify_password(password.as_bytes(), &parsed).is_ok())
-        .unwrap_or(false)
+pub async fn hash_password(password: &str) -> anyhow::Result<String> {
+    let password = password.to_owned();
+    password_work(move || {
+        Argon2::default()
+            .hash_password(password.as_bytes())
+            .map(|h| h.to_string())
+            .map_err(|e| anyhow::anyhow!("hashing password: {e}"))
+    })
+    .await?
+}
+
+pub async fn verify_password(password: String, hash: String) -> anyhow::Result<bool> {
+    password_work(move || {
+        PasswordHash::new(&hash)
+            .map(|parsed| Argon2::default().verify_password(password.as_bytes(), &parsed).is_ok())
+            .unwrap_or(false)
+    })
+    .await
 }
 
 pub fn hash_token(token: &str) -> String {
@@ -81,7 +99,7 @@ pub async fn create_user(
     .bind(&user.id)
     .bind(&user.username)
     .bind(&user.display_name)
-    .bind(hash_password(password)?)
+    .bind(hash_password(password).await?)
     .bind(is_admin)
     .bind(now_ms())
     .execute(db)
@@ -140,9 +158,7 @@ pub async fn login(
     let Some((id, username, display_name, is_admin, password_hash)) = row else {
         return Err(AppError::Unauthorized);
     };
-    let password = body.password;
-    let ok = tokio::task::spawn_blocking(move || verify_password(&password, &password_hash)).await?;
-    if !ok {
+    if !verify_password(body.password, password_hash).await? {
         return Err(AppError::Unauthorized);
     }
 
