@@ -327,8 +327,7 @@
 
   <div class="scroll" use:scrollEdge>
     <!-- The same places as the phone's tab bar: Ask (Search, into the Notes list, without AI), Recent and Shared, with
-         what's shared with you folding under it. Then your folders under a heading, so the tree starts at the left edge.
-         Trash comes last. -->
+         what's shared with you folding under it. Then your folders under a heading, so the tree starts at the left edge. -->
     <ul class="group">
       <li>
         {#if app.features.ask}
@@ -367,15 +366,17 @@
         {/each}
       {/if}
     </ul>
-    <ul class="group section">
-      <li>
-        <button class="row flat" class:selected={app.view.kind === "trash"} onclick={() => navigate({ kind: "trash" })}>
-          <Icon name="trash" />
-          <span class="label">Trash</span>
-        </button>
-      </li>
-    </ul>
   </div>
+
+  <!-- Trash stays at the bottom, under the tree however long it gets. -->
+  <ul class="group trash">
+    <li>
+      <button class="row flat" class:selected={app.view.kind === "trash"} onclick={() => navigate({ kind: "trash" })}>
+        <Icon name="trash" />
+        <span class="label">Trash</span>
+      </button>
+    </li>
+  </ul>
 
   <footer class="dim" title={app.status === "online" ? "Changes sync live" : "Changes will sync when the server is back"}>
     <span class="dot {app.status}"></span>
@@ -626,6 +627,10 @@
   /* Desktop sidebar rows are inset 12px; line the headings up with their text. */
   .group-title {
     margin-left: 12px;
+  }
+
+  .trash {
+    padding: 4px 8px 0;
   }
 
   footer {
