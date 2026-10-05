@@ -326,8 +326,9 @@
   </header>
 
   <div class="scroll" use:scrollEdge>
-    <!-- The same places as the phone's tab bar: Ask (Search, into the Notes list, without AI) and Recent, then your folders
-         and what's shared with you under headings, so the tree starts at the left edge. Trash comes last. -->
+    <!-- The same places as the phone's tab bar: Ask (Search, into the Notes list, without AI), Recent and Shared, with
+         what's shared with you folding under it. Then your folders under a heading, so the tree starts at the left edge.
+         Trash comes last. -->
     <ul class="group">
       <li>
         {#if app.features.ask}
@@ -343,6 +344,17 @@
         {/if}
       </li>
       {@render row({ kind: "all" }, "clock", "Recent")}
+      {#if sharedRoots.length || hasSharedNotes || sharedByMe}
+        {@render row({ kind: "shared-notes" }, "people", "Shared", "", 0, sharedRoots.length || sharedNotes.length ? SHARED : null)}
+        {#if !folded(SHARED)}
+          {#each sharedRoots as nb (nb.id)}
+            {@render notebookRows(nb, 1)}
+          {/each}
+          {#each sharedNotes as note (note.id)}
+            {@render noteRow(note, { kind: "shared-notes" }, 1)}
+          {/each}
+        {/if}
+      {/if}
     </ul>
     <ul class="group section">
       {@render row({ kind: "root" }, "home", "Notes", "", 0, ownRoots.length || rootNotes.length ? ROOT : null, false, true)}
@@ -355,19 +367,6 @@
         {/each}
       {/if}
     </ul>
-    {#if sharedRoots.length || hasSharedNotes || sharedByMe}
-      <ul class="group section">
-        {@render row({ kind: "shared-notes" }, "people", "Shared", "", 0, sharedRoots.length || sharedNotes.length ? SHARED : null, false, true)}
-        {#if !folded(SHARED)}
-          {#each sharedRoots as nb (nb.id)}
-            {@render notebookRows(nb, 0)}
-          {/each}
-          {#each sharedNotes as note (note.id)}
-            {@render noteRow(note, { kind: "shared-notes" }, 0)}
-          {/each}
-        {/if}
-      </ul>
-    {/if}
     <ul class="group section">
       <li>
         <button class="row flat" class:selected={app.view.kind === "trash"} onclick={() => navigate({ kind: "trash" })}>

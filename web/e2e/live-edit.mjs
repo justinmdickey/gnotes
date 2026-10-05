@@ -1148,6 +1148,15 @@ try {
   await dave.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Club");
   const daveSub = await dave.$eval(".hero-text .dim", (e) => e.textContent);
   check(daveSub === "Shared by Alice · can edit", `a notebook shared with you says who shared it (${daveSub})`);
+  // Shared sits up top with Recent, with its own icon, and what's shared with you folds under it.
+  const daveTop = await dave.evaluate(() =>
+    [...document.querySelectorAll("nav .scroll > .group:first-child .row")].map((r) => [r.querySelector(".label").textContent, !!r.querySelector("svg")]),
+  );
+  check(
+    JSON.stringify(daveTop.slice(1).map(([l]) => l)) === '["Recent","Shared","Club"]' && daveTop.every(([, icon]) => icon),
+    `Shared is a top row with an icon, the shared notebook under it (${JSON.stringify(daveTop)})`,
+  );
+  if (process.env.SHOTS) await dave.screenshot({ path: join(process.env.SHOTS, "desktop-sidebar-shared.png") });
   await dave.browserContext().close();
   await alice.evaluate((id) => fetch(`/api/shares/${id}`, { method: "DELETE" }), club.share);
   await alice.evaluate((id) => (location.hash = `#/nb/${id}`), kitchen);
