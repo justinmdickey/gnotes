@@ -144,4 +144,4 @@ docker run -d --name gnotes --restart unless-stopped \
 
 With Compose: `docker compose pull && docker compose up -d`.
 
-The server updates its database on start. To upgrade only when you choose, use a version tag such as `:1.0` or `:1.0.0` instead of `:latest`. Installed apps switch to the new version the next time they load.
+The server updates its database on start, and an older version won't start on a database a newer one has updated. To go back a version, restore the backup you took before upgrading. To upgrade only when you choose, use a version tag such as `:1.0` or `:1.0.0` instead of `:latest`. Installed apps switch to the new version the next time they load.
