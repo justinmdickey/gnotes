@@ -2,10 +2,7 @@
 
 Self-hosted Markdown notes with live shared editing. Write on your phone or desktop, share a note or a whole notebook with other people on your server, and watch each other type. Works offline, installs as an app, and keeps a plain Markdown copy of every note.
 
-<p>
-  <img src="docs/screenshots/desktop.png" alt="A note open on desktop, with notebooks in the sidebar" width="640">
-  <img src="docs/screenshots/phone.png" alt="The same note on a phone, in dark mode" width="195">
-</p>
+![A shared note open on desktop, with someone else typing in it](docs/screenshots/desktop.png)
 
 ## Run your own
 
