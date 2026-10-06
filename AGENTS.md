@@ -39,7 +39,7 @@ Add an e2e check for each new UI behavior, in the flow where it naturally happen
 
 Tests prove behavior, not looks. After a visual change, take screenshots and look at them:
 
-- `node web/scripts/shot.mjs [--phone|--desktop] [--light] [screen...]` starts a throwaway server with demo data (Home › Kitchen and Garage, Personal, a shared notebook, three notes: Groceries, Pantry and Snippets with code blocks), logs in, and writes PNGs to `/tmp/gnotes-shots`. Screens: `home recent shared account ask notebook:<name> note:<title> fab:<title> search:<query>`; `--ai` adds stand-in AI services for `find:<query>`, `ask:<question>|<follow-up>`, `tidy:<title>`, `editai:<title>[|<instruction>]` and `prompt:<title>[|<prompt>]`. Build `web/dist` first.
+- `node web/scripts/shot.mjs [--phone|--desktop] [--light] [screen...]` starts a throwaway server with demo data (Home › Kitchen and Garage, Personal, a shared notebook, three notes: Groceries, Pantry and Snippets with code blocks), logs in, and writes PNGs to `/tmp/gnotes-shots`. Screens: `home recent shared account keys keys:new ask notebook:<name> note:<title> fab:<title> search:<query>`; `--ai` adds stand-in AI services for `find:<query>`, `ask:<question>|<follow-up>`, `tidy:<title>`, `editai:<title>[|<instruction>]` and `prompt:<title>[|<prompt>]`. Build `web/dist` first.
 - `SHOTS=/some/dir npm run e2e` also saves screenshots from inside the e2e flow (phone editing, keyboard bar, dialogs).
 - `magick a.png b.png +append side.png` puts shots side by side, to compare before/after or neighboring screens.
 - `node web/scripts/icon-sheet.mjs` renders every icon over its grid; check a new icon against its neighbors there.
@@ -62,6 +62,7 @@ The look is GNOME Adwaita. Keep it one system:
 - Svelte props are live getters during component teardown; pin an id you need in cleanup with `untrack` at mount (see `Editor.svelte`).
 - Note text exists only in the Loro doc over the WebSocket. REST creates notes and notebooks; titles and previews come from the text. To seed content in a test, type it in the editor.
 - A new field on tree items needs the Rust struct in `server/src/tree.rs` and the type in `web/src/lib/api.ts`.
+- `/api/v1` (`server/src/v1.rs`) is the agent API, a public contract documented in `docs/API.md`: add endpoints and fields, don't change existing shapes, and update the doc with the code. The app's own routes stay session-only.
 - In e2e, dialogs animate out: wait with `closed(page)` before clicking what's under them. Switching puppeteer to a mobile viewport reloads the page.
 
 ## Git and releases

@@ -37,6 +37,8 @@ notes.example.com {
 
 Tailscale instead of a public domain, settings, optional AI features, backups and upgrades: [docs/SELF-HOSTING.md](docs/SELF-HOSTING.md).
 
+To let an agent or script read and write your notes, make an API key in **Account › API Keys**: [docs/API.md](docs/API.md).
+
 ## Development
 
 How to run it locally, check changes and the project rules: [`AGENTS.md`](AGENTS.md). How it's built and why: [`docs/DESIGN.md`](docs/DESIGN.md).
