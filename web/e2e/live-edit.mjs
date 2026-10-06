@@ -382,6 +382,23 @@ try {
 
   await alice.goBack();
   await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("cheese"));
+  // Wiki links: [[Title]] links to the note with that title; a missing one reads as such.
+  await alice.click(".pane.editor header button[aria-label='New note']");
+  await alice.waitForFunction(() => document.querySelector(".editor .headerbar .title strong")?.textContent === "New Note" && document.activeElement?.matches(".cm-content[contenteditable=true]"));
+  await alice.keyboard.type("# Recipes\nSee [[Groceries]] for the list.\nAlso a [[Nope]] that isn't a note.");
+  await alice.evaluate(() => document.activeElement?.blur());
+  await alice.waitForFunction(
+    () =>
+      [...document.querySelectorAll(".cm-wikilink")].some((l) => l.textContent === "Groceries" && !l.classList.contains("cm-wikilink-missing")) &&
+        [...document.querySelectorAll(".cm-wikilink")].some((l) => l.textContent === "Nope" && l.classList.contains("cm-wikilink-missing")),
+    { timeout: 5000 },
+  );
+  check(true, "a [[link]] to a note renders as a link, and a missing one reads as such");
+  if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-wikilink.png") });
+  // Clicking the link opens the note it points at.
+  await alice.evaluate(() => [...document.querySelectorAll(".cm-wikilink")].find((l) => l.textContent === "Groceries").click());
+  await alice.waitForFunction(() => document.querySelector(".editor .headerbar .title strong")?.textContent === "Groceries" && document.querySelector(".cm-content")?.innerText.includes("milk"), { timeout: 5000 });
+  check(true, "clicking a [[link]] opens the note it points at");
   // Pointing at a line's grip says who wrote it.
   const milk = await alice.evaluate(() => {
     const r = [...document.querySelectorAll(".cm-line")].find((l) => l.textContent.includes("milk")).getBoundingClientRect();

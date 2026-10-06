@@ -151,7 +151,7 @@ fn plain_line(line: &str) -> String {
     {
         return alt.trim().chars().take(120).collect();
     }
-    l.replace("**", "").replace("~~", "").replace('`', "").trim().chars().take(120).collect()
+    l.replace("**", "").replace("~~", "").replace('`', "").replace("[[", "").replace("]]", "").trim().chars().take(120).collect()
 }
 
 /// Title (first non-empty line) and preview (the next one), as shown in note lists.
@@ -175,6 +175,9 @@ mod tests {
         assert_eq!(summarize(memo), ("Voice memo".into(), "buy milk".into()));
         let marked = "Trip\n# ![Photo](att:01a0d056-667e-733b-a280-1d118b647773)";
         assert_eq!(summarize(marked), ("Trip".into(), "Photo".into()));
+        // A wiki link reads as its title, without the brackets.
+        assert_eq!(summarize("[[Groceries]]\nbuy milk"), ("Groceries".into(), "buy milk".into()));
+        assert_eq!(summarize("See [[Groceries]] for the list"), ("See Groceries for the list".into(), String::new()));
     }
 }
 

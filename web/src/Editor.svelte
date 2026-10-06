@@ -12,7 +12,7 @@
   import { activeFormats, formatKeymap, type Block, type Inline } from "./lib/format";
   import Icon from "./lib/Icon.svelte";
   import { codeBlocks } from "./lib/codeBlocks";
-  import { livePreview } from "./lib/livePreview";
+  import { livePreview, setWikiNotes, wikiLinks } from "./lib/livePreview";
   import { slashMenu } from "./lib/slash";
   import { dragHandles } from "./lib/dragHandles";
   import { undoCommands } from "./lib/undo";
@@ -107,6 +107,20 @@
   $effect(() => {
     void shared;
     untrack(() => view?.dispatch({}));
+  });
+  // [[links]] resolve against the notes the reader can see; the editor keeps its list in step with the tree.
+  function pushWikiNotes() {
+    if (!view) return;
+    const map = new Map<string, string>();
+    for (const n of app.tree.notes) {
+      const t = n.title.trim().toLowerCase();
+      if (t && !map.has(t)) map.set(t, n.id);
+    }
+    view.dispatch({ effects: setWikiNotes.of(map) });
+  }
+  $effect(() => {
+    void app.tree.notes;
+    untrack(pushWikiNotes);
   });
   const ephemeral = new EphemeralStore(30_000);
   const undoManager = new UndoManager(doc, {});
@@ -398,6 +412,7 @@
           markdown({ base: markdownLanguage }),
           syntaxHighlighting(markdownStyle),
           livePreview,
+          wikiLinks,
           codeBlocks,
           slashMenu({ photo: () => pickPhoto(), record: () => startRecording(), tidy: () => void startTidy(), prompt: openAiPrompt, canAI: () => canAI }),
           aiPrompt(promptActions),
@@ -431,6 +446,7 @@
       }),
     });
     view = v;
+    pushWikiNotes();
     // Focus moving between the text and a field inside it (the AI Prompt block).
     const onFocusMove = () => setTimeout(syncFocus);
     v.dom.addEventListener("focusin", onFocusMove);
@@ -1498,6 +1514,19 @@
     border-left: 3px solid var(--border);
     padding-left: 12px;
     color: var(--dim-fg);
+  }
+
+  /* A [[link]] to another note reads as its title, in the link color; a missing one reads as dimmed. */
+  .page :global(.cm-wikilink) {
+    color: var(--accent);
+    cursor: pointer;
+  }
+
+  .page :global(.cm-wikilink-missing) {
+    color: var(--dim-fg);
+    text-decoration: underline dotted;
+    text-underline-offset: 2px;
+    cursor: default;
   }
 
   /* Bullets and checkboxes (with the space after them) are --marker wide, so wrapped lines hang there. */

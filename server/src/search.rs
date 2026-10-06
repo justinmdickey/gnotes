@@ -56,6 +56,8 @@ pub fn plain_text(body: &str) -> String {
             .replace("**", "")
             .replace("~~", "")
             .replace('`', "")
+            .replace("[[", "")
+            .replace("]]", "")
             .chars()
             .filter(|c| !c.is_control())
             .collect();
@@ -278,6 +280,8 @@ mod tests {
     fn plain_text_drops_marks() {
         let body = "# Groceries\n\n- [ ] **milk**\n```bash\nnpm run build\n```\nsee ![Voice memo](att:01a0d056-667e-733b-a280-1d118b647773) here";
         assert_eq!(plain_text(body), "Groceries\nmilk\nnpm run build\nsee Voice memo here");
+        // Wiki links keep their words, lose the brackets.
+        assert_eq!(plain_text("See [[Groceries]] for the list"), "See Groceries for the list");
     }
 
     #[test]

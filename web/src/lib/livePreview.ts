@@ -1,10 +1,12 @@
 // Makes Markdown read like formatted text: marks are hidden except on lines being edited,
 // bullets and checkboxes render as widgets, and the first line is styled as the title.
 import { syntaxTree } from "@codemirror/language";
+import { StateEffect, StateField } from "@codemirror/state";
 import type { EditorState, Range } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate, WidgetType } from "@codemirror/view";
 import { iconSvg } from "./icons";
 import { EMBED, attachmentMeta, attachmentUrl, isTranscribing, onTranscribingChange, readPhoto, removeEmbed, transcribeMemo } from "./attachments";
+import { openNote } from "./store.svelte";
 import type { IconName } from "./icons";
 
 /** Full-screen photo viewer that zooms out of the tapped image. */
@@ -312,6 +314,23 @@ const markerSpace = Decoration.mark({ class: "cm-marker-space" });
 // List items whose wrapped lines hang under the text rather than under the bullet.
 const itemLine = lineClass("cm-item");
 
+// A wiki link, [[Title]] or [[Title|alias]], drawn as a link to the note with that title.
+// `data-note` carries the target so a click can open it; a missing link has none.
+const wikiMark = (id: string | null) =>
+  Decoration.mark({ class: id ? "cm-wikilink" : "cm-wikilink cm-wikilink-missing", attributes: id ? { "data-note": id } : undefined });
+const WIKI = /\[\[([^\[\]\n]+)\]\]/g;
+
+/** The notes a [[link]] can point at, by lowercased title. The editor keeps it in step with the tree. */
+export const setWikiNotes = StateEffect.define<Map<string, string>>();
+export const wikiNotesField = StateField.define<Map<string, string>>({
+  create: () => new Map(),
+  update(value, tr) {
+    for (const e of tr.effects)
+      if (e.is(setWikiNotes)) value = e.value;
+    return value;
+  },
+});
+
 /** Line numbers touched by the selection. Their marks stay visible so they can be edited. */
 function activeLines(view: EditorView): Set<number> {
   const active = new Set<number>();
@@ -359,6 +378,35 @@ function build(view: EditorView): { decorations: DecorationSet; atomic: Decorati
     // A blank title line says "Title" through CSS on the line itself. An inline widget
     // there would sit before the caret and throw the caret off the big title text.
     decos.push(emptyTitle.range(0));
+  }
+
+  // Wiki links: [[Title]] or [[Title|alias]] point at the note with that title. The brackets
+  // hide like other marks, except on the line being edited.
+  const wiki = state.field(wikiNotesField);
+  for (const { from, to } of view.visibleRanges) {
+    for (let pos = from; pos <= to; ) {
+      const line = state.doc.lineAt(pos);
+      pos = line.to + 1;
+      if (embedLines.has(line.number)) continue;
+      const editing = active.has(line.number);
+      WIKI.lastIndex = 0;
+      let m: RegExpExecArray | null;
+      while ((m = WIKI.exec(line.text))) {
+        const raw = m[1];
+        const pipe = raw.indexOf("|");
+        const target = (pipe >= 0 ? raw.slice(0, pipe) : raw).trim();
+        const id = wiki.get(target.toLowerCase()) ?? null;
+        const spanFrom = line.from + m.index;
+        const spanTo = spanFrom + m[0].length;
+        decos.push(wikiMark(id).range(spanFrom, spanTo));
+        if (!editing) {
+          decos.push(hidden.range(spanFrom, spanFrom + 2));
+          decos.push(hidden.range(spanTo - 2, spanTo));
+          // [[Target|alias]] shows only the alias.
+          if (pipe >= 0) decos.push(hidden.range(spanFrom + 2, spanFrom + 2 + pipe + 1));
+        }
+      }
+    }
   }
 
   for (const { from, to } of view.visibleRanges) {
@@ -448,7 +496,7 @@ const livePreviewPlugin = ViewPlugin.fromClass(
     }
 
     update(u: ViewUpdate) {
-      if (u.docChanged || u.viewportChanged || u.selectionSet || u.focusChanged) {
+      if (u.docChanged || u.viewportChanged || u.selectionSet || u.focusChanged || u.state !== u.startState) {
         ({ decorations: this.decorations, atomic: this.atomic } = build(u.view));
       }
     }
@@ -457,7 +505,23 @@ const livePreviewPlugin = ViewPlugin.fromClass(
 );
 
 export const livePreview = [
+  wikiNotesField,
   livePreviewPlugin,
   // The cursor steps over bullets and checkboxes instead of into them.
   EditorView.atomicRanges.of((view) => view.plugin(livePreviewPlugin)?.atomic ?? Decoration.none),
+];
+
+// The click that opens a wiki link's target; the notes field lives in livePreview so every editor has it.
+export const wikiLinks = [
+  EditorView.domEventHandlers({
+    click(e) {
+      const id = ((e.target as HTMLElement).closest?.(".cm-wikilink") as HTMLElement | null)?.dataset.note;
+      if (id) {
+        e.preventDefault();
+        openNote(id);
+        return true;
+      }
+      return false;
+    },
+  }),
 ];
