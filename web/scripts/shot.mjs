@@ -6,6 +6,7 @@
 //            ask (the Ask tab, empty; without --ai, the page saying it isn't set up)
 //            find:<query> (typed in Ask's field, not sent, with --ai)
 //            ask:<question>[|<follow-up>...] (with --ai) service:<form> (a Settings service form, e.g. service:embed)
+//            keys (Account's API Keys) keys:new (its New API Key dialog)
 //            fab:<title> (a note with its actions open) tidy:<title> (Tidy Up's preview, with --ai)
 //            editai:<title>[|<instruction>] (Edit with AI asking, or its preview for that, with --ai)
 //            prompt:<title>[|<prompt>] (an AI Prompt block at the end of the note, or writing that, with --ai)
@@ -202,6 +203,7 @@ async function go(page, target) {
     ask: "#/ask",
     find: "#/ask",
     service: "#/settings",
+    keys: "#/settings",
     notebook: `#/nb/${tree.notebooks.find((n) => n.name === arg)?.id}`,
     note: `#/note/${tree.notes.find((n) => n.title === arg)?.id}`,
     edit: `#/note/${tree.notes.find((n) => n.title === arg)?.id}`,
@@ -254,6 +256,14 @@ async function go(page, target) {
   if (kind === "service") {
     await page.waitForSelector(`.service.${arg}`);
     await page.evaluate((name) => document.querySelector(`.service.${name}`).scrollIntoView({ block: "center" }), arg);
+  }
+  if (kind === "keys") {
+    await page.waitForSelector(".keys");
+    await page.evaluate(() => document.querySelector(".keys").scrollIntoView({ block: "center" }));
+    if (arg === "new") {
+      await page.evaluate(() => [...document.querySelectorAll(".keys button")].find((b) => b.textContent.includes("New API Key")).click());
+      await page.waitForSelector("#new-key input");
+    }
   }
   // Typing: the cursor in the note, with the format bar (on phones, the keyboard bar) up.
   // The note's actions: its floating button, opened.

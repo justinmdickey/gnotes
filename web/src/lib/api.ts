@@ -100,6 +100,16 @@ export interface AdminUser {
   created_at: number;
 }
 
+/** A key an agent or script uses to reach /api/v1 as you. The key itself is only shown when made. */
+export interface ApiKey {
+  id: string;
+  name: string;
+  /** `read` may only GET; `write` may also change notes. */
+  scope: "read" | "write";
+  created_at: number;
+  last_used_at: number | null;
+}
+
 export interface AttachmentMeta {
   id: string;
   note_id: string;
@@ -288,6 +298,9 @@ export const api = {
   updateMe: (display_name: string) => request<User>("PATCH", "/me", { display_name }),
   changePassword: (current: string, next: string) => request("POST", "/me/password", { current, new: next }),
   logoutOthers: () => request("POST", "/me/logout-others", {}),
+  apiKeys: () => request<ApiKey[]>("GET", "/me/keys"),
+  createApiKey: (name: string, scope: ApiKey["scope"]) => request<{ key: ApiKey; token: string }>("POST", "/me/keys", { name, scope }),
+  revokeApiKey: (id: string) => request("DELETE", `/me/keys/${id}`),
   adminUsers: () => request<AdminUser[]>("GET", "/admin/users"),
   adminUpdateUser: (id: string, patch: { is_admin?: boolean; disabled?: boolean }) =>
     request("PATCH", `/admin/users/${id}`, patch),

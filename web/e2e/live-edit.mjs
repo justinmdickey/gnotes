@@ -641,6 +641,30 @@ try {
   await bob.waitForFunction(() => document.body.innerText.includes("You were signed out"), { timeout: 10000 });
   check(true, "admin reset signs the user out of their open app");
 
+  // API Keys: make one, it's shown once and works on /api/v1, then revoking it shuts it out.
+  await alice.evaluate(() => [...document.querySelectorAll(".keys button")].find((b) => b.textContent.includes("New API Key")).click());
+  await alice.waitForSelector("#new-key input");
+  await alice.type("#new-key input[placeholder^=Name]", "Script");
+  await alice.click("#new-key input[value=write]");
+  await alice.click("dialog button[form=new-key]");
+  await alice.waitForFunction(() => document.querySelector("dialog input[aria-label='API key']")?.value.startsWith("gnk_"));
+  const apiKey = await alice.$eval("dialog input[aria-label='API key']", (i) => i.value);
+  await alice.evaluate(() => [...document.querySelectorAll("dialog button")].find((b) => b.textContent === "Done").click());
+  await closed(alice);
+  check(
+    await alice.evaluate(() => [...document.querySelectorAll(".keys li")].some((li) => li.textContent.includes("Script") && li.textContent.includes("Read and write"))),
+    "a new API key is listed by name and scope, after being shown once",
+  );
+  const viaKey = (key) =>
+    alice.evaluate((key) => fetch("/api/v1/me", { headers: { authorization: `Bearer ${key}` }, credentials: "omit" }).then((r) => r.status), key);
+  check((await viaKey(apiKey)) === 200, "the key works on the agent API");
+  await alice.evaluate(() => [...document.querySelectorAll(".keys li")].find((li) => li.textContent.includes("Script")).querySelector("button.destructive").click());
+  await alice.waitForSelector("dialog[open]");
+  await alice.evaluate(() => [...document.querySelectorAll("dialog[open] button")].find((b) => b.textContent.trim() === "Revoke").click());
+  await closed(alice);
+  await alice.waitForFunction(() => ![...document.querySelectorAll(".keys li")].some((li) => li.textContent.includes("Script")));
+  check((await viaKey(apiKey)) === 401, "revoking a key takes it off the list and shuts it out");
+
   // AI services start folded away behind a switch; switching one on opens its form.
   check(
     await alice.evaluate(() => [".stt", ".vision", ".summaries", ".embed"].every((c) => !document.querySelector(`${c} input`))),
@@ -1617,6 +1641,17 @@ try {
     await shot("phone-settings");
     await alice.evaluate(() => document.querySelector(".stt").scrollIntoView({ block: "center" }));
     await shot("phone-settings-stt");
+    await alice.evaluate(() => document.querySelector(".keys").scrollIntoView({ block: "center" }));
+    await shot("phone-settings-keys");
+    await alice.evaluate(() => [...document.querySelectorAll(".keys button")].find((b) => b.textContent.includes("New API Key")).click());
+    await alice.waitForSelector("#new-key input");
+    await shot("phone-api-key");
+    await alice.type("#new-key input[placeholder^=Name]", "Claude agent");
+    await alice.tap("dialog button[form=new-key]");
+    await alice.waitForSelector("dialog input[aria-label='API key']");
+    await shot("phone-api-key-made");
+    await alice.evaluate(() => [...document.querySelectorAll("dialog button")].find((b) => b.textContent === "Done").click());
+    await closed(alice);
     await alice.goto(noteUrl);
     await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("bread"));
     await alice.tap(".editor header button[aria-label='Share']");

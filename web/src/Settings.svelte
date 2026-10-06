@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { api, ApiError, inviteUrl, type AdminUser, type PendingInvite, type ServiceSettings } from "./lib/api";
+  import { api, ApiError, inviteUrl, type AdminUser, type ApiKey, type PendingInvite, type ServiceSettings } from "./lib/api";
   import Dialog from "./lib/Dialog.svelte";
   import Icon from "./lib/Icon.svelte";
   import Menu from "./lib/Menu.svelte";
@@ -29,6 +29,7 @@
   let picker = $state<HTMLInputElement>();
   const canShare = "share" in navigator;
   const canCopy = "clipboard" in navigator;
+  const API_DOCS = "https://github.com/justinmdickey/gnotes/blob/main/docs/API.md";
 
   async function loadAdmin() {
     if (!app.user?.is_admin) return;
@@ -46,6 +47,47 @@
   let embed = $state<ServiceSettings | null>(null);
 
   loadAdmin();
+
+  let keys = $state<ApiKey[]>([]);
+  /** The New API Key dialog: its form, then the key itself, shown once. */
+  let newKey = $state<{ name: string; scope: ApiKey["scope"]; token: string } | null>(null);
+
+  async function loadKeys() {
+    keys = await api.apiKeys().catch(() => keys);
+  }
+  loadKeys();
+
+  async function createKey(e: SubmitEvent) {
+    e.preventDefault();
+    const form = newKey;
+    if (!form) return;
+    if (await run(async () => (form.token = (await api.createApiKey(form.name, form.scope)).token))) await loadKeys();
+  }
+
+  async function copyKey() {
+    if (!newKey?.token) return;
+    await navigator.clipboard.writeText(newKey.token);
+    toast("Key copied");
+  }
+
+  async function revokeKey(key: ApiKey) {
+    const ok = await ask({
+      title: `Revoke “${key.name}”?`,
+      body: "Anything using this key stops working right away.",
+      confirm: "Revoke",
+      destructive: true,
+    });
+    if (ok && (await run(() => api.revokeApiKey(key.id), "Key revoked"))) await loadKeys();
+  }
+
+  /** "just now", "5 min ago", "3 h ago", or the date. */
+  function ago(ms: number) {
+    const min = Math.round((Date.now() - ms) / 60000);
+    if (min < 2) return "just now";
+    if (min < 60) return `${min} min ago`;
+    if (min < 24 * 60) return `${Math.round(min / 60)} h ago`;
+    return day(ms);
+  }
 
   /** Runs an action, showing its error or an optional success notice. */
   async function run(action: () => Promise<unknown>, done = "") {
@@ -150,7 +192,7 @@
         <strong>{savedName}</strong>
         <span class="dim">@{app.user?.username}{#if app.user?.is_admin}&nbsp;· Admin{/if}</span>
       </div>
-      {#if error && !changingPassword && !resetting}<p class="error">{error}</p>{/if}
+      {#if error && !changingPassword && !resetting && !newKey}<p class="error">{error}</p>{/if}
 
       <!-- On a phone the page's own title already says Account. -->
       {#if !tab}<h2 class="group-title">Account</h2>{/if}
@@ -208,6 +250,30 @@
         <li>
           <span class="label">This device</span>
           <button class="destructive" onclick={endSession}><Icon name="logout" /> Log Out</button>
+        </li>
+      </ul>
+
+      <h2 class="group-title">API Keys</h2>
+      <p class="dim group-note">
+        Let an agent or script read and change your notes as you, through the <a href={API_DOCS} target="_blank" rel="noreferrer">Gnotes API</a>.
+      </p>
+      <ul class="boxed keys">
+        {#each keys as key (key.id)}
+          <li>
+            <Icon name="key" />
+            <span class="label">
+              <span>{key.name}</span>
+              <span class="dim sub">
+                {key.scope === "write" ? "Read and write" : "Read only"} · {key.last_used_at ? `Used ${ago(key.last_used_at)}` : "Never used"}
+              </span>
+            </span>
+            <button class="destructive" onclick={() => revokeKey(key)}>Revoke</button>
+          </li>
+        {/each}
+        <li>
+          <button class="flat add-person" onclick={() => ((error = ""), (newKey = { name: "", scope: "read", token: "" }))}>
+            <Icon name="plus" /> New API Key
+          </button>
         </li>
       </ul>
 
@@ -391,6 +457,44 @@
   </Dialog>
 {/if}
 
+{#if newKey}
+  <Dialog title={newKey.token ? "Copy Your Key" : "New API Key"} onclose={() => (newKey = null)}>
+    {#if newKey.token}
+      <div class="stack">
+        <p class="dim">This is the only time it's shown. Give it to your agent as <code>Authorization: Bearer &lt;key&gt;</code>.</p>
+        <div class="link-row">
+          <input class="link mono" readonly value={newKey.token} onfocus={(e) => e.currentTarget.select()} aria-label="API key" />
+          {#if canCopy}<button class="suggested" onclick={copyKey}>Copy</button>{/if}
+        </div>
+      </div>
+    {:else}
+      <form id="new-key" class="stack" onsubmit={createKey}>
+        <!-- svelte-ignore a11y_autofocus -->
+        <input placeholder="Name, e.g. Claude agent" maxlength="60" bind:value={newKey.name} required autofocus />
+        <div class="choices" role="radiogroup" aria-label="What it can do">
+          <label class="choice">
+            <input type="radio" name="scope" value="read" bind:group={newKey.scope} />
+            <span class="label">Read only<span class="dim sub">Search and read notes</span></span>
+          </label>
+          <label class="choice">
+            <input type="radio" name="scope" value="write" bind:group={newKey.scope} />
+            <span class="label">Read and write<span class="dim sub">Also make, change, move and trash notes</span></span>
+          </label>
+        </div>
+        {#if error}<p class="error">{error}</p>{/if}
+      </form>
+    {/if}
+    {#snippet actions()}
+      {#if newKey?.token}
+        <button class="suggested" onclick={() => (newKey = null)}>Done</button>
+      {:else}
+        <button onclick={() => (newKey = null)}>Cancel</button>
+        <button class="suggested" type="submit" form="new-key">Create</button>
+      {/if}
+    {/snippet}
+  </Dialog>
+{/if}
+
 {#if resetting}
   <Dialog title="Reset {resetting.display_name}'s Password" onclose={() => (resetting = null)}>
     <form id="reset-password" class="stack" onsubmit={saveReset}>
@@ -512,6 +616,10 @@
   .group-note {
     margin: -4px 4px 10px;
     font-size: var(--text-sm);
+  }
+
+  .group-note a {
+    color: var(--accent);
   }
 
   .services {
@@ -648,6 +756,42 @@
 
   .stack p {
     margin: 0;
+  }
+
+  .keys li > :global(svg) {
+    flex: none;
+    color: var(--dim-fg);
+  }
+
+  .mono {
+    font-family: var(--font-mono);
+  }
+
+  .choices {
+    display: flex;
+    flex-direction: column;
+    border-radius: var(--radius-lg);
+    box-shadow: 0 0 0 1px var(--border);
+    overflow: hidden;
+  }
+
+  .choice {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 54px;
+    padding: 8px 12px;
+    cursor: pointer;
+  }
+
+  .choice + .choice {
+    border-top: 1px solid var(--border);
+  }
+
+  .choice input {
+    flex: none;
+    margin: 0;
+    accent-color: var(--accent-bg);
   }
 
   .error {
