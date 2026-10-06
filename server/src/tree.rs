@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 
 use crate::{
     AppState,
-    auth::CurrentUser,
+    auth::{CurrentUser, User},
     error::{ApiResult, AppError},
     perms::{Role, is_self_or_descendant, note_role, notebook_role},
     util::{double_option, new_id, now_ms, parse_id},
@@ -22,31 +22,31 @@ const TRASH_MS: i64 = TRASH_DAYS * 24 * 60 * 60 * 1000;
 
 #[derive(Serialize)]
 pub struct TreeNotebook {
-    id: String,
-    parent_id: Option<String>,
-    name: String,
-    owner: String,
-    role: Role,
-    updated_at: i64,
+    pub(crate) id: String,
+    pub(crate) parent_id: Option<String>,
+    pub(crate) name: String,
+    pub(crate) owner: String,
+    pub(crate) role: Role,
+    pub(crate) updated_at: i64,
     /// Someone has a share on this exact item, so it shows a shared badge.
-    shared: bool,
+    pub(crate) shared: bool,
     /// Who it's shared with, by display name. Only on your own notebooks; others don't see each other.
-    shared_with: Vec<String>,
+    pub(crate) shared_with: Vec<String>,
 }
 
 #[derive(Serialize)]
 pub struct TreeNote {
-    id: String,
-    notebook_id: Option<String>,
-    title: String,
-    preview: String,
-    owner: String,
-    role: Role,
-    updated_at: i64,
+    pub(crate) id: String,
+    pub(crate) notebook_id: Option<String>,
+    pub(crate) title: String,
+    pub(crate) preview: String,
+    pub(crate) owner: String,
+    pub(crate) role: Role,
+    pub(crate) updated_at: i64,
     /// Someone has a share on this exact item, so it shows a shared badge.
-    shared: bool,
+    pub(crate) shared: bool,
     /// Who it's shared with, by display name. Only on your own notes; others don't see each other.
-    shared_with: Vec<String>,
+    pub(crate) shared_with: Vec<String>,
 }
 
 /// Something shared with the caller directly, shown under "Shared with me".
@@ -60,15 +60,20 @@ pub struct SharedRoot {
 
 #[derive(Serialize)]
 pub struct Tree {
-    notebooks: Vec<TreeNotebook>,
-    notes: Vec<TreeNote>,
-    shared: Vec<SharedRoot>,
+    pub(crate) notebooks: Vec<TreeNotebook>,
+    pub(crate) notes: Vec<TreeNote>,
+    pub(crate) shared: Vec<SharedRoot>,
 }
 
 type NotebookRow = (String, Option<String>, String, String, i64);
 type NoteRow = (String, Option<String>, String, String, String, i64);
 
 pub async fn get_tree(State(state): State<AppState>, CurrentUser(me): CurrentUser) -> ApiResult<Json<Tree>> {
+    Ok(Json(load_tree(&state, &me).await?))
+}
+
+/// Every notebook and note `me` can see, with their role on each.
+pub(crate) async fn load_tree(state: &AppState, me: &User) -> ApiResult<Tree> {
     let db = &state.db;
 
     // Own notebooks, plus every notebook reachable from a notebook shared with me.
@@ -204,7 +209,7 @@ pub async fn get_tree(State(state): State<AppState>, CurrentUser(me): CurrentUse
     notebooks.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     let mut notes: Vec<_> = notes.into_values().collect();
     notes.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-    Ok(Json(Tree { notebooks, notes, shared }))
+    Ok(Tree { notebooks, notes, shared })
 }
 
 pub(crate) async fn require_notebook(state: &AppState, user_id: &str, id: &str, min: Role) -> ApiResult<()> {
@@ -271,13 +276,19 @@ pub async fn create_notebook(
     CurrentUser(me): CurrentUser,
     Json(body): Json<NewNotebook>,
 ) -> ApiResult<Json<Value>> {
-    let name = clean_name(&body.name)?;
-    let owner = match &body.parent_id {
+    let id = add_notebook(&state, &me.id, &body.name, body.parent_id.as_deref()).await?;
+    Ok(Json(json!({ "id": id })))
+}
+
+/// Makes a notebook in `parent` (top level when `None`), owned by whoever owns `parent`.
+pub(crate) async fn add_notebook(state: &AppState, me: &str, name: &str, parent: Option<&str>) -> ApiResult<String> {
+    let name = clean_name(name)?;
+    let owner = match parent {
         Some(parent) => {
-            require_notebook(&state, &me.id, parent, Role::Editor).await?;
-            notebook_owner(&state, parent).await?
+            require_notebook(state, me, parent, Role::Editor).await?;
+            notebook_owner(state, parent).await?
         }
-        None => me.id.clone(),
+        None => me.to_owned(),
     };
     let id = new_id();
     let now = now_ms();
@@ -286,14 +297,14 @@ pub async fn create_notebook(
     )
     .bind(&id)
     .bind(&owner)
-    .bind(&body.parent_id)
+    .bind(parent)
     .bind(&name)
     .bind(now)
     .bind(now)
     .execute(&state.db)
     .await?;
     state.hub.tree_changed();
-    Ok(Json(json!({ "id": id })))
+    Ok(id)
 }
 
 #[derive(Deserialize)]
@@ -393,20 +404,26 @@ pub async fn create_note(
         Some(id) => parse_id(id).ok_or_else(|| AppError::BadRequest("Invalid note id".into()))?,
         None => new_id(),
     };
-    let owner = match &body.notebook_id {
+    add_note(&state, &me.id, &id, body.notebook_id.as_deref()).await?;
+    Ok(Json(json!({ "id": id })))
+}
+
+/// Makes an empty note `id` in `notebook` (top level when `None`), owned by whoever owns the notebook.
+pub(crate) async fn add_note(state: &AppState, me: &str, id: &str, notebook: Option<&str>) -> ApiResult<()> {
+    let owner = match notebook {
         Some(nb) => {
-            require_notebook(&state, &me.id, nb, Role::Editor).await?;
-            notebook_owner(&state, nb).await?
+            require_notebook(state, me, nb, Role::Editor).await?;
+            notebook_owner(state, nb).await?
         }
-        None => me.id.clone(),
+        None => me.to_owned(),
     };
     let now = now_ms();
     let result = sqlx::query(
         "INSERT INTO notes (id, owner_id, notebook_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
     )
-    .bind(&id)
+    .bind(id)
     .bind(&owner)
-    .bind(&body.notebook_id)
+    .bind(notebook)
     .bind(now)
     .bind(now)
     .execute(&state.db)
@@ -419,7 +436,7 @@ pub async fn create_note(
         Err(e) => return Err(e.into()),
     }
     state.hub.tree_changed();
-    Ok(Json(json!({ "id": id })))
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -436,22 +453,26 @@ pub async fn update_note(
 ) -> ApiResult<Json<Value>> {
     require_note(&state, &me.id, &id, Role::Editor).await?;
     if let Some(target) = &body.notebook_id {
-        let owner: String = sqlx::query_scalar("SELECT owner_id FROM notes WHERE id = ?")
-            .bind(&id)
-            .fetch_one(&state.db)
-            .await?;
-        check_move_target(&state, &me.id, &owner, target.as_deref()).await?;
-        sqlx::query("UPDATE notes SET notebook_id = ?, updated_at = ? WHERE id = ?")
-            .bind(target)
-            .bind(now_ms())
-            .bind(&id)
-            .execute(&state.db)
-            .await?;
-        state.recheck_access().await;
-        state.hub.tree_changed();
-        state.export.changed();
+        move_note(&state, &me.id, &id, target.as_deref()).await?;
     }
     Ok(Json(json!({ "ok": true })))
+}
+
+/// Moves a note into `target` (top level when `None`), within its owner's notebooks.
+pub(crate) async fn move_note(state: &AppState, me: &str, id: &str, target: Option<&str>) -> ApiResult<()> {
+    require_note(state, me, id, Role::Editor).await?;
+    let owner: String = sqlx::query_scalar("SELECT owner_id FROM notes WHERE id = ?").bind(id).fetch_one(&state.db).await?;
+    check_move_target(state, me, &owner, target).await?;
+    sqlx::query("UPDATE notes SET notebook_id = ?, updated_at = ? WHERE id = ?")
+        .bind(target)
+        .bind(now_ms())
+        .bind(id)
+        .execute(&state.db)
+        .await?;
+    state.recheck_access().await;
+    state.hub.tree_changed();
+    state.export.changed();
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -467,24 +488,30 @@ pub async fn delete_note(
     Path(id): Path<String>,
     Query(query): Query<DeleteNoteQuery>,
 ) -> ApiResult<Json<Value>> {
-    require_note(&state, &me.id, &id, Role::Owner).await?;
-    if query.discard {
-        let uuid = uuid::Uuid::parse_str(&id).map_err(|_| AppError::NotFound)?;
-        if !crate::rooms::note_body(&state, uuid).await?.trim().is_empty() {
-            return Err(AppError::Conflict("The note isn't empty".into()));
-        }
-        sqlx::query("DELETE FROM notes WHERE id = ?").bind(&id).execute(&state.db).await?;
-    } else {
-        sqlx::query("UPDATE notes SET deleted_at = ? WHERE id = ?")
-            .bind(now_ms())
-            .bind(&id)
-            .execute(&state.db)
-            .await?;
+    if !query.discard {
+        trash_note(&state, &me.id, &id).await?;
+        return Ok(Json(json!({ "ok": true })));
     }
+    require_note(&state, &me.id, &id, Role::Owner).await?;
+    let uuid = uuid::Uuid::parse_str(&id).map_err(|_| AppError::NotFound)?;
+    if !crate::rooms::note_body(&state, uuid).await?.trim().is_empty() {
+        return Err(AppError::Conflict("The note isn't empty".into()));
+    }
+    sqlx::query("DELETE FROM notes WHERE id = ?").bind(&id).execute(&state.db).await?;
     state.recheck_access().await;
     state.hub.tree_changed();
     state.export.changed();
     Ok(Json(json!({ "ok": true })))
+}
+
+/// Moves a note to the trash. Owners only; it can be restored for TRASH_DAYS.
+pub(crate) async fn trash_note(state: &AppState, me: &str, id: &str) -> ApiResult<()> {
+    require_note(state, me, id, Role::Owner).await?;
+    sqlx::query("UPDATE notes SET deleted_at = ? WHERE id = ?").bind(now_ms()).bind(id).execute(&state.db).await?;
+    state.recheck_access().await;
+    state.hub.tree_changed();
+    state.export.changed();
+    Ok(())
 }
 
 #[derive(Serialize, sqlx::FromRow)]

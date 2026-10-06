@@ -1,6 +1,9 @@
 use std::time::Duration;
 
-use base64::{Engine, engine::general_purpose::STANDARD};
+use base64::{
+    Engine,
+    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
+};
 use futures_util::{SinkExt, StreamExt};
 use gnotes_server::{AppState, Config, WhisperConfig, auth, build, serve};
 use loro::{ExportMode, LoroDoc, VersionVector, awareness::EphemeralStore};
@@ -1821,4 +1824,197 @@ async fn switching_a_service_off_keeps_its_settings() {
     let res = root.send(reqwest::Method::PUT, "/admin/settings/summary", json!({ "url": "" })).await;
     assert!(res.status().is_success());
     assert_eq!(root.get("/admin/settings").await["summary"]["url"], "");
+}
+
+/// An agent calling /api/v1 with an API key, and no cookies.
+struct Agent {
+    http: reqwest::Client,
+    base: String,
+    key: String,
+}
+
+impl Agent {
+    async fn new(user: &User, scope: &str) -> Agent {
+        let made = user.post("/me/keys", json!({ "name": format!("{scope} agent"), "scope": scope })).await;
+        let key = made["token"].as_str().unwrap().to_owned();
+        assert!(key.starts_with("gnk_"));
+        Agent { http: reqwest::Client::new(), base: user.base.clone(), key }
+    }
+
+    async fn call(&self, method: reqwest::Method, path: &str, body: Option<Value>) -> (u16, Value) {
+        let mut req = self.http.request(method, format!("http://{}/api/v1{path}", self.base)).bearer_auth(&self.key);
+        if let Some(body) = body {
+            req = req.json(&body);
+        }
+        let res = req.send().await.unwrap();
+        let status = res.status().as_u16();
+        (status, res.json().await.unwrap_or(Value::Null))
+    }
+
+    async fn ok(&self, method: reqwest::Method, path: &str, body: Option<Value>) -> Value {
+        let (status, body) = self.call(method.clone(), path, body).await;
+        assert_eq!(status, 200, "{method} {path}: {body}");
+        body
+    }
+}
+
+#[tokio::test]
+async fn api_keys_act_as_their_user_within_their_scope() {
+    let dir = TempDir::new().unwrap();
+    let server = start(&dir).await;
+    let alice = user(&server, "alice").await;
+    let writer = Agent::new(&alice, "write").await;
+    let reader = Agent::new(&alice, "read").await;
+
+    let me = writer.ok(reqwest::Method::GET, "/me", None).await;
+    assert_eq!((me["user"]["username"].clone(), me["key"]["scope"].clone()), (json!("alice"), json!("write")));
+
+    // The key list shows names, scopes and last use, never the keys.
+    let keys = alice.get("/me/keys").await;
+    let used = keys.as_array().unwrap().iter().find(|k| k["scope"] == "write").unwrap();
+    assert_eq!(keys.as_array().unwrap().len(), 2);
+    assert!(used.get("token").is_none() && used["last_used_at"].is_i64(), "{keys}");
+
+    // A read key reads and can't write.
+    reader.ok(reqwest::Method::GET, "/notes", None).await;
+    let (status, body) = reader.call(reqwest::Method::POST, "/notes", Some(json!({ "text": "nope" }))).await;
+    assert_eq!(status, 403, "{body}");
+    assert!(body["message"].as_str().unwrap().contains("only read"));
+
+    // Keys only open /api/v1, and the app's session doesn't open it.
+    let bearer = |path: &str| {
+        reqwest::Client::new().get(format!("http://{}/api{path}", server.base)).bearer_auth(&writer.key).send()
+    };
+    for path in ["/tree", "/me", "/me/keys", "/admin/users", "/invites"] {
+        assert_eq!(bearer(path).await.unwrap().status(), 401, "{path} must not take a key");
+    }
+    let made_by_key = reqwest::Client::new()
+        .post(format!("http://{}/api/me/keys", server.base))
+        .bearer_auth(&writer.key)
+        .json(&json!({ "name": "more", "scope": "write" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(made_by_key.status(), 401, "a key can't make keys");
+    assert_eq!(alice.http.get(alice.url("/v1/me")).send().await.unwrap().status(), 401, "v1 takes keys, not sessions");
+
+    // Wrong, missing and revoked keys get 401 with a message that says what to send.
+    let wrong = Agent { http: reqwest::Client::new(), base: server.base.clone(), key: "gnk_nope".into() };
+    let (status, body) = wrong.call(reqwest::Method::GET, "/me", None).await;
+    assert_eq!(status, 401);
+    assert!(body["message"].as_str().unwrap().contains("Bearer"));
+    let id = alice.get("/me/keys").await.as_array().unwrap().iter().find(|k| k["scope"] == "read").unwrap()["id"].as_str().unwrap().to_owned();
+    alice.send(reqwest::Method::DELETE, &format!("/me/keys/{id}"), json!({})).await;
+    assert_eq!(reader.call(reqwest::Method::GET, "/me", None).await.0, 401, "a revoked key stops working");
+
+    // Bad input is a 400 that says what's wrong.
+    let (status, body) = writer.call(reqwest::Method::POST, "/notes", Some(json!({ "txt": "typo" }))).await;
+    assert_eq!(status, 400);
+    assert!(body["message"].as_str().unwrap().contains("txt"), "{body}");
+    assert_eq!(writer.call(reqwest::Method::GET, "/nope", None).await.0, 400);
+}
+
+#[tokio::test]
+async fn agents_write_notes_and_respect_sharing() {
+    let dir = TempDir::new().unwrap();
+    let server = start(&dir).await;
+    let alice = user(&server, "alice").await;
+    let bob = user(&server, "bob").await;
+    let agent = Agent::new(&alice, "write").await;
+    use reqwest::Method as M;
+
+    // Notebooks and notes, with text.
+    let nb = agent.ok(M::POST, "/notebooks", Some(json!({ "name": "Agent" }))).await;
+    assert_eq!((nb["name"].clone(), nb["role"].clone()), (json!("Agent"), json!("owner")));
+    let nb = nb["id"].as_str().unwrap().to_owned();
+    let note = agent.ok(M::POST, "/notes", Some(json!({ "notebook_id": nb, "text": "# Daily log\n\nStarted." }))).await;
+    assert_eq!((note["title"].clone(), note["notebook_id"].clone()), (json!("Daily log"), json!(nb)));
+    assert!(note["updated_at"].as_str().unwrap().ends_with('Z'));
+    let id = note["id"].as_str().unwrap().to_owned();
+
+    // The app sees it, and its text is credited to alice.
+    assert_eq!(alice.get("/tree").await["notes"][0]["title"], "Daily log");
+    let authors = alice.get(&format!("/notes/{id}/authors")).await;
+    let names: Vec<&Value> = authors["peers"].as_object().unwrap().values().map(|p| &p["name"]).collect();
+    assert!(!names.is_empty() && names.iter().all(|n| *n == "alice"), "{authors}");
+    let listed = agent.ok(M::GET, &format!("/notes?notebook_id={nb}"), None).await;
+    assert_eq!(listed[0]["id"], json!(id));
+    assert!(listed[0].get("text").is_none(), "lists leave the text out");
+
+    // Append adds after a blank line; search finds the new words.
+    let appended = agent.ok(M::POST, &format!("/notes/{id}/append"), Some(json!({ "text": "Fed the cat." }))).await;
+    assert_eq!(appended["text"], "# Daily log\n\nStarted.\n\nFed the cat.");
+    let hits = agent.ok(M::GET, "/search?q=cat", None).await;
+    assert_eq!(hits[0]["id"], json!(id));
+    assert!(hits[0]["snippet"].as_str().unwrap().contains("**cat**"), "{hits}");
+    assert_eq!(agent.call(M::GET, "/search?q=cat&mode=meaning", None).await.0, 409, "no semantic search set up");
+
+    // A write without a version replaces the text; moving to the top level.
+    let moved = agent.ok(M::PATCH, &format!("/notes/{id}"), Some(json!({ "text": "# Done\n", "notebook_id": null }))).await;
+    assert_eq!((moved["text"].clone(), moved["notebook_id"].clone(), moved["title"].clone()), (json!("# Done\n"), Value::Null, json!("Done")));
+
+    // Bob's agent sees only what's shared with bob, and a viewer can't write.
+    let bobs = Agent::new(&bob, "write").await;
+    assert_eq!(bobs.call(M::GET, &format!("/notes/{id}"), None).await.0, 404);
+    alice.post("/shares", json!({ "resource_type": "note", "resource_id": id, "username": "bob", "role": "viewer" })).await;
+    assert_eq!(bobs.ok(M::GET, &format!("/notes/{id}"), None).await["role"], "viewer");
+    let (status, body) = bobs.call(M::POST, &format!("/notes/{id}/append"), Some(json!({ "text": "hi" }))).await;
+    assert_eq!(status, 403, "{body}");
+    assert_eq!(bobs.call(M::DELETE, &format!("/notes/{id}"), None).await.0, 403, "only the owner trashes");
+
+    // Trash: gone from the API, restorable in the app.
+    agent.ok(M::DELETE, &format!("/notes/{id}"), None).await;
+    assert_eq!(agent.call(M::GET, &format!("/notes/{id}"), None).await.0, 404);
+    assert_eq!(alice.get("/trash").await[0]["id"], json!(id));
+}
+
+#[tokio::test]
+async fn agent_writes_merge_with_live_editing() {
+    let dir = TempDir::new().unwrap();
+    let server = start(&dir).await;
+    let alice = user(&server, "alice").await;
+    let agent = Agent::new(&alice, "write").await;
+    use reqwest::Method as M;
+
+    let note = agent.ok(M::POST, "/notes", Some(json!({ "text": "Groceries\nmilk\n" }))).await;
+    let id = note["id"].as_str().unwrap().to_owned();
+    let version = note["version"].as_str().unwrap().to_owned();
+
+    // Alice has it open and types while the agent works from what it read.
+    let mut ws = alice.ws().await;
+    let doc = LoroDoc::new();
+    let (_, _, data) = ws.join_and_sync(&id, None).await;
+    doc.import(&data).unwrap();
+    ws.send_frame(0x01, &id, &edit(&doc, "Groceries\nmilk\n".len(), "eggs\n")).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // The agent rewrites the title from the version it read; alice's eggs stay.
+    let merged = agent
+        .ok(M::PATCH, &format!("/notes/{id}"), Some(json!({ "text": "Shopping\nmilk\n", "version": version })))
+        .await;
+    assert_eq!(merged["text"], "Shopping\nmilk\neggs\n");
+
+    // Alice's editor gets the agent's change live, and they agree.
+    doc.import(&ws.frame(0x01).await).unwrap();
+    assert_eq!(doc.get_text("body").to_string(), "Shopping\nmilk\neggs\n");
+
+    // A version the note never had is a 400, not a silent overwrite.
+    let elsewhere = LoroDoc::new();
+    let _ = edit(&elsewhere, 0, "x");
+    let foreign = URL_SAFE_NO_PAD.encode(elsewhere.oplog_frontiers().encode());
+    for version in [foreign.as_str(), "not base64!"] {
+        let (status, _) = agent.call(M::PATCH, &format!("/notes/{id}"), Some(json!({ "text": "x", "version": version }))).await;
+        assert_eq!(status, 400, "version {version}");
+    }
+    assert_eq!(agent.ok(M::GET, &format!("/notes/{id}"), None).await["text"], "Shopping\nmilk\neggs\n");
+
+    // After everyone leaves, the room closes and the agent's text survives a restart.
+    drop(ws);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    server.task.abort();
+    drop(server);
+    let server = start(&dir).await;
+    let alice = login(&server.base, "alice").await;
+    let agent = Agent::new(&alice, "read").await;
+    assert_eq!(agent.ok(M::GET, &format!("/notes/{id}"), None).await["text"], "Shopping\nmilk\neggs\n");
 }

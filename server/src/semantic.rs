@@ -410,23 +410,30 @@ pub async fn search(
     CurrentUser(me): CurrentUser,
     Query(params): Query<SearchParams>,
 ) -> ApiResult<Json<SearchResults>> {
+    let results = by_meaning(&state, &me.id, &params.q, MAX_RESULTS).await?.unwrap_or_default();
+    Ok(Json(SearchResults { results }))
+}
+
+/// Notes the user can see about what `q` means, best first, at most `limit`; `None` when semantic
+/// search isn't set up.
+pub(crate) async fn by_meaning(state: &AppState, user: &str, q: &str, limit: usize) -> ApiResult<Option<Vec<SearchResult>>> {
     let Some(cfg) = state.embed.read().await.clone() else {
-        return Ok(Json(SearchResults { results: vec![] }));
+        return Ok(None);
     };
-    let q = params.q.trim();
+    let q = q.trim();
     if !worth_asking(q) {
-        return Ok(Json(SearchResults { results: vec![] }));
+        return Ok(Some(vec![]));
     }
     let mut seen = HashSet::new();
-    let (_, found) = matches(&state, &me.id, &cfg, q).await?;
+    let (_, found) = matches(state, user, &cfg, q).await?;
     let best = found.first().map_or(0.0, |m| m.score);
     let results = found
         .into_iter()
         .filter(|m| m.score >= best - SPREAD && seen.insert(m.note.clone()))
-        .take(MAX_RESULTS)
+        .take(limit)
         .map(|m| SearchResult { note: m.note, title: m.title, snippet: vec![Segment { text: excerpt(&m.text), hit: false }], source: "meaning" })
         .collect();
-    Ok(Json(SearchResults { results }))
+    Ok(Some(results))
 }
 
 #[cfg(test)]

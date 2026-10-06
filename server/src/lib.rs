@@ -1,5 +1,6 @@
 pub mod account;
 pub mod ai_edit;
+pub mod api_keys;
 pub mod ask;
 pub mod attachments;
 pub mod authors;
@@ -20,6 +21,7 @@ pub mod summary;
 pub mod tidy;
 pub mod tree;
 pub mod util;
+pub mod v1;
 pub mod ws;
 
 /// The release this was built from (`GNOTES_VERSION` at build time, set from the tag in CI), or "dev".
@@ -171,6 +173,8 @@ pub fn router(state: AppState) -> Router {
         .route("/me", get(auth::me).patch(account::update_me))
         .route("/me/password", post(account::change_password))
         .route("/me/logout-others", post(account::logout_others))
+        .route("/me/keys", get(api_keys::list_keys).post(api_keys::create_key))
+        .route("/me/keys/{id}", axum::routing::delete(api_keys::revoke_key))
         .route("/users", get(auth::list_users))
         .route("/admin/users", get(account::admin_list_users).post(auth::admin_create_user))
         .route("/admin/users/{id}", patch(account::admin_update_user))
@@ -216,6 +220,8 @@ pub fn router(state: AppState) -> Router {
         .route("/ask", post(ask::ask))
         .route("/attachments/{id}/text", post(attachments::photo_text))
         .route("/ws", get(ws::handler))
+        // The agent API, for API keys only; the routes above take a logged-in session.
+        .nest("/v1", v1::router())
         .fallback(|| async { error::AppError::NotFound });
 
     // Unknown paths fall back to index.html so the PWA's client-side routes load.

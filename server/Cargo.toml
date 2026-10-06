@@ -23,7 +23,7 @@ sha2 = "0.11.0"
 # Holds a recording converted to WAV for speech-to-text servers that read nothing else.
 tempfile = "3.27.0"
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros"] }
-time = "0.3.55"
+time = { version = "0.3.55", features = ["formatting"] }
 tokio = { version = "1", features = ["full"] }
 tower-http = { version = "0.7", features = ["fs", "trace"] }
 tracing = "0.1"

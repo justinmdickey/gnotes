@@ -216,9 +216,12 @@ pub async fn search(
     CurrentUser(me): CurrentUser,
     Query(params): Query<SearchParams>,
 ) -> ApiResult<Json<SearchResults>> {
-    let Some(query) = fts_query(&params.q) else {
-        return Ok(Json(SearchResults { results: vec![] }));
-    };
+    Ok(Json(SearchResults { results: by_words(&state, &me.id, &params.q, MAX_RESULTS).await? }))
+}
+
+/// Notes the user can see with every word of `q`, best first, at most `limit`.
+pub(crate) async fn by_words(state: &AppState, user: &str, q: &str, limit: i64) -> sqlx::Result<Vec<SearchResult>> {
+    let Some(query) = fts_query(q) else { return Ok(vec![]) };
     let rows: Vec<(String, String, String)> = sqlx::query_as(concat!(
         visible_notes!(),
         "SELECT n.id, n.title, snippet(note_search, 1, char(2), char(3), '…', 12)
@@ -229,16 +232,12 @@ pub async fn search(
          ORDER BY bm25(note_search, 4.0, 1.0)
          LIMIT ?3"
     ))
-    .bind(&me.id)
+    .bind(user)
     .bind(&query)
-    .bind(MAX_RESULTS)
+    .bind(limit)
     .fetch_all(&state.db)
     .await?;
-    let results = rows
-        .into_iter()
-        .map(|(note, title, snippet)| SearchResult { note, title, snippet: segments(&snippet), source: "text" })
-        .collect();
-    Ok(Json(SearchResults { results }))
+    Ok(rows.into_iter().map(|(note, title, snippet)| SearchResult { note, title, snippet: segments(&snippet), source: "text" }).collect())
 }
 
 /// Notes the user can see whose text has any of `terms`, best first, at most `limit`, each with

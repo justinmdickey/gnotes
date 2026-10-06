@@ -11,13 +11,21 @@ use std::{
 };
 
 use axum::extract::ws::Message;
-use base64::{Engine, engine::general_purpose::STANDARD};
-use loro::{ExportMode, LoroDoc, VersionVector, awareness::EphemeralStore};
+use base64::{
+    Engine,
+    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
+};
+use loro::{ExportMode, Frontiers, LoroDoc, UpdateOptions, VersionVector, awareness::EphemeralStore};
 use serde_json::json;
 use tokio::sync::{Mutex, mpsc};
 use uuid::Uuid;
 
-use crate::{AppState, perms::Role, util::now_ms};
+use crate::{
+    AppState,
+    error::{ApiResult, AppError},
+    perms::Role,
+    util::now_ms,
+};
 
 pub const KIND_UPDATE: u8 = 0x01;
 pub const KIND_PRESENCE: u8 = 0x02;
@@ -324,7 +332,14 @@ impl Room {
             // Loro keeps pending changes and applies them once the gap is filled by the rejoin.
             return Err(RoomError::OutOfSync);
         }
-        Self::broadcast(&st, conn, &frame(KIND_UPDATE, &self.id, data));
+        self.record(state, &mut st, conn, data, &user_id, &before).await;
+        Ok(())
+    }
+
+    /// After `data` was imported into the doc: sends it to every client but `from`, and saves it,
+    /// the note's title, preview and search text, and which sessions (Loro peers) were `user_id`'s.
+    async fn record(&self, state: &AppState, st: &mut RoomState, from: u64, data: &[u8], user_id: &str, before: &VersionVector) {
+        Self::broadcast(st, from, &frame(KIND_UPDATE, &self.id, data));
         // Sessions with new edits in this update are this user's, for showing who wrote what.
         let peers: Vec<String> =
             st.doc.oplog_vv().iter().filter(|(p, c)| before.get(p).is_none_or(|b| b < c)).map(|(p, _)| p.to_string()).collect();
@@ -341,7 +356,7 @@ impl Room {
                 .bind(&key)
                 .bind(st.last_seq)
                 .bind(data)
-                .bind(&user_id)
+                .bind(user_id)
                 .bind(now)
                 .execute(&state.db)
                 .await?;
@@ -349,7 +364,7 @@ impl Room {
                 sqlx::query("INSERT OR IGNORE INTO note_peers (note_id, peer, user_id, first_seen) VALUES (?, ?, ?, ?)")
                     .bind(&key)
                     .bind(peer)
-                    .bind(&user_id)
+                    .bind(user_id)
                     .bind(now)
                     .execute(&state.db)
                     .await?;
@@ -376,11 +391,10 @@ impl Room {
             state.hub.tree_changed();
         }
         if st.unsnapshotted >= SNAPSHOT_EVERY
-            && let Err(e) = write_snapshot(&state.db, &self.id, &mut st).await
+            && let Err(e) = write_snapshot(&state.db, &self.id, st).await
         {
             tracing::error!("snapshot for note {key}: {e:#}");
         }
-        Ok(())
     }
 
     pub async fn apply_presence(&self, conn: u64, data: &[u8]) -> Result<(), RoomError> {
@@ -408,6 +422,94 @@ pub async fn note_body(state: &AppState, note: Uuid) -> anyhow::Result<String> {
     };
     let st = room.state.lock().await;
     Ok(st.doc.get_text("body").to_string())
+}
+
+/// A note's text and the version it was read at.
+pub struct NoteText {
+    pub text: String,
+    /// The doc's frontiers, URL-safe base64. A writer hands it back so its change merges with
+    /// anything written since, instead of undoing it.
+    pub version: String,
+}
+
+/// No websocket: the conn id a server-side write records its update under, so every client gets it.
+const SERVER: u64 = u64::MAX;
+
+fn version_of(doc: &LoroDoc) -> String {
+    URL_SAFE_NO_PAD.encode(doc.oplog_frontiers().encode())
+}
+
+/// The note's current text and version, from its open room or from storage.
+pub async fn read_text(state: &AppState, note: Uuid) -> anyhow::Result<NoteText> {
+    let room = match state.rooms.get(&note).await {
+        Some(room) => room,
+        None => Arc::new(load(&state.db, note).await?),
+    };
+    let st = room.state.lock().await;
+    Ok(NoteText { text: st.doc.get_text("body").to_string(), version: version_of(&st.doc) })
+}
+
+/// Changes a note's text from the server as `user_id`: an agent's write through /api/v1. It goes
+/// through the note's room like a client's edit, so open editors see it live and it's saved,
+/// indexed and credited to `user_id` the same way.
+///
+/// `change` gets the text as of `base` (a version from `read_text`; the latest when `None`) and
+/// returns the new text. The difference is applied to the doc at `base` and merged, so edits made
+/// since `base` stay. Returns the text and version after the merge.
+pub async fn write_text(
+    state: &AppState,
+    note: Uuid,
+    user_id: &str,
+    base: Option<&str>,
+    change: impl FnOnce(&str) -> String,
+) -> ApiResult<NoteText> {
+    let base = match base {
+        Some(v) => Some(
+            URL_SAFE_NO_PAD
+                .decode(v)
+                .ok()
+                .and_then(|b| Frontiers::decode(&b).ok())
+                .ok_or_else(|| AppError::BadRequest("That version isn't one this note has had".into()))?,
+        ),
+        None => None,
+    };
+    let mut change = Some(change);
+    loop {
+        let room = state.rooms.get_or_load(&state.db, note).await?;
+        let mut st = room.state.lock().await;
+        if st.closed {
+            // It closed while we waited for the lock; load it again.
+            continue;
+        }
+        let at = base.clone().unwrap_or_else(|| st.doc.oplog_frontiers());
+        let known = st.doc.oplog_vv();
+        if !at.iter().all(|id| known.includes_id(id)) {
+            return Err(AppError::BadRequest("That version isn't one this note has had".into()));
+        }
+        let fork = st
+            .doc
+            .fork_at(&at)
+            .map_err(|_| AppError::BadRequest("That version isn't one this note has had".into()))?;
+        // A peer of its own, so who-wrote-what can tell this write from the room's other writers.
+        fork.set_peer_id(getrandom::u64().map_err(|e| anyhow::anyhow!("getrandom: {e}"))?)?;
+        let from = fork.oplog_vv();
+        let body = fork.get_text("body");
+        let new = change.take().expect("runs once")(&body.to_string());
+        body.update(&new, UpdateOptions::default()).map_err(|e| anyhow::anyhow!("diffing text: {e:?}"))?;
+        fork.commit();
+        if fork.oplog_vv() != from {
+            let data = fork.export(ExportMode::updates(&from))?;
+            let before = st.doc.oplog_vv();
+            st.doc.import(&data)?;
+            room.record(state, &mut st, SERVER, &data, user_id, &before).await;
+        }
+        let written = NoteText { text: st.doc.get_text("body").to_string(), version: version_of(&st.doc) };
+        // Nobody has it open: the room snapshots and closes like one a client left.
+        if st.clients.is_empty() {
+            schedule_close(state.clone(), room.clone(), st.generation);
+        }
+        return Ok(written);
+    }
 }
 
 /// Gives a note that has never been opened its first content, e.g. from an import.

@@ -11,7 +11,11 @@ pub type ApiResult<T> = Result<T, AppError>;
 pub enum AppError {
     BadRequest(String),
     Unauthorized,
+    /// No API key, or one that's wrong, revoked, or whose user is disabled.
+    BadKey,
     Forbidden,
+    /// Not allowed, with the reason, e.g. a read-only API key trying to write.
+    NotAllowed(String),
     /// Also used when the caller has no access, so hidden items don't leak.
     NotFound,
     Conflict(String),
@@ -23,7 +27,13 @@ impl IntoResponse for AppError {
         let (status, code, message) = match self {
             AppError::BadRequest(m) => (StatusCode::BAD_REQUEST, "bad_request", m),
             AppError::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized", "Not logged in".into()),
+            AppError::BadKey => (
+                StatusCode::UNAUTHORIZED,
+                "unauthorized",
+                "Send a valid API key as Authorization: Bearer <key>".into(),
+            ),
             AppError::Forbidden => (StatusCode::FORBIDDEN, "forbidden", "Not allowed".into()),
+            AppError::NotAllowed(m) => (StatusCode::FORBIDDEN, "forbidden", m),
             AppError::NotFound => (StatusCode::NOT_FOUND, "not_found", "Not found".into()),
             AppError::Conflict(m) => (StatusCode::CONFLICT, "conflict", m),
             AppError::Internal(e) => {
