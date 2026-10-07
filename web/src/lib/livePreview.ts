@@ -320,6 +320,16 @@ const wikiMark = (id: string | null) =>
   Decoration.mark({ class: id ? "cm-wikilink" : "cm-wikilink cm-wikilink-missing", attributes: id ? { "data-note": id } : undefined });
 const WIKI = /\[\[([^\[\]\n]+)\]\]/g;
 
+// A web link: [text](url), <url> or a bare address. `data-href` is what a click opens.
+const linkMark = (href: string) => Decoration.mark({ class: "cm-link", attributes: { "data-href": href } });
+/** What a bare address opens: GFM autolinks come without a scheme, and emails need mailto. */
+function hrefFor(text: string): string {
+  const t = text.replace(/^<|>$/g, "");
+  if (/^[a-z][a-z0-9+.-]*:/i.test(t)) return t;
+  if (t.includes("@")) return `mailto:${t}`;
+  return `https://${t}`;
+}
+
 /** The notes a [[link]] can point at, by lowercased title. The editor keeps it in step with the tree. */
 export const setWikiNotes = StateEffect.define<Map<string, string>>();
 export const wikiNotesField = StateField.define<Map<string, string>>({
@@ -440,6 +450,33 @@ function build(view: EditorView): { decorations: DecorationSet; atomic: Decorati
           case "CodeMark":
             if (!editing && node.node.parent?.name === "InlineCode") decos.push(hidden.range(node.from, node.to));
             break;
+          case "Link": {
+            // [text](url) reads as the text alone; the brackets and address hide like other marks.
+            const url = node.node.getChild("URL");
+            const marks = node.node.getChildren("LinkMark");
+            if (!url || marks.length < 2) break;
+            decos.push(linkMark(hrefFor(state.sliceDoc(url.from, url.to))).range(node.from, node.to));
+            if (!editing) {
+              decos.push(hidden.range(marks[0].from, marks[0].to));
+              decos.push(hidden.range(marks[1].from, node.to));
+            }
+            break;
+          }
+          case "Autolink": {
+            // <https://…> reads as the address without its angle brackets.
+            const url = node.node.getChild("URL");
+            if (!url) break;
+            decos.push(linkMark(hrefFor(state.sliceDoc(url.from, url.to))).range(node.from, node.to));
+            if (!editing) for (const m of node.node.getChildren("LinkMark")) decos.push(hidden.range(m.from, m.to));
+            break;
+          }
+          case "URL": {
+            // A bare address in the text. Inside a link or image the parent draws it.
+            const parent = node.node.parent?.name;
+            if (parent === "Link" || parent === "Autolink" || parent === "Image") break;
+            decos.push(linkMark(hrefFor(state.sliceDoc(node.from, node.to))).range(node.from, node.to));
+            break;
+          }
           case "QuoteMark":
             decos.push(quoteLine.range(lineAt(node.from).from));
             if (!editing) decos.push(hidden.range(node.from, withSpace(state, node.to)));
@@ -511,14 +548,22 @@ export const livePreview = [
   EditorView.atomicRanges.of((view) => view.plugin(livePreviewPlugin)?.atomic ?? Decoration.none),
 ];
 
-// The click that opens a wiki link's target; the notes field lives in livePreview so every editor has it.
-export const wikiLinks = [
+// The click that follows a link: a [[wiki link]] opens its note here, a web link opens in a new tab.
+// The notes field lives in livePreview so every editor has it.
+export const linkClicks = [
   EditorView.domEventHandlers({
     click(e) {
-      const id = ((e.target as HTMLElement).closest?.(".cm-wikilink") as HTMLElement | null)?.dataset.note;
-      if (id) {
+      const link = (e.target as HTMLElement).closest?.(".cm-wikilink, .cm-link") as HTMLElement | null;
+      if (!link) return false;
+      const { note, href } = link.dataset;
+      if (note) {
         e.preventDefault();
-        openNote(id);
+        openNote(note);
+        return true;
+      }
+      if (href && !/^\s*javascript:/i.test(href)) {
+        e.preventDefault();
+        window.open(href, "_blank", "noopener,noreferrer");
         return true;
       }
       return false;

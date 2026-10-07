@@ -385,7 +385,7 @@ try {
   // Wiki links: [[Title]] links to the note with that title; a missing one reads as such.
   await alice.click(".pane.editor header button[aria-label='New note']");
   await alice.waitForFunction(() => document.querySelector(".editor .headerbar .title strong")?.textContent === "New Note" && document.activeElement?.matches(".cm-content[contenteditable=true]"));
-  await alice.keyboard.type("# Recipes\nSee [[Groceries]] for the list.\nAlso a [[Nope]] that isn't a note.");
+  await alice.keyboard.type("# Recipes\nSee [[Groceries]] for the list.\nAlso a [[Nope]] that isn't a note.\nMore at [the cookbook](https://example.com/cook) or https://example.org/plain today.");
   await alice.evaluate(() => document.activeElement?.blur());
   await alice.waitForFunction(
     () =>
@@ -395,6 +395,28 @@ try {
   );
   check(true, "a [[link]] to a note renders as a link, and a missing one reads as such");
   if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-wikilink.png") });
+  // Web links: [text](url) reads as its text, a bare address as itself, and a click opens a new tab.
+  check(
+    await alice.evaluate(() => {
+      const line = [...document.querySelectorAll(".cm-line")].find((l) => l.textContent.includes("cookbook"));
+      const links = [...line.querySelectorAll(".cm-link")].map((l) => [l.textContent, l.dataset.href]);
+      return (
+        line.innerText === "More at the cookbook or https://example.org/plain today." &&
+        links.some(([t, h]) => t === "the cookbook" && h === "https://example.com/cook") &&
+        links.some(([t, h]) => t === "https://example.org/plain" && h === "https://example.org/plain")
+      );
+    }),
+    "a [text](url) link reads as its text and a bare address as itself, both in the link color",
+  );
+  await alice.evaluate(() => {
+    window.__opened = [];
+    window.open = (url, target) => void window.__opened.push([url, target]);
+    [...document.querySelectorAll(".cm-link")].find((l) => l.textContent === "the cookbook").click();
+  });
+  check(
+    await alice.evaluate(() => JSON.stringify(window.__opened) === JSON.stringify([["https://example.com/cook", "_blank"]])),
+    "clicking a web link opens it in a new tab",
+  );
   // Clicking the link opens the note it points at.
   await alice.evaluate(() => [...document.querySelectorAll(".cm-wikilink")].find((l) => l.textContent === "Groceries").click());
   await alice.waitForFunction(() => document.querySelector(".editor .headerbar .title strong")?.textContent === "Groceries" && document.querySelector(".cm-content")?.innerText.includes("milk"), { timeout: 5000 });

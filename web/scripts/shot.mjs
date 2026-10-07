@@ -167,7 +167,7 @@ async function seed(page) {
   };
   // Lists continue on Enter, so only the first item gets its marker.
   await write("#/", "# Groceries\nmilk\n- [ ] eggs\nbread");
-  await write(`#/nb/${ids.kitchen}`, "# Pantry\nrice, beans, flour");
+  await write(`#/nb/${ids.kitchen}`, "# Pantry\nrice, beans, flour\nRestock from [the co-op](https://example.com/co-op) or https://example.org/bulk");
   // Code blocks: one labeled, one left for the guesser.
   await write("#/", '# Snippets\nRun this first:\n```bash\nnpm run build\n```\nThen:\n```\n// say hi\nconst greet = (name) => `Hello ${name}`;\nconsole.log(greet("Ada"), 42);\n```\nAnd Lua:\n```\nlocal M = {}\nfunction M.setup(opts)\nfor k, v in pairs(opts) do print(k, v) end\nend\nreturn M\n```\nDone.');
   await write("#/", "# Old packing list\nsocks");

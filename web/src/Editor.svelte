@@ -12,7 +12,7 @@
   import { activeFormats, formatKeymap, type Block, type Inline } from "./lib/format";
   import Icon from "./lib/Icon.svelte";
   import { codeBlocks } from "./lib/codeBlocks";
-  import { livePreview, setWikiNotes, wikiLinks } from "./lib/livePreview";
+  import { linkClicks, livePreview, setWikiNotes } from "./lib/livePreview";
   import { slashMenu } from "./lib/slash";
   import { dragHandles } from "./lib/dragHandles";
   import { undoCommands } from "./lib/undo";
@@ -412,7 +412,7 @@
           markdown({ base: markdownLanguage }),
           syntaxHighlighting(markdownStyle),
           livePreview,
-          wikiLinks,
+          linkClicks,
           codeBlocks,
           slashMenu({ photo: () => pickPhoto(), record: () => startRecording(), tidy: () => void startTidy(), prompt: openAiPrompt, canAI: () => canAI }),
           aiPrompt(promptActions),
@@ -1516,8 +1516,9 @@
     color: var(--dim-fg);
   }
 
-  /* A [[link]] to another note reads as its title, in the link color; a missing one reads as dimmed. */
-  .page :global(.cm-wikilink) {
+  /* A [[link]] to another note reads as its title and a web link as its text, both in the link color; a missing note reads as dimmed. */
+  .page :global(.cm-wikilink),
+  .page :global(.cm-link) {
     color: var(--accent);
     cursor: pointer;
   }
