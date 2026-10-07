@@ -487,6 +487,19 @@ try {
   await alice.waitForFunction(() => document.querySelector(".cm-content").cmTile.root.view.state.doc.toString().includes("|  | 6 |  |"));
   const tableLines = (await markdown(alice)).split("\n").filter((l) => l.startsWith("|"));
   check(tableLines.length === 5 && tableLines[3] === "|  | 6 |  |", `Add row puts a row under the cell being edited (${JSON.stringify(tableLines)})`);
+  // Inline formatting in a cell: **bold**, *italic* and `code` show when the cell isn't being edited.
+  await alice.click(".cm-table-cell[data-r='2'][data-c='0']");
+  await alice.keyboard.type("**Bold** *italic* `code`");
+  await alice.click(".cm-table-cell[data-r='2'][data-c='1']");
+  await alice.waitForFunction(
+    () => {
+      const el = document.querySelector(".cm-table-cell[data-r='2'][data-c='0']");
+      return !!el && /<strong>Bold<\/strong>/.test(el.innerHTML) && /<em>italic<\/em>/.test(el.innerHTML) && /<code>code<\/code>/.test(el.innerHTML);
+    },
+    { timeout: 5000 },
+  );
+  check(true, "a table cell shows its inline formatting (bold, italic, code)");
+  if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-table-formatting.png") });
   await bob.waitForFunction(() => document.querySelector(".cm-table-cell[data-r='1'][data-c='1']")?.textContent === "6", { timeout: 5000 });
   check(await bob.evaluate(() => !document.querySelector(".cm-table-widget [contenteditable]") && !document.querySelector(".cm-table-tools")), "a viewer sees the table live, without editing tools");
   if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-table-editing.png") });

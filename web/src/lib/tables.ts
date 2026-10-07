@@ -80,6 +80,21 @@ function parseTable(state: EditorState, from: number, to: number): Table | null 
 const unescape = (raw: string) => raw.replace(/\\\|/g, "|");
 const escape = (text: string) => text.trim().replace(/\\?\|/g, "\\|");
 
+/** A cell's inline Markdown, as HTML: **bold**, *italic*, `code`, ~~strike~~ and [links](url).
+ * The text is escaped first, so only these tags are ever introduced. */
+function renderInline(text: string): string {
+  let s = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  s = s.replace(/`([^`]+)`/g, "<code>$1</code>");
+  s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  s = s.replace(/__([^_]+)__/g, "<strong>$1</strong>");
+  s = s.replace(/~~([^~]+)~~/g, "<del>$1</del>");
+  s = s.replace(/\*([^*]+)\*/g, "<em>$1</em>");
+  s = s.replace(/_([^_]+)_/g, "<em>$1</em>");
+  s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_m, label: string, url: string) =>
+    `<a href="${/^(https?:|mailto:|#|\/)\S/.test(url) ? url : "#"}">${label}</a>`);
+  return s;
+}
+
 const { extension: tableField, blockOf, domOf } = blockWidgets(
   (state) => topLevel(state, "Table"),
   (state, b, editable) => new TableWidget(state.sliceDoc(b.from, b.to), editable),
@@ -246,14 +261,18 @@ class TableWidget extends WidgetType {
       const c = Number(el.dataset.c);
       const text = texts[r][c];
       el.style.textAlign = align[c] ?? "";
+      el.dataset.raw = text;
       if (el === document.activeElement) {
-        // Leave the cell being typed in alone unless someone else changed it.
+        // The cell being typed in shows its raw Markdown; leave it alone unless it changed.
         if (escape(typed(el)) !== escape(text)) {
           const offset = caretOffset(el);
           el.textContent = text;
           placeCaret(el, false, offset);
         }
-      } else if (el.textContent !== text) el.textContent = text;
+      } else {
+        const html = renderInline(text);
+        if (el.innerHTML !== html) el.innerHTML = html;
+      }
     }
     return true;
   }
@@ -277,7 +296,8 @@ class TableWidget extends WidgetType {
         el.className = "cm-table-cell";
         el.dataset.r = String(r);
         el.dataset.c = String(c);
-        el.textContent = text;
+        el.dataset.raw = text;
+        el.innerHTML = renderInline(text);
         el.style.textAlign = align[c] ?? "";
         el.setAttribute("aria-label", r < 0 ? `Column ${c + 1} heading` : `Row ${r + 1}, column ${c + 1}`);
         if (this.canEdit) this.wireCell(el, dom, view, r, c, texts.length - 2, cols);
@@ -319,6 +339,9 @@ class TableWidget extends WidgetType {
 
   private wireCell(el: HTMLElement, dom: HTMLElement, view: EditorView, r: number, c: number, lastRow: number, cols: number) {
     makeEditable(el);
+    // A cell shows its raw Markdown while it's being edited, and its formatted text otherwise.
+    el.addEventListener("mousedown", () => { el.textContent = el.dataset.raw ?? ""; });
+    el.addEventListener("blur", () => { el.innerHTML = renderInline(el.dataset.raw ?? ""); });
     el.addEventListener("input", () => writeCell(view, dom, r, c, typed(el)));
     el.addEventListener("keydown", (e) => {
       const move = (r2: number, c2: number) => {

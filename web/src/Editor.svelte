@@ -2104,6 +2104,19 @@
     box-shadow: inset 0 0 0 2px var(--accent-bg);
   }
 
+  .page :global(.cm-table-cell a) {
+    color: var(--accent);
+    text-decoration: none;
+  }
+
+  .page :global(.cm-table-cell code) {
+    font-family: "Adwaita Mono", "Source Code Pro", monospace;
+    font-size: 0.92em;
+    background: var(--code-bg);
+    padding: 0.1em 0.35em;
+    border-radius: var(--radius-sm);
+  }
+
   /* Row and column tools, under the table while a cell is being edited. */
   .page :global(.cm-table-tools) {
     display: none;
