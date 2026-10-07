@@ -246,9 +246,6 @@
 <section>
   <header class="headerbar">
     <div class="start">
-      <button class="flat icon tablet-only" title="Show notebooks" aria-label="Show notebooks" onclick={() => (app.drawer = true)}>
-        <Icon name="sidebar" />
-      </button>
       <!-- Just a chevron: the path under the headerbar already names where it goes. -->
       {#if up}
       <button class="flat icon circular back-icon phone-only" title="Back to {backLabel}" aria-label="Back to {backLabel}" onclick={goBack}>

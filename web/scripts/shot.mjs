@@ -33,6 +33,7 @@ const targets = screens.length ? screens : ["home", "notebook:Kitchen", "note:Gr
 const viewports = [
   ...(flag("--desktop") ? [] : [["phone", { width: 390, height: 844, isMobile: true, hasTouch: true, deviceScaleFactor: 2 }]]),
   ...(flag("--phone") ? [] : [["desktop", { width: 1280, height: 800 }]]),
+  ...(flag("--tablet") ? [["tablet", { width: 820, height: 1180, hasTouch: true }]] : []),
 ];
 const scheme = flag("--light") ? "light" : "dark";
 const offline = flag("--offline");

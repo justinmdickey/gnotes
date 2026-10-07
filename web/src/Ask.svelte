@@ -79,11 +79,7 @@
 
 <section>
   <header class="headerbar">
-    <div class="start">
-      <button class="flat icon tablet-only" title="Show notebooks" aria-label="Show notebooks" onclick={() => (app.drawer = true)}>
-        <Icon name="sidebar" />
-      </button>
-    </div>
+    <div class="start"></div>
     <div class="title"><strong>{viewTitle(app.view, app.tree)}</strong></div>
     <div class="end">
       {#if chatting}
@@ -355,7 +351,7 @@
   }
 
   /* The page keeps a readable width in the middle of the pane, like a folder page. */
-  @media (min-width: 1001px) {
+  @media (min-width: 701px) {
     .composer {
       padding-inline: max(12px, calc((100% - 720px) / 2));
     }

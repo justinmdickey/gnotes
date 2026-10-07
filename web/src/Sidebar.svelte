@@ -109,7 +109,7 @@
     });
   });
 
-  /** A folder's own notes, A–Z so rows don't jump while you type. Desktop and tablet only. */
+  /** A folder's own notes, A–Z so rows don't jump while you type. Not on phones, where the list shows them. */
   function notesIn(view: View): TreeNote[] {
     if (media.phone) return [];
     return notesFor(view, app.tree).toSorted((a, b) => (a.title || "New Note").localeCompare(b.title || "New Note"));

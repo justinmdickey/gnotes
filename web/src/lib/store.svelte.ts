@@ -30,8 +30,6 @@ export const app = $state({
   settings: false,
   /** The note editor or Ask's field has focus, so the phone's tab bar steps aside for the keyboard. */
   typing: false,
-  /** Tablet only: the notebooks sidebar is pulled out over the list. */
-  drawer: false,
   /** Optional server abilities, like speech-to-text. */
   features: { transcription: false, live_transcription: false, photo_text: false, summaries: false, max_upload: 0, version: "" } as Features,
   /** Bumped by the Notes tab, so the list drops its search and starts over. */
@@ -44,7 +42,7 @@ export const app = $state({
 
 /** Wide screens use two panes: the sidebar tree, and either the current page (a folder, Recent, Shared) or the open note. */
 export function twoPane(): boolean {
-  return media.wide;
+  return !media.phone;
 }
 
 export function viewTitle(view: View, tree: Tree): string {
@@ -234,7 +232,6 @@ function hashFor(view: View | null, noteId: string | null): string {
 
 function apply(view: View | null, noteId: string | null) {
   app.settings = false;
-  app.drawer = false;
   app.view = view ?? { kind: "root" };
   app.noteId = noteId;
   app.pane = noteId ? "editor" : "list";
@@ -318,12 +315,6 @@ export function subtree(id: string | null): Set<string | null> {
     }
   }
   return out;
-}
-
-/** Tablet: closes the pulled-out sidebar, leaving home for the list if that's where we were. */
-export function closeDrawer() {
-  app.drawer = false;
-  if (app.pane === "sidebar") navigate(app.view, null, true);
 }
 
 export function readHash() {

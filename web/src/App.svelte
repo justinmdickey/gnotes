@@ -6,7 +6,7 @@
   import Icon from "./lib/Icon.svelte";
   import Overlays from "./lib/Overlays.svelte";
   import StatusPage from "./lib/StatusPage.svelte";
-  import { addableView, app, closeDrawer, composeNote, goBack, importable, importNotes, parentView, readHash, startSession, twoPane, viewTitle } from "./lib/store.svelte";
+  import { addableView, app, composeNote, goBack, importable, importNotes, parentView, readHash, startSession, twoPane, viewTitle } from "./lib/store.svelte";
   import { fadeIn, media, page, standalone, toast } from "./lib/ui.svelte";
   import Ask from "./Ask.svelte";
   import Editor from "./Editor.svelte";
@@ -55,8 +55,6 @@
     const t = setTimeout(() => (shownNote = null), 380);
     return () => clearTimeout(t);
   });
-
-  const drawerOpen = $derived(app.drawer);
 
   // Edge swipe back on phones, for home-screen installs where the browser has no back gesture.
   let shell = $state<HTMLDivElement>();
@@ -200,10 +198,6 @@
     e.preventDefault();
   }
 
-  function onkey(e: KeyboardEvent) {
-    if (e.key === "Escape" && drawerOpen && !media.phone && app.drawer) closeDrawer();
-  }
-
   onMount(() => {
     api
       .me()
@@ -219,7 +213,7 @@
   });
 </script>
 
-<svelte:window onkeydown={onkey} ondragovercapture={ondragover} ondropcapture={ondrop} />
+<svelte:window ondragovercapture={ondragover} ondropcapture={ondrop} />
 
 {#if !checked}
   <div class="splash"><span class="spinner dim"></span></div>
@@ -230,7 +224,7 @@
 {:else}
   <div class="app-frame">
   <div class="main">
-  <div class="shell" class:dragging={drag !== null} class:drawer-open={drawerOpen} class:two-pane={twoPane()} class:reading={!!app.noteId} class:resizing style:--sidebar-w="{sidebarWidth}px" bind:this={shell}>
+  <div class="shell" class:dragging={drag !== null} class:two-pane={twoPane()} class:reading={!!app.noteId} class:resizing style:--sidebar-w="{sidebarWidth}px" bind:this={shell}>
     {#each order as p (p)}
       <div
         class="pane {p}"
@@ -256,8 +250,6 @@
         {/if}
       </div>
     {/each}
-    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-    <div class="drawer-scrim" onclick={closeDrawer}></div>
     <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
     <div
       class="resize"
@@ -281,8 +273,8 @@
     </div>
   {/if}
   </div>
-  <!-- Phones and tablets: a quiet strip over the tab bar while the server is out of reach. Wide screens say so in the sidebar's footer. -->
-  {#if app.status === "offline" && !media.wide && !(media.phone && app.typing)}
+  <!-- Phones: a quiet strip over the tab bar while the server is out of reach. Wide screens say so in the sidebar's footer. -->
+  {#if app.status === "offline" && media.phone && !app.typing}
     <div class="offline-bar" role="status" transition:slide={{ duration: 160 }}>
       <Icon name="offline" size={14} />Offline · changes sync when you reconnect
     </div>
@@ -358,7 +350,7 @@
     min-width: 0;
     min-height: 0;
     display: grid;
-    grid-template-columns: var(--sidebar-w, 260px) 340px 1fr;
+    grid-template-columns: var(--sidebar-w, 260px) 1fr;
     overflow: hidden;
     background: var(--view-bg);
   }
@@ -369,16 +361,8 @@
     overflow: hidden;
   }
 
-  .list {
-    border-right: 1px solid var(--border);
-  }
-
   .note-swap {
     height: 100%;
-  }
-
-  .drawer-scrim {
-    display: none;
   }
 
   /* An 8px grab strip over the sidebar's edge; a line shows while you point at it or drag. */
@@ -386,7 +370,7 @@
     display: none;
   }
 
-  @media (min-width: 1001px) {
+  @media (min-width: 701px) {
     .resize {
       display: block;
       position: absolute;
@@ -453,55 +437,6 @@
     z-index: 30;
   }
 
-  @media (max-width: 1000px) {
-    .shell {
-      grid-template-columns: 320px 1fr;
-    }
-  }
-
-  /* Tablet: the sidebar is a drawer that slides over the list. */
-  @media (min-width: 701px) and (max-width: 1000px) {
-
-    .sidebar {
-      position: absolute;
-      inset: 0 auto 0 0;
-      z-index: 21;
-      width: 290px;
-      transform: translateX(-100%);
-      visibility: hidden;
-      transition:
-        transform var(--slide) var(--ease-out),
-        visibility 0s linear var(--slide),
-        box-shadow var(--slide) ease;
-    }
-
-    .drawer-open .sidebar {
-      transform: none;
-      visibility: visible;
-      box-shadow: var(--shadow-lg);
-      transition:
-        transform var(--slide) var(--ease-out),
-        visibility 0s,
-        box-shadow var(--slide) ease;
-    }
-
-    .drawer-scrim {
-      display: block;
-      position: absolute;
-      inset: 0;
-      z-index: 20;
-      background: var(--scrim);
-      opacity: 0;
-      pointer-events: none;
-      transition: opacity var(--slide) ease;
-    }
-
-    .drawer-open .drawer-scrim {
-      opacity: 1;
-      pointer-events: auto;
-    }
-  }
-
   /*
     Phone: one pane at a time, like an AdwNavigationView. Panes to the left of the
     current one sit dimmed and slightly offset; panes to the right wait offscreen.
@@ -511,16 +446,11 @@
       display: block;
     }
 
-    .pane,
-    .sidebar {
+    .pane {
       position: absolute;
       inset: 0;
-      width: auto;
-      border-right: none;
-      box-shadow: none;
       transform: translateX(100%);
       visibility: hidden;
-      transition: none;
     }
 
     .pane::after {
@@ -567,19 +497,11 @@
     }
   }
 
-  /* Wide, in a folder: the tree and one main pane, showing the folder's page or the open note. */
-  @media (min-width: 1001px) {
-    .shell.two-pane {
-      grid-template-columns: var(--sidebar-w, 260px) 1fr;
-    }
-
+  /* Wide: the tree and one main pane, showing the folder's page or the open note. */
+  @media (min-width: 701px) {
     .shell.two-pane:not(.reading) .editor,
     .shell.two-pane.reading .list {
       display: none;
-    }
-
-    .shell.two-pane .list {
-      border-right: none;
     }
 
     /* The folder page keeps a readable width in the middle of the pane. */
@@ -588,14 +510,7 @@
     }
   }
 
-  /* .narrow-only: shown while the sidebar is hidden. .tablet-only: drawer layout. .phone-only / .wide-only: one pane vs several. */
-  @media (min-width: 1001px) {
-    .shell :global(.narrow-only),
-    .shell :global(.tablet-only) {
-      display: none;
-    }
-  }
-
+  /* .phone-only / .wide-only: one pane at a time vs the sidebar beside the page. */
   @media (min-width: 701px) {
     :global(.phone-only) {
       display: none !important;
@@ -603,8 +518,7 @@
   }
 
   @media (max-width: 700px) {
-    .shell :global(.wide-only),
-    .shell :global(.tablet-only) {
+    .shell :global(.wide-only) {
       display: none !important;
     }
   }
