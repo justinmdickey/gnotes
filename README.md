@@ -4,6 +4,19 @@ Self-hosted Markdown notes with live shared editing. Write on your phone or desk
 
 ![A shared note open on desktop, with someone else typing in it](docs/screenshots/desktop.png)
 
+## Features
+
+- **Live shared editing** — write on your phone or desktop, share a note or a whole notebook, and watch each other type. Edits merge automatically, even offline.
+- **Wiki links** — type `[[Title]]` to link to another note; tap it to open.
+- **Ask your notes** — a chat that finds notes by word or meaning and answers from them, with links to the sources.
+- **AI in the note** — summarize it, tidy up its structure, or rewrite it as you ask.
+- **Voice memos & photos** — record a memo and watch it transcribe live; attach a photo and pull out its text.
+- **Works offline, installs as an app** — an installable app that keeps editing with no connection.
+- **Plain Markdown** — every note keeps a plain `.md` copy; import from Obsidian, Bear or a folder.
+- **Agent API** — let a script or agent read and write your notes with an API key.
+
+The AI features (Ask, summaries, tidy, transcription, photo text) are optional — an admin turns them on in **Settings › AI Services** with any OpenAI-compatible endpoint, local or hosted.
+
 ## Run your own
 
 You need Docker and a domain (or Tailscale) for HTTPS.
