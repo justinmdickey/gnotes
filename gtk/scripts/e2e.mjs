@@ -185,6 +185,44 @@ try {
 let { code, stderr } = await run;
 check("the app ran and quit cleanly", code === 0, { code, stderr });
 
+// Notebooks, moving, the trash and sharing, as the sidebar's menus and the Share dialog do them.
+const treeRun = demo.runApp({
+  env: {
+    GNOTES_DRIVE: [
+      "wait-tree",
+      "make-notebook Recipes",
+      "wait-row Recipes",
+      "rename-notebook Recipes|Cookbook",
+      "wait-row Cookbook",
+      "move-note Snippets|Cookbook",
+      "open notebook:Cookbook",
+      "wait-row Snippets",
+      "trash-note Pantry",
+      `signal ${f("trashed")}`,
+      `wait-file ${f("trash-checked")}`,
+      "restore Pantry",
+      "sleep 800",
+      "share-note Snippets|sam|viewer",
+      "sleep 800",
+      `dump ${f("tree2.json")}`,
+      "quit",
+    ].join("\n"),
+  },
+});
+await waitFile("trashed").catch(() => {});
+let t2 = await ann.tree();
+check("Move to Trash takes a note out of the tree", !t2.notes.some((n) => n.title === "Pantry"), t2.notes.map((n) => n.title));
+signal("trash-checked");
+({ code, stderr } = await treeRun);
+check("the tree's actions ran", code === 0, { code, stderr });
+t2 = await ann.tree();
+const cookbook = t2.notebooks.find((n) => n.name === "Cookbook");
+check("New Notebook and Rename work", !!cookbook && !t2.notebooks.some((n) => n.name === "Recipes"), t2.notebooks.map((n) => n.name));
+check("Move to puts a note in another notebook", t2.notes.find((n) => n.title === "Snippets")?.notebook_id === cookbook?.id);
+check("Restore brings a note back from the trash", t2.notes.some((n) => n.title === "Pantry"));
+const samTree = await sam.tree();
+check("Share gives someone else the note", samTree.notes.some((n) => n.title === "Snippets" && n.role === "viewer"), samTree.notes.map((n) => [n.title, n.role]));
+
 // Signing in through the form, then starting again signed in, then starting with no server.
 ({ code, stderr } = await demo.runApp({
   signedIn: false,

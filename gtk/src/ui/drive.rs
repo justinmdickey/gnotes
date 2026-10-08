@@ -19,6 +19,12 @@
 //! tick <n>                  clicks the nth checkbox, from 0
 //! format <style>            title, heading, subheading, body, check, bullet, number, quote, bold, italic
 //! new-note
+//! make-notebook <name>      at the top level
+//! rename-notebook <old>|<new>
+//! move-note <title>|<notebook>   ("Notes" is the top level)
+//! trash-note <title>
+//! restore <name>            from the trash
+//! share-note <title>|<username>|<editor or viewer>
 //! dump <file.json>          the open note's text, title and peers, the sidebar's rows, the status
 //! shot <file.png>
 //! quit
@@ -180,6 +186,50 @@ async fn run(main: &Rc<Main>, cmd: &str, arg: &str) {
             let before = main.open_id();
             main.new_note();
             until("the new note", || main.open_id().is_some() && main.open_id() != before).await;
+        }
+        "make-notebook" => dialogs::create_notebook(main, None, arg.to_owned()),
+        "rename-notebook" => {
+            let (old, new) = arg.split_once('|').unwrap_or((arg, arg));
+            let id = main.store.tree.borrow().notebooks.iter().find(|n| n.name == old).map(|n| n.id.clone());
+            match id {
+                Some(id) => dialogs::rename_to(main, &id, new.to_owned()),
+                None => eprintln!("drive: no notebook {old}"),
+            }
+        }
+        "move-note" => {
+            let (title, to) = arg.split_once('|').unwrap_or((arg, "Notes"));
+            let tree = main.store.tree.borrow().clone();
+            let target = tree.notebooks.iter().find(|n| n.name == to).map(|n| n.id.clone());
+            match tree.notes.iter().find(|n| n.title == title) {
+                Some(n) => dialogs::move_item(main, &Item::Note(n.clone()), target),
+                None => eprintln!("drive: no note {title}"),
+            }
+        }
+        "trash-note" => {
+            let id = main.store.tree.borrow().notes.iter().find(|n| n.title == arg).map(|n| n.id.clone());
+            match id {
+                Some(id) => dialogs::trash_note(main, &id),
+                None => eprintln!("drive: no note {arg}"),
+            }
+        }
+        "restore" => {
+            let api = main.store.api.clone();
+            let items = crate::bg(async move { api.trash().await }).await.unwrap_or_default();
+            match items.iter().find(|i| i.name == arg) {
+                Some(i) => dialogs::restore(main, &i.resource_type, &i.id, || {}),
+                None => eprintln!("drive: nothing called {arg} in the trash"),
+            }
+        }
+        "share-note" => {
+            let parts: Vec<&str> = arg.split('|').collect();
+            let id = main.store.tree.borrow().notes.iter().find(|n| n.title == parts[0]).map(|n| n.id.clone());
+            let role = if parts.get(2) == Some(&"viewer") { crate::api::Role::Viewer } else { crate::api::Role::Editor };
+            match (id, parts.get(1)) {
+                (Some(id), Some(user)) => {
+                    dialogs::share_with(main, "note", &id, user, role).await;
+                }
+                _ => eprintln!("drive: share-note <title>|<username>|<role>"),
+            }
         }
         "dump" => {
             let e = editor();

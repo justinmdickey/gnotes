@@ -56,28 +56,76 @@ where
 pub fn new_notebook(main: &Rc<Main>, parent: Option<String>) {
     let heading = if parent.is_some() { "New Notebook Inside" } else { "New Notebook" };
     let m = main.clone();
-    ask_name(main, heading, "Create", "", move |name| {
-        let (api, parent, m) = (m.store.api.clone(), parent.clone(), m.clone());
-        glib::spawn_future_local(async move {
-            let p = parent.clone();
-            match bg(async move { api.create_notebook(&name, p.as_deref()).await }).await {
-                Ok(id) => {
-                    m.folder.replace(Some(id.clone()));
-                    m.sidebar().unfold(&id);
-                    m.store.refresh_tree();
-                }
-                Err(e) => m.toast(&e.to_string()),
+    ask_name(main, heading, "Create", "", move |name| create_notebook(&m, parent.clone(), name));
+}
+
+/// Makes a notebook and opens it, so new notes go there.
+pub fn create_notebook(main: &Rc<Main>, parent: Option<String>, name: String) {
+    let (api, m) = (main.store.api.clone(), main.clone());
+    glib::spawn_future_local(async move {
+        match bg(async move { api.create_notebook(&name, parent.as_deref()).await }).await {
+            Ok(id) => {
+                m.folder.replace(Some(id.clone()));
+                m.sidebar().unfold(&id);
+                m.store.refresh_tree();
             }
-        });
+            Err(e) => m.toast(&e.to_string()),
+        }
     });
 }
 
 pub fn rename_notebook(main: &Rc<Main>, nb: &TreeNotebook) {
     let (m, id) = (main.clone(), nb.id.clone());
-    ask_name(main, "Rename Notebook", "Rename", &nb.name, move |name| {
-        let (api, id) = (m.store.api.clone(), id.clone());
-        request(&m, async move { api.rename_notebook(&id, &name).await });
+    ask_name(main, "Rename Notebook", "Rename", &nb.name, move |name| rename_to(&m, &id, name));
+}
+
+pub fn rename_to(main: &Rc<Main>, id: &str, name: String) {
+    let (api, id) = (main.store.api.clone(), id.to_owned());
+    request(main, async move { api.rename_notebook(&id, &name).await });
+}
+
+/// Moves a note or notebook into `target`, or the top level with None.
+pub fn move_item(main: &Rc<Main>, item: &Item, target: Option<String>) {
+    let api = main.store.api.clone();
+    match item {
+        Item::Note(n) => {
+            let id = n.id.clone();
+            request(main, async move { api.move_note(&id, target.as_deref()).await });
+        }
+        Item::Notebook(nb) => {
+            let id = nb.id.clone();
+            request(main, async move { api.move_notebook(&id, target.as_deref()).await });
+        }
+    }
+}
+
+/// Takes something out of the trash.
+pub fn restore(main: &Rc<Main>, kind: &str, id: &str, then: impl FnOnce() + 'static) {
+    let (api, kind, id, m) = (main.store.api.clone(), kind.to_owned(), id.to_owned(), main.clone());
+    glib::spawn_future_local(async move {
+        match bg(async move { api.restore(&kind, &id).await }).await {
+            Ok(()) => {
+                m.store.refresh_tree();
+                then();
+            }
+            Err(e) => m.toast(&e.to_string()),
+        }
     });
+}
+
+/// Shares a note or notebook (`kind`) with someone; true when it worked.
+pub async fn share_with(main: &Rc<Main>, kind: &'static str, id: &str, username: &str, role: Role) -> bool {
+    let (api, id, username) = (main.store.api.clone(), id.to_owned(), username.to_owned());
+    match bg(async move { api.share(kind, &id, &username, role).await }).await {
+        Ok(()) => {
+            main.store.refresh_tree();
+            true
+        }
+        Err(e) => {
+            main.toast(&e.to_string());
+            false
+        }
+    }
 }
 
 /// Notebooks `id` can't go into: itself and everything inside it.
@@ -143,18 +191,7 @@ pub fn move_to(main: &Rc<Main>, item: &Item) {
         }
         let (m, item, dialog) = (main.clone(), item.clone(), dialog.clone());
         row.connect_activated(move |_| {
-            let api = m.store.api.clone();
-            let target = id.clone();
-            match &item {
-                Item::Note(n) => {
-                    let nid = n.id.clone();
-                    request(&m, async move { api.move_note(&nid, target.as_deref()).await });
-                }
-                Item::Notebook(nb) => {
-                    let nid = nb.id.clone();
-                    request(&m, async move { api.move_notebook(&nid, target.as_deref()).await });
-                }
-            }
+            move_item(&m, &item, id.clone());
             dialog.close();
         });
         list.append(&row);
@@ -186,10 +223,7 @@ pub fn trash_note(main: &Rc<Main>, id: &str) {
                 m.store.cache.forget(&id);
                 m.store.refresh_tree();
                 let m2 = m.clone();
-                m.toast_undo("Moved to the trash", move || {
-                    let (api, id) = (m2.store.api.clone(), id.clone());
-                    request(&m2, async move { api.restore("note", &id).await });
-                });
+                m.toast_undo("Moved to the trash", move || restore(&m2, "note", &id, || {}));
             }
             Err(e) => m.toast(&e.to_string()),
         }
@@ -226,10 +260,7 @@ pub fn trash_notebook(main: &Rc<Main>, nb: &TreeNotebook) {
                 }
                 m.store.refresh_tree();
                 let m2 = m.clone();
-                m.toast_undo(&format!("“{name}” moved to the trash"), move || {
-                    let (api, id) = (m2.store.api.clone(), id.clone());
-                    request(&m2, async move { api.restore("notebook", &id).await });
-                });
+                m.toast_undo(&format!("“{name}” moved to the trash"), move || restore(&m2, "notebook", &id, || {}));
             }
             Err(e) => m.toast(&e.to_string()),
         }
@@ -351,14 +382,10 @@ pub fn share(main: &Rc<Main>, item: &Item) {
         add.connect_clicked(move |_| {
             let Some(username) = usernames.borrow().get(person.selected() as usize).cloned() else { return };
             let role = if roles.selected() == 1 { Role::Viewer } else { Role::Editor };
-            let (api, id, m, reload) = (main.store.api.clone(), id.clone(), main.clone(), reload.clone());
+            let (id, m, reload) = (id.clone(), main.clone(), reload.clone());
             glib::spawn_future_local(async move {
-                match bg(async move { api.share(kind, &id, &username, role).await }).await {
-                    Ok(()) => {
-                        reload();
-                        m.store.refresh_tree();
-                    }
-                    Err(e) => m.toast(&e.to_string()),
+                if share_with(&m, kind, &id, &username, role).await {
+                    reload();
                 }
             });
         });

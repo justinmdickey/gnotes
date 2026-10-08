@@ -423,11 +423,16 @@ pub fn trash_page(main: &Rc<Main>) -> adw::NavigationPage {
                             button.connect_clicked(move |_| {
                                 let Some(main) = weak.upgrade() else { return };
                                 let (api, rt, id, me) = (main.store.api.clone(), rt.clone(), id.clone(), me.clone());
+                                if kind == "restore" {
+                                    super::dialogs::restore(&main, &rt, &id, move || {
+                                        if let Some(f) = me.upgrade() {
+                                            f();
+                                        }
+                                    });
+                                    return;
+                                }
                                 glib::spawn_future_local(async move {
-                                    let r = bg(async move {
-                                        if kind == "restore" { api.restore(&rt, &id).await } else { api.delete_forever(&rt, &id).await }
-                                    })
-                                    .await;
+                                    let r = bg(async move { api.delete_forever(&rt, &id).await }).await;
                                     match r {
                                         Ok(()) => {
                                             main.store.refresh_tree();
