@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Gnotes
+Comment=Markdown notes on your own server, edited live together
+Exec=gnotes
+Icon=com.erisdor.Gnotes
+Terminal=false
+Categories=Office;GTK;
+Keywords=notes;markdown;todo;checklist;
+StartupNotify=true

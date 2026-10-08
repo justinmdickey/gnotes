@@ -1,3 +1,5 @@
 [workspace]
 resolver = "3"
 members = ["server", "gtk"]
+# `cargo build`/`test` with no -p mean the server; the GTK client needs GTK installed.
+default-members = ["server"]

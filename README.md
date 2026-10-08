@@ -14,6 +14,7 @@ Self-hosted Markdown notes with live shared editing. Write on your phone or desk
 - **Works offline, installs as an app** — an installable app that keeps editing with no connection.
 - **Plain Markdown** — every note keeps a plain `.md` copy; import from Obsidian, Bear or a folder.
 - **Agent API** — let a script or agent read and write your notes with an API key.
+- **GNOME app** — a native GTK client for Linux desktops, with the same live editing and offline copies.
 
 The AI features (Ask, summaries, tidy, transcription, photo text) are optional — an admin turns them on in **Settings › AI Services** with any OpenAI-compatible endpoint, local or hosted.
 
@@ -49,6 +50,10 @@ notes.example.com {
 **4. Invite people.** There's no open sign-up. Go to **Account › People › Invite Someone New** and send them the link.
 
 Tailscale instead of a public domain, settings, optional AI features, backups and upgrades: [docs/SELF-HOSTING.md](docs/SELF-HOSTING.md).
+
+## The GNOME app
+
+On a Linux desktop with GTK 4 and libadwaita, build and install the native client with `gtk/install.sh` (it goes in `~/.local`), then open **Gnotes** from your apps and sign in with your server's address. It edits live alongside the web app and keeps working offline; Ask, the AI tools and voice recording are web-only for now.
 
 To let an agent or script read and write your notes, make an API key in **Account › API Keys**: [docs/API.md](docs/API.md).
 

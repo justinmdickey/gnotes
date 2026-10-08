@@ -1,13 +1,13 @@
 # Gnotes design
 
-Gnotes is a self-hosted Markdown notes app. One server holds a household's accounts and notes. Phones and desktops use an installable web app (PWA) that works offline and edits live with other people. A native GTK client comes later and speaks the same protocol.
+Gnotes is a self-hosted Markdown notes app. One server holds a household's accounts and notes. Phones and desktops use an installable web app (PWA) that works offline and edits live with other people. A native GTK client for Linux desktops speaks the same protocol.
 
 ## Decisions
 
 | Topic | Decision |
 |---|---|
 | Hosting | Self-hosted server. One binary or Docker image, SQLite, one data folder. |
-| Clients | PWA first. GTK4/libadwaita client later. |
+| Clients | The PWA everywhere, and a GTK4/libadwaita client for Linux desktops. |
 | Sync | Loro CRDT, one Loro document per note, over a websocket. |
 | Live editing | Full live: edits, remote cursors and presence from day one. |
 | Sharing | Single notes and whole notebooks, with other accounts on the same server only. |
@@ -334,6 +334,17 @@ A client opens one websocket to `/api/ws` (authenticated by the session cookie) 
 - **Photos:** picked from the camera or library, pasted, or dropped. Images over 2048px or 1.5 MB are shrunk to JPEG in the browser before upload.
 - **Install:** a web app manifest plus a service worker that caches the app shell. The UI encourages installing to the home screen, because iOS can clear storage for tabs that aren't installed.
 
+## GTK client
+
+`gtk/` is a native client in Rust (gtk4-rs, libadwaita) for Linux desktops: the PWA's desktop layout, the same REST API and websocket protocol, and the same Loro document format through the `loro` crate.
+
+- **Layout:** an `AdwNavigationSplitView`, sidebar beside the open note, one pane at a time below 640sp. The sidebar holds Search, Recent, your notebooks with their notes, Shared, Trash and the connection. Account is the avatar in its headerbar.
+- **Parts:** `api`, `sync`, `note` and `cache` have no GTK in them and are tested against an in-process server (`gtk/tests/client.rs`). `ui/` is the app. HTTP and the websocket run on a tokio runtime off the GTK thread; results come back as futures on the GTK main loop.
+- **Editor:** a `GtkTextView` bound to the note's `LoroText`. Typing becomes Loro edits as it happens; edits from others and undo come back as text deltas applied to the buffer. Undo is Loro's `UndoManager`, so it only takes back your own edits. Markdown is styled in place with text tags (marks stay visible, dimmed), checkboxes tick on click, links open on click, and photos and recording buttons are drawn under the line that links them.
+- **Presence:** the same `EphemeralStore` keys loro-codemirror uses (`<peer>-cm-user` with `{name, colorClassName}`, `<peer>-cm-cursor` with encoded Loro cursors), so the PWA and GTK show each other's cursors.
+- **Offline:** the session sits in `~/.config/gnotes/session.json` (mode 0600); the last tree, each opened note's snapshot, and notes edited or made offline sit in `~/.local/share/gnotes/<server>/<user id>/`, and work like the PWA's IndexedDB copies. Log Out deletes them.
+- **Not yet:** Ask, AI summaries and edits, voice recording, import and admin settings are web-only.
+
 ## Deployment
 
 ```
@@ -352,7 +363,7 @@ docker run -v gnotes-data:/data -p 8080:8080 gnotes
 1. **Foundation:** auth, schema, tree REST, websocket rooms with live edits and cursors, basic PWA editor. Two browsers editing one note live counts as done.
 2. **Daily-use PWA:** offline storage, installable, sharing UI, images and voice recording, trash, Markdown copies on disk.
 3. **Extras:** server-side whisper transcription, note history view, search (SQLite FTS5).
-4. **GTK client:** Rust, gtk4-rs, libadwaita, the `loro` crate and the same websocket protocol.
+4. **GTK client:** Rust, gtk4-rs, libadwaita, the `loro` crate and the same websocket protocol. See [GTK client](#gtk-client).
 
 ## Decided
 

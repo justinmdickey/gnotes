@@ -14,7 +14,10 @@ WORKDIR /src
 ARG JOBS=2
 COPY Cargo.toml Cargo.lock ./
 COPY server/Cargo.toml server/
-RUN mkdir server/src && echo "fn main() {}" > server/src/main.rs && touch server/src/lib.rs \
+# The GTK client is in the workspace too; the image only needs its manifest.
+COPY gtk/Cargo.toml gtk/
+RUN mkdir server/src gtk/src && echo "fn main() {}" > server/src/main.rs && touch server/src/lib.rs \
+    && echo "fn main() {}" > gtk/src/main.rs && touch gtk/src/lib.rs \
     && CARGO_BUILD_JOBS=$JOBS cargo build --release -p gnotes-server \
     && rm -rf server/src target/release/.fingerprint/gnotes-server-* target/release/deps/*gnotes_server*
 COPY server/ server/
