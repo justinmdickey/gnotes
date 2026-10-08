@@ -223,6 +223,30 @@ check("Restore brings a note back from the trash", t2.notes.some((n) => n.title 
 const samTree = await sam.tree();
 check("Share gives someone else the note", samTree.notes.some((n) => n.title === "Snippets" && n.role === "viewer"), samTree.notes.map((n) => [n.title, n.role]));
 
+// Photos and recordings.
+({ code, stderr } = await demo.runApp({
+  env: {
+    GNOTES_DRIVE: [
+      "wait-tree",
+      "open note:Plumber",
+      "wait-loaded",
+      "wait-media 1",
+      `dump ${f("memo.json")}`,
+      "open note:Snippets",
+      "wait-loaded",
+      `add-file ${join(demo.root, "web/public/icon-192.png")}`,
+      "wait-media 1",
+      `dump ${f("photo.json")}`,
+      "quit",
+    ].join("\n"),
+  },
+}));
+check("photos and recordings ran", code === 0, { code, stderr });
+check("a recording shows a play button", existsSync(f("memo.json")) && dump("memo.json").media[0] === "▶  Play Recording".trim(), existsSync(f("memo.json")) && dump("memo.json").media);
+const snippetsText = await serverText(ids.snippets, (t) => t.includes("att:"));
+check("Add Photo uploads it and links it in the note", /!\[icon-192\]\(att:[0-9a-f-]+\)/.test(snippetsText), snippetsText.slice(-80));
+check("the photo shows in the note", existsSync(f("photo.json")) && dump("photo.json").media.includes("photo"), existsSync(f("photo.json")) && dump("photo.json").media);
+
 // Signing in through the form, then starting again signed in, then starting with no server.
 ({ code, stderr } = await demo.runApp({
   signedIn: false,

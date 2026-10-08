@@ -19,6 +19,8 @@
 //! tick <n>                  clicks the nth checkbox, from 0
 //! format <style>            title, heading, subheading, body, check, bullet, number, quote, bold, italic
 //! new-note
+//! add-file <path>           as Add Photo, into the open note
+//! wait-media <n>            the open note shows n photos or recordings
 //! make-notebook <name>      at the top level
 //! rename-notebook <old>|<new>
 //! move-note <title>|<notebook>   ("Notes" is the top level)
@@ -187,6 +189,12 @@ async fn run(main: &Rc<Main>, cmd: &str, arg: &str) {
             main.new_note();
             until("the new note", || main.open_id().is_some() && main.open_id() != before).await;
         }
+        "add-file" => {
+            if let Some(e) = editor() {
+                e.add_file(arg);
+            }
+        }
+        "wait-media" => until(&format!("{arg} photos or recordings"), || editor().is_some_and(|e| e.media_shown().len() >= arg.parse().unwrap_or(1))).await,
         "make-notebook" => dialogs::create_notebook(main, None, arg.to_owned()),
         "rename-notebook" => {
             let (old, new) = arg.split_once('|').unwrap_or((arg, arg));
@@ -239,6 +247,7 @@ async fn run(main: &Rc<Main>, cmd: &str, arg: &str) {
                 "editable": e.as_ref().map(|e| e.editable()),
                 "banner": e.as_ref().and_then(|e| e.banner()),
                 "peers": e.as_ref().map(|e| e.peer_names()).unwrap_or_default(),
+                "media": e.as_ref().map(|e| e.media_shown()).unwrap_or_default(),
                 "note": main.open_id(),
                 "sidebar": main.sidebar().labels(),
                 "list": list_rows(main),

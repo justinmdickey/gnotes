@@ -16,7 +16,7 @@ use loro::VersionVector;
 use super::{
     dialogs,
     markdown::{self, Styled},
-    noteview::{NoteView, Picture, RemoteCursor},
+    noteview::{self, NoteView, Picture, RemoteCursor},
     sidebar::{self, Item, title_of},
     store::{NoteHandler, Store},
     window::Main,
@@ -59,8 +59,8 @@ pub struct Editor {
     format_bar: gtk::Widget,
     share_button: gtk::Button,
     menu_button: gtk::MenuButton,
-    /// Photos by attachment id; None while loading, or when it isn't a picture.
-    textures: RefCell<HashMap<String, Option<gdk::Texture>>>,
+    /// Attachments shown in the note, by id.
+    media: RefCell<HashMap<String, Media>>,
     /// Spacing tags made for photos, by height.
     photo_tags: RefCell<HashMap<i32, gtk::TextTag>>,
     player: RefCell<Option<(String, gtk::MediaFile)>>,
@@ -279,7 +279,7 @@ impl Editor {
             format_bar: bar_scroll.upcast(),
             share_button: share_button.clone(),
             menu_button,
-            textures: Default::default(),
+            media: Default::default(),
             photo_tags: Default::default(),
             player: Default::default(),
             focus_when_ready: Cell::new(false),
@@ -892,8 +892,7 @@ impl Editor {
     /// What's under a point: a checkbox, a link, or a recording.
     fn target_at(&self, x: f64, y: f64) -> Option<Target> {
         let (bx, by) = self.view.window_to_buffer_coords(gtk::TextWindowType::Widget, x as i32, y as i32);
-        let it = self.view.iter_at_location(bx, by)?;
-        let at = it.offset() as usize;
+        let at = self.view.iter_at_location(bx, by).map_or(usize::MAX, |it| it.offset() as usize);
         let styled = self.styled.borrow();
         if self.can_edit()
             && let Some((start, done)) = styled.tasks.iter().find(|(s, _)| (*s..*s + 3).contains(&at))
@@ -903,10 +902,9 @@ impl Editor {
         if let Some(l) = styled.links.iter().find(|l| (l.start..l.end).contains(&at)) {
             return Some(Target::Link(l.url.clone()));
         }
-        let audio = styled.images.iter().find(|l| (l.start..l.end).contains(&at))?;
-        let id = audio.url.strip_prefix("att:")?;
-        let not_picture = matches!(self.textures.borrow().get(id), Some(None));
-        not_picture.then(|| Target::Recording(id.to_owned()))
+        drop(styled);
+        let p = self.view.picture_at(bx as f32, by as f32)?;
+        p.texture.is_none().then_some(Target::Recording(p.id))
     }
 
     /// Ticks or unticks the checkbox whose `[` is at `start`.
@@ -1021,6 +1019,7 @@ impl Editor {
         }
     }
 
+    /// Plays a recording, or pauses it if it's playing.
     fn play(&self, id: String) {
         if let Some((playing, media)) = &*self.player.borrow()
             && *playing == id
@@ -1028,20 +1027,29 @@ impl Editor {
             media.set_playing(!media.is_playing());
             return;
         }
-        let api = self.store.api.clone();
+        let Some(Media::Recording(path)) = self.media.borrow().get(&id).cloned() else { return };
+        if let Some((_, old)) = self.player.take() {
+            old.pause();
+        }
+        let media = gtk::MediaFile::for_filename(&path);
         let weak = self.me.clone();
-        glib::spawn_future_local(async move {
-            let att = id.clone();
-            let Ok(bytes) = bg(async move { api.attachment(&att).await }).await else { return };
-            let Some(e) = weak.upgrade() else { return };
-            let path = crate::cache::data_dir().join("playing");
-            if std::fs::write(&path, &bytes).is_err() {
-                return;
+        media.connect_playing_notify(move |_| {
+            if let Some(e) = weak.upgrade() {
+                e.queue_restyle();
             }
-            let media = gtk::MediaFile::for_filename(&path);
-            media.play();
-            e.player.replace(Some((id, media)));
         });
+        let weak = self.me.clone();
+        media.connect_error_notify(move |m| {
+            if let (Some(e), Some(err)) = (weak.upgrade(), m.error()) {
+                e.store.toast(&format!("Couldn't play the recording: {err}"));
+            }
+        });
+        media.play();
+        self.player.replace(Some((id, media)));
+    }
+
+    fn is_playing(&self, id: &str) -> bool {
+        self.player.borrow().as_ref().is_some_and(|(p, m)| p == id && m.is_playing())
     }
 
     fn queue_restyle(&self) {
@@ -1076,24 +1084,33 @@ impl Editor {
         let column = self.view.column_width() as f32;
         for img in &styled.images {
             let Some(id) = img.url.strip_prefix("att:") else { continue };
-            let texture = self.textures.borrow().get(id).cloned();
-            match texture {
-                None => self.load_picture(id),
-                Some(Some(t)) => {
+            let media = self.media.borrow().get(id).cloned();
+            let (texture, label, w, h) = match media {
+                None => {
+                    self.load_media(id);
+                    continue;
+                }
+                Some(Media::Loading | Media::Missing) => continue,
+                Some(Media::Picture(t)) => {
                     let w = (t.width() as f32).min(column).min(MAX_PHOTO);
                     let h = (w * t.height() as f32 / t.width().max(1) as f32).round();
-                    let tag = self.photo_tag(h as i32 + 16);
-                    let mut line_start = at(img.start);
-                    line_start.set_line_offset(0);
-                    let mut line_end = at(img.end);
-                    if !line_end.ends_line() {
-                        line_end.forward_to_line_end();
-                    }
-                    self.buffer.apply_tag(&tag, &line_start, &line_end);
-                    pictures.push(Picture { at: img.end, texture: t, width: w, height: h });
+                    (Some(t), String::new(), w, h)
                 }
-                Some(None) => {}
+                Some(Media::Recording(_)) => {
+                    let label = if self.is_playing(id) { "⏸  Pause" } else { "▶  Play Recording" };
+                    (None, label.to_owned(), noteview::BUTTON.0, noteview::BUTTON.1)
+                }
+            };
+            // Room under the link's line for it.
+            let tag = self.photo_tag(h as i32 + 16);
+            let mut line_start = at(img.start);
+            line_start.set_line_offset(0);
+            let mut line_end = at(img.end);
+            if !line_end.ends_line() {
+                line_end.forward_to_line_end();
             }
+            self.buffer.apply_tag(&tag, &line_start, &line_end);
+            pictures.push(Picture { at: img.end, id: id.to_owned(), texture, label, width: w, height: h });
         }
         self.view.set_pictures(pictures);
         self.styled.replace(styled);
@@ -1107,8 +1124,9 @@ impl Editor {
             .clone()
     }
 
-    fn load_picture(&self, id: &str) {
-        self.textures.borrow_mut().insert(id.to_owned(), None);
+    /// Fetches an attachment: a photo to show, or a recording to play (attachments are one or the other).
+    fn load_media(&self, id: &str) {
+        self.media.borrow_mut().insert(id.to_owned(), Media::Loading);
         let api = self.store.api.clone();
         let weak = self.me.clone();
         let id = id.to_owned();
@@ -1116,12 +1134,19 @@ impl Editor {
             let att = id.clone();
             let bytes = bg(async move { api.attachment(&att).await }).await;
             let Some(e) = weak.upgrade() else { return };
-            let texture = bytes.ok().and_then(|b| gdk::Texture::from_bytes(&glib::Bytes::from_owned(b)).ok());
-            let ok = texture.is_some();
-            e.textures.borrow_mut().insert(id, texture);
-            if ok {
-                e.queue_restyle();
-            }
+            let media = match bytes {
+                Err(_) => Media::Missing,
+                Ok(b) => match gdk::Texture::from_bytes(&glib::Bytes::from(&b)) {
+                    Ok(t) => Media::Picture(t),
+                    Err(_) => {
+                        let path = crate::cache::data_dir().join("recordings").join(&id);
+                        let saved = std::fs::create_dir_all(path.parent().expect("folder")).and_then(|_| std::fs::write(&path, &b));
+                        if saved.is_ok() { Media::Recording(path) } else { Media::Missing }
+                    }
+                },
+            };
+            e.media.borrow_mut().insert(id, media);
+            e.queue_restyle();
         });
     }
 
@@ -1229,6 +1254,17 @@ impl Editor {
         }
     }
 
+    /// What shows under the text: "photo" or the recording button's label, per attachment.
+    pub fn media_shown(&self) -> Vec<String> {
+        self.view.pictures().iter().map(|p| if p.texture.is_some() { "photo".to_owned() } else { p.label.trim().to_owned() }).collect()
+    }
+
+    /// Adds a file as Add Photo does.
+    pub fn add_file(self: &Rc<Self>, path: &str) {
+        let (e, file) = (self.clone(), gio::File::for_path(path));
+        glib::spawn_future_local(async move { e.upload_file(&file).await });
+    }
+
     pub fn peer_names(&self) -> Vec<String> {
         self.doc.borrow().peers().into_iter().map(|p| p.name).collect()
     }
@@ -1280,6 +1316,16 @@ impl Editor {
             self.store.flush_note(&self.id);
         }
     }
+}
+
+#[derive(Clone)]
+enum Media {
+    Loading,
+    Picture(gdk::Texture),
+    /// Saved where the player can open it.
+    Recording(std::path::PathBuf),
+    /// Gone, or the server couldn't be reached.
+    Missing,
 }
 
 enum Target {

@@ -14,16 +14,23 @@ pub struct RemoteCursor {
     pub rgb: (f32, f32, f32),
 }
 
-/// A photo shown under the line that links it.
+/// A photo, or a recording's play button, shown under the line that links it.
 #[derive(Clone)]
 pub struct Picture {
     /// Where its link ends.
     pub at: usize,
-    pub texture: gtk::gdk::Texture,
+    /// The attachment.
+    pub id: String,
+    /// A photo; without one, a button with `label`.
+    pub texture: Option<gtk::gdk::Texture>,
+    pub label: String,
     /// The size it's drawn at.
     pub width: f32,
     pub height: f32,
 }
+
+/// A recording's play button.
+pub const BUTTON: (f32, f32) = (190.0, 36.0);
 
 /// The widest the text column gets.
 pub const COLUMN: i32 = 720;
@@ -94,12 +101,25 @@ mod imp {
                 return;
             }
             for p in self.pictures.borrow().iter() {
-                let it = buffer.iter_at_offset(p.at as i32);
-                let (y, h) = view.line_yrange(&it);
-                let rect = graphene::Rect::new(view.left_margin() as f32, (y + h) as f32 - p.height - 8.0, p.width, p.height);
-                let rounded = gsk::RoundedRect::from_rect(rect, 8.0);
-                snapshot.push_rounded_clip(&rounded);
-                snapshot.append_texture(&p.texture, &rect);
+                let rect = view.picture_rect(p);
+                let radius = if p.texture.is_some() { 8.0 } else { rect.height() / 2.0 };
+                snapshot.push_rounded_clip(&gsk::RoundedRect::from_rect(rect, radius));
+                match &p.texture {
+                    Some(t) => snapshot.append_texture(t, &rect),
+                    None => {
+                        let fg = view.color();
+                        snapshot.append_color(&gtk::gdk::RGBA::new(fg.red(), fg.green(), fg.blue(), 0.1), &rect);
+                        let layout = view.create_pango_layout(Some(&p.label));
+                        let (lw, lh) = layout.pixel_size();
+                        snapshot.save();
+                        snapshot.translate(&graphene::Point::new(
+                            rect.x() + (rect.width() - lw as f32) / 2.0,
+                            rect.y() + (rect.height() - lh as f32) / 2.0,
+                        ));
+                        snapshot.append_layout(&layout, &fg);
+                        snapshot.restore();
+                    }
+                }
                 snapshot.pop();
             }
             for c in self.cursors.borrow().iter() {
@@ -157,6 +177,23 @@ impl NoteView {
     pub fn set_pictures(&self, pictures: Vec<Picture>) {
         self.imp().pictures.replace(pictures);
         self.queue_draw();
+    }
+
+    /// Where a photo or play button is drawn, in buffer coordinates: under the line linking it.
+    pub fn picture_rect(&self, p: &Picture) -> graphene::Rect {
+        let it = self.buffer().iter_at_offset(p.at as i32);
+        let (y, h) = self.line_yrange(&it);
+        graphene::Rect::new(self.left_margin() as f32, (y + h) as f32 - p.height - 8.0, p.width, p.height)
+    }
+
+    /// The photo or play button at a point in buffer coordinates.
+    pub fn picture_at(&self, x: f32, y: f32) -> Option<Picture> {
+        let pictures = self.imp().pictures.borrow();
+        pictures.iter().find(|p| self.picture_rect(p).contains_point(&graphene::Point::new(x, y))).cloned()
+    }
+
+    pub fn pictures(&self) -> Vec<Picture> {
+        self.imp().pictures.borrow().clone()
     }
 
     /// The width a photo may take: the text column.

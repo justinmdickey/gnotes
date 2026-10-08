@@ -179,6 +179,28 @@ export async function startDemo() {
   form.append("file", new Blob([readFileSync(join(root, "web/public/icon-192.png"))], { type: "image/png" }), "Shelf.png");
   const photo = await (await fetch(`${base}/api/attachments`, { method: "POST", headers: { cookie: `gnotes_session=${ann.token}` }, body: form })).json();
 
+  // A voice memo: a second of quiet as WAV.
+  const memo = await ann.note();
+  const rate = 8000;
+  const wav = Buffer.alloc(44 + rate);
+  wav.write("RIFF", 0);
+  wav.writeUInt32LE(36 + rate, 4);
+  wav.write("WAVEfmt ", 8);
+  wav.writeUInt32LE(16, 16);
+  wav.writeUInt16LE(1, 20);
+  wav.writeUInt16LE(1, 22);
+  wav.writeUInt32LE(rate, 24);
+  wav.writeUInt32LE(rate, 28);
+  wav.writeUInt16LE(1, 32);
+  wav.writeUInt16LE(8, 34);
+  wav.write("data", 36);
+  wav.writeUInt32LE(rate, 40);
+  wav.fill(128, 44);
+  const memoForm = new FormData();
+  memoForm.append("note_id", memo);
+  memoForm.append("file", new Blob([wav], { type: "audio/wav" }), "Voice memo.wav");
+  const recording = await (await fetch(`${base}/api/attachments`, { method: "POST", headers: { cookie: `gnotes_session=${ann.token}` }, body: memoForm })).json();
+
   await write(ann, groceries, [
     "# Groceries",
     "",
@@ -210,6 +232,7 @@ export async function startDemo() {
     "",
     "Inline `cargo test` runs everything, ~~slowly~~.",
   ].join("\n"));
+  await write(ann, memo, `# Plumber\n\n![Voice memo](att:${recording.id})\n\nCall about the leak under the sink.`);
   await write(sam, sync, "# Weekly sync\n\nQuick check-in on the **mobile release**.\n\n## Action items\n- [ ] Sam: write the release notes\n- [ ] Ann: try the beta");
   await ann.call("DELETE", `/notes/${await ann.note()}`);
   // Titles and previews settle a moment after the last edit.
@@ -291,11 +314,12 @@ export async function startDemo() {
   }
 
   return {
+    root,
     base,
     data,
     ann,
     sam,
-    ids: { home, kitchen, groceries, pantry, snippets, family, sync, photo: photo.id },
+    ids: { home, kitchen, groceries, pantry, snippets, memo, family, sync, photo: photo.id, recording: recording.id },
     open,
     read,
     write,
