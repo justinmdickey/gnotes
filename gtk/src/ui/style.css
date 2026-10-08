@@ -1,0 +1,107 @@
+/* Gnotes on GTK: Adwaita, with the few touches the PWA has (web/src/app.css). */
+
+.note-text {
+  font-size: 15px;
+  background: none;
+}
+
+.note-text text {
+  background: none;
+}
+
+.format-bar {
+  padding: 4px 6px;
+}
+
+.format-bar separator {
+  margin: 6px 4px;
+}
+
+.format-bar .text-style {
+  font-weight: 700;
+  padding-left: 8px;
+  padding-right: 8px;
+}
+
+.format-bar .code-button {
+  font-family: monospace;
+  font-weight: 700;
+}
+
+.format-bar .quote-button {
+  font-size: 1.4em;
+  font-family: serif;
+}
+
+.sidebar-heading {
+  margin-top: 12px;
+  font-size: 0.85em;
+}
+
+.navigation-sidebar row.heading-row {
+  min-height: 0;
+}
+
+.navigation-sidebar row.current {
+  background-color: alpha(currentColor, 0.1);
+}
+
+.navigation-sidebar row.current:hover {
+  background-color: alpha(currentColor, 0.13);
+}
+
+.folder-icon {
+  color: var(--accent-color);
+}
+
+.shared-badge {
+  color: #e5a50a;
+  -gtk-icon-size: 12px;
+}
+
+.sidebar-footer {
+  padding: 8px 14px;
+}
+
+.status-dot {
+  min-width: 8px;
+  min-height: 8px;
+  border-radius: 99px;
+  background: alpha(currentColor, 0.4);
+}
+
+.status-dot.online {
+  background: var(--success-bg-color);
+}
+
+.status-dot.offline {
+  background: var(--warning-bg-color);
+}
+
+.account {
+  padding: 2px;
+}
+
+.peer {
+  min-width: 24px;
+  min-height: 24px;
+  border-radius: 99px;
+  font-size: 12px;
+  font-weight: 700;
+  color: white;
+  background-color: #77767b;
+}
+.peer.size-26 {
+  min-width: 26px;
+  min-height: 26px;
+}
+.peer.size-32 {
+  min-width: 32px;
+  min-height: 32px;
+  font-size: 14px;
+}
+.peer.user-blue { background-color: #3584e4; }
+.peer.user-green { background-color: #2ec27e; }
+.peer.user-orange { background-color: #e66100; }
+.peer.user-purple { background-color: #9141ac; }
+.peer.user-red { background-color: #e01b24; }
