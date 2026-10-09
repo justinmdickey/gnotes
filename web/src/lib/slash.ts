@@ -85,7 +85,7 @@ function items(actions: SlashActions): SlashItem[] {
     { label: "Quote", icon: "quote", apply: block("quote"), section: TEXT },
     { label: "Code Block", icon: "code", apply: pick(codeBlock), section: ADD },
     { label: "Table", icon: "table", apply: pick(insertTable), section: ADD },
-    { label: "Board", icon: "board", apply: pick(insertBoard), section: ADD },
+    { label: "Kanban Board", icon: "board", apply: pick(insertBoard), section: ADD },
     { label: "Emoji", icon: "emoji", apply: pick(startEmoji), section: ADD },
     { label: "Photo", icon: "camera", apply: pick(actions.photo), section: ADD },
     { label: "Voice Memo", icon: "mic", apply: pick(actions.record), section: ADD },

@@ -104,7 +104,7 @@ pub fn slash_items(query: &str, ai: bool) -> Vec<Item> {
         item("Quote", "format-indent-more-symbolic", Pick::Block("> ")),
         item("Code Block", "utilities-terminal-symbolic", Pick::CodeBlock),
         item("Table", "x-office-spreadsheet-symbolic", Pick::Table),
-        item("Board", "view-grid-symbolic", Pick::Board),
+        item("Kanban Board", "view-grid-symbolic", Pick::Board),
         item("Emoji", "face-smile-symbolic", Pick::Emoji),
         item("Photo", "camera-photo-symbolic", Pick::Photo),
         item("Voice Memo", "audio-input-microphone-symbolic", Pick::Voice),
@@ -318,6 +318,8 @@ mod tests {
         assert_eq!(emoji_on_colon("10:30:"), None);
         assert!(emoji_items("tac").iter().any(|i| i.glyph == "🌮"));
         assert_eq!(slash_items("che", false)[0].label, "Checklist");
+        assert_eq!(slash_items("kanban", false)[0].label, "Kanban Board");
+        assert_eq!(slash_items("board", false)[0].label, "Kanban Board");
         assert_eq!(slash_items("clean", true)[0].label, "Tidy Up");
         assert!(slash_items("ai", false).is_empty());
     }
