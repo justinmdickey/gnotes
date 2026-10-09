@@ -314,6 +314,7 @@ check("a new server's first account is made from sign-in", code === 0 && setupDu
   // Sam's open note in the main demo is irrelevant here; this one starts clean.
   ({ code, stderr } = await aiDemo.runApp({
     env: {
+      GNOTES_AUDIO_SRC: "audiotestsrc is-live=true wave=sine",
       GNOTES_DRIVE: [
         "wait-tree",
         "open note:Groceries",
@@ -330,6 +331,27 @@ check("a new server's first account is made from sign-in", code === 0 && setupDu
         "cursor 0",
         "ai-write Add two more staples",
         "wait-text Olive oil",
+        "open note:Snippets",
+        "wait-loaded",
+        "record-start",
+        "sleep 1000",
+        "record-stop",
+        "wait-text Call the plumber about the sink.",
+        "record-start",
+        "live-delta Remember",
+        "live-delta the",
+        "live-final Remember the milk.",
+        "record-stop",
+        "wait-text Remember the milk.",
+        "open note:Plumber",
+        "wait-loaded",
+        "wait-media 1",
+        "open note:Groceries",
+        "wait-loaded",
+        `add-file ${join(demo.root, "web/public/icon-192.png")}`,
+        "wait-media 1",
+        "get-text 0",
+        "wait-text RICE 2 KG",
         "wait-row Ask",
         "open ask:what do I still need to buy for the groceries?",
         "wait-answer spinach",
@@ -347,6 +369,11 @@ check("a new server's first account is made from sign-in", code === 0 && setupDu
   check("Tidy Up applies the tidied note", tidied.includes("## To buy") && tidied.includes("- [x] Apples"), tidied);
   const edited = await aiDemo.read(aiAnn, aiDemo.ids.pantry);
   check("Edit with AI applies the change", edited.includes("## Action items"), edited);
+  const memos = await aiDemo.read(aiAnn, aiDemo.ids.snippets);
+  check("a voice memo is recorded, uploaded and transcribed under its player", /!\[Voice memo\]\(att:[0-9a-f-]+\)\nCall the plumber about the sink\./.test(memos), memos);
+  check("a live transcript is written as it's heard, under the player", /!\[Voice memo\]\(att:[0-9a-f-]+\)\nRemember the milk\./.test(memos), memos);
+  const read = await aiDemo.read(aiAnn, aiDemo.ids.groceries);
+  check("Get Text puts a photo's text under it", /att:[0-9a-f-]+\)\n+RICE 2 KG/.test(read), read.slice(-120));
   check("Ask shows in the sidebar and streams an answer", existsSync(f("ask.json")) && /spinach, lemons and milk/.test(dump("ask.json").dialog_text + JSON.stringify(dump("ask.json"))));
   check("an answer's citation opens its note", existsSync(f("cited.json")) && dump("cited.json").title === "Groceries", existsSync(f("cited.json")) && dump("cited.json").title);
   check("the AI Prompt writes at the cursor", /# Pantry\n- Olive oil\n- Coffee beans/.test(edited), edited.slice(0, 80));

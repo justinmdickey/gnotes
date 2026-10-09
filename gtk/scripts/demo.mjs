@@ -382,6 +382,8 @@ export async function startDemo({ ai = false } = {}) {
           XDG_RUNTIME_DIR: runtime,
           // No GPU in a headless compositor.
           GSK_RENDERER: "cairo",
+          // A tone stands in for the microphone.
+          GNOTES_AUDIO_SRC: "audiotestsrc is-live=true wave=sine volume=0.1",
           GNOTES_GTK_DIR: gtkDir,
           GNOTES_SIZE: size,
           GNOTES_STYLE: style,

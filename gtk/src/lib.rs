@@ -4,6 +4,7 @@
 pub mod api;
 pub mod cache;
 pub mod note;
+pub mod recorder;
 pub mod sync;
 pub mod ui;
 

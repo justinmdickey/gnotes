@@ -18,12 +18,16 @@ struct Server {
 }
 
 async fn start() -> Server {
+    start_with(None).await
+}
+
+async fn start_with(whisper: Option<gnotes_server::WhisperConfig>) -> Server {
     let dir = tempfile::tempdir().unwrap();
     let config = Config {
         vision: None,
         summary: None,
         embed: None,
-        whisper: None,
+        whisper,
         data_dir: dir.path().to_path_buf(),
         bind: "127.0.0.1:0".parse().unwrap(),
         web_dir: dir.path().join("web"),
@@ -283,4 +287,86 @@ async fn photos_upload_and_download() {
     assert_eq!(att.mime, "image/png");
     assert_eq!(api.attachment(&att.id).await.unwrap(), png);
     assert_eq!(api.attachment_meta(&att.id).await.unwrap().note_id, note);
+}
+
+/// A realtime speech-to-text service, as OpenAI's events go: one delta once audio arrives, and the
+/// finished text when the recording is committed.
+async fn fake_realtime() -> String {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/v1/realtime", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        while let Ok((tcp, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
+                let mut heard = false;
+                while let Some(Ok(Message::Text(text))) = ws.next().await {
+                    let event: serde_json::Value = serde_json::from_str(&text).unwrap();
+                    match event["type"].as_str() {
+                        Some("input_audio_buffer.append") if !heard => {
+                            heard = true;
+                            let delta = serde_json::json!({ "type": "conversation.item.input_audio_transcription.delta", "delta": "Call the" });
+                            ws.send(Message::text(delta.to_string())).await.unwrap();
+                        }
+                        Some("input_audio_buffer.commit") => {
+                            let done = serde_json::json!({ "type": "conversation.item.input_audio_transcription.completed", "transcript": "Call the plumber." });
+                            ws.send(Message::text(done.to_string())).await.unwrap();
+                            let _ = ws.close(None).await;
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
+            });
+        }
+    });
+    url
+}
+
+#[tokio::test]
+async fn live_transcripts_come_back_as_words_then_the_finished_text() {
+    let realtime = fake_realtime().await;
+    let server = start_with(Some(gnotes_server::WhisperConfig {
+        url: "http://127.0.0.1:9/v1".into(),
+        model: "stand-in".into(),
+        key: None,
+        realtime_url: Some(realtime),
+    }))
+    .await;
+    let api = user(&server, "ann").await;
+    assert!(api.features().await.unwrap().live_transcription);
+    let (pcm_tx, pcm_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (ev_tx, ev_rx) = async_channel::unbounded();
+    let session = tokio::spawn(gnotes_gtk::recorder::live(api, pcm_rx, ev_tx));
+    // A tenth of a second of silence at a time, as the recorder sends it.
+    for _ in 0..3 {
+        pcm_tx.send(vec![0u8; 3200]).unwrap();
+    }
+    let first = tokio::time::timeout(Duration::from_secs(5), ev_rx.recv()).await.unwrap().unwrap();
+    assert_eq!(first, gnotes_gtk::recorder::LiveEvent::Delta("Call the".into()));
+    drop(pcm_tx);
+    let last = tokio::time::timeout(Duration::from_secs(5), ev_rx.recv()).await.unwrap().unwrap();
+    assert_eq!(last, gnotes_gtk::recorder::LiveEvent::Final("Call the plumber.".into()));
+    tokio::time::timeout(Duration::from_secs(10), session).await.unwrap().unwrap();
+}
+
+#[test]
+fn records_from_a_gstreamer_source() {
+    // A tone stands in for the microphone.
+    unsafe { std::env::set_var("GNOTES_AUDIO_SRC", "audiotestsrc is-live=true wave=sine") };
+    let dir = tempfile::tempdir().unwrap();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let rec = gnotes_gtk::recorder::Recording::start(dir.path(), Some(tx)).unwrap();
+    std::thread::sleep(Duration::from_millis(700));
+    let bytes = gtk::glib::MainContext::default().block_on(rec.stop()).unwrap();
+    // WebM starts with the EBML header.
+    assert_eq!(&bytes[..4], &[0x1a, 0x45, 0xdf, 0xa3]);
+    assert!(bytes.len() > 1000, "{} bytes", bytes.len());
+    let mut pcm = 0;
+    while let Ok(chunk) = rx.try_recv() {
+        pcm += chunk.len();
+    }
+    // About 0.7 s of 16 kHz 16-bit mono.
+    assert!(pcm > 10_000, "{pcm} bytes of PCM");
 }

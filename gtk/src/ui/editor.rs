@@ -68,6 +68,16 @@ pub struct Editor {
     authors_retry: Cell<bool>,
     /// Lines others wrote: where each starts, and who and when, for its tooltip.
     blame: RefCell<Vec<(i32, String)>>,
+    /// A voice memo being recorded, and its bar.
+    recording: RefCell<Option<Recording>>,
+    /// Where the memo goes; kept after Done until it's in the note, as the last words come in.
+    spot: RefCell<Option<Spot>>,
+    /// A memo is being saved into the note: closing waits for it, so leaving right after Done keeps it.
+    saving: Cell<bool>,
+    close_after_save: Cell<bool>,
+    rec_bar: gtk::Box,
+    rec_time: gtk::Label,
+    rec_status: gtk::Label,
     /// Attachments shown in the note, by id.
     media: RefCell<HashMap<String, Media>>,
     /// Spacing tags made for photos, by height.
@@ -240,6 +250,8 @@ impl Editor {
         bar.append(&gtk::Separator::new(gtk::Orientation::Vertical));
         let photo = icon_button("camera-photo-symbolic", "Add Photo");
         bar.append(&photo);
+        let mic = icon_button("audio-input-microphone-symbolic", "Voice Memo");
+        bar.append(&mic);
         let bar_scroll = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::External)
             .vscrollbar_policy(gtk::PolicyType::Never)
@@ -252,7 +264,26 @@ impl Editor {
         toolbar.add_top_bar(&header);
         toolbar.add_top_bar(&bar_scroll);
         toolbar.add_top_bar(&banner);
-        toolbar.set_content(Some(&scroll));
+        // The recording bar floats over the note, so a live transcript can be read as it's written.
+        let rec_time = gtk::Label::builder().label("0:00").css_classes(["numeric"]).build();
+        let rec_status = gtk::Label::builder().css_classes(["dim-label"]).build();
+        let rec_cancel = gtk::Button::builder().icon_name("user-trash-symbolic").tooltip_text("Discard Recording").css_classes(["flat", "circular"]).build();
+        let rec_stop = gtk::Button::builder().label("Done").css_classes(["suggested-action", "pill"]).build();
+        let rec_dot = gtk::Label::builder().label("●").css_classes(["recording-dot"]).build();
+        let rec_bar = gtk::Box::builder()
+            .spacing(10)
+            .halign(gtk::Align::Center)
+            .valign(gtk::Align::End)
+            .margin_bottom(18)
+            .css_classes(["recording-bar", "toolbar", "osd"])
+            .visible(false)
+            .build();
+        for w in [rec_dot.upcast_ref::<gtk::Widget>(), rec_time.upcast_ref(), rec_status.upcast_ref(), rec_cancel.upcast_ref(), rec_stop.upcast_ref()] {
+            rec_bar.append(w);
+        }
+        let overlay = gtk::Overlay::builder().child(&scroll).build();
+        overlay.add_overlay(&rec_bar);
+        toolbar.set_content(Some(&overlay));
         toolbar.set_top_bar_style(adw::ToolbarStyle::Raised);
 
         let page = adw::NavigationPage::builder().title(sidebar::UNTITLED).tag(format!("note:{id}")).child(&toolbar).build();
@@ -289,6 +320,13 @@ impl Editor {
             share_button: share_button.clone(),
             menu_button,
             media: Default::default(),
+            recording: Default::default(),
+            spot: Default::default(),
+            saving: Cell::new(false),
+            close_after_save: Cell::new(false),
+            rec_bar: rec_bar.clone(),
+            rec_time,
+            rec_status,
             authors: Default::default(),
             authors_asked: Cell::new(0),
             authors_retry: Cell::new(false),
@@ -324,6 +362,16 @@ impl Editor {
         editor.connect_buffer();
         editor.connect_view();
         editor.connect_buttons(&style_buttons, [&bold, &italic, &strike, &code], [&check, &bullets, &numbers, &quote], &photo);
+        for (button, save) in [(&mic, None), (&rec_stop, Some(true)), (&rec_cancel, Some(false))] {
+            let weak = Rc::downgrade(&editor);
+            button.connect_clicked(move |_| {
+                let Some(e) = weak.upgrade() else { return };
+                match save {
+                    None => e.start_recording(),
+                    Some(save) => e.stop_recording(save),
+                }
+            });
+        }
         {
             let weak = Rc::downgrade(&editor);
             share_button.connect_clicked(move |_| {
@@ -784,6 +832,17 @@ impl Editor {
             }
         });
 
+        let right = gtk::GestureClick::builder().button(gdk::BUTTON_SECONDARY).build();
+        let weak = Rc::downgrade(self);
+        right.connect_pressed(move |g, _, x, y| {
+            if let Some(e) = weak.upgrade()
+                && e.attachment_menu(x, y)
+            {
+                g.set_state(gtk::EventSequenceState::Claimed);
+            }
+        });
+        self.view.add_controller(right);
+
         let motion = gtk::EventControllerMotion::new();
         let weak = Rc::downgrade(self);
         motion.connect_motion(move |_, x, y| {
@@ -1104,6 +1163,362 @@ impl Editor {
             }
             Err(e) => self.store.toast(&format!("Couldn't add the file: {e}")),
         }
+    }
+
+    /// Starts a voice memo: where it goes is picked now, and shown in the bar while recording.
+    pub fn start_recording(self: &Rc<Self>) {
+        if self.recording.borrow().is_some() || self.spot.borrow().is_some() || !self.can_edit() {
+            return;
+        }
+        // The cursor's line when you were typing, else the end of the note.
+        let at = if self.view.is_focus() {
+            let mut it = self.buffer.iter_at_mark(&self.buffer.get_insert());
+            if !it.ends_line() {
+                it.forward_to_line_end();
+            }
+            it
+        } else {
+            self.buffer.end_iter()
+        };
+        let spot = Spot { anchor: self.buffer.create_mark(None, &at, false), from: None, to: None, stretch: None };
+        self.spot.replace(Some(Spot { anchor: spot.anchor.clone(), from: None, to: None, stretch: None }));
+        let live_on = self.store.features.borrow().live_transcription;
+        let (pcm, live) = if live_on {
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+            let (ev_tx, ev_rx) = async_channel::unbounded();
+            let task = crate::runtime().spawn(crate::recorder::live(self.store.api.clone(), rx, ev_tx));
+            let weak = self.me.clone();
+            glib::spawn_future_local(async move {
+                let mut warned = false;
+                while let Ok(ev) = ev_rx.recv().await {
+                    let Some(e) = weak.upgrade() else { return };
+                    match ev {
+                        crate::recorder::LiveEvent::Delta(t) => e.spot_delta(&t),
+                        crate::recorder::LiveEvent::Final(t) => e.spot_final(&t),
+                        crate::recorder::LiveEvent::Error(m) if !warned => {
+                            warned = true;
+                            e.store.toast(&m);
+                        }
+                        _ => {}
+                    }
+                }
+            });
+            (Some(tx), Some(task))
+        } else {
+            (None, None)
+        };
+        let rec = match crate::recorder::Recording::start(&crate::cache::data_dir().join("recordings"), pcm) {
+            Ok(r) => r,
+            Err(e) => {
+                self.store.toast(&e);
+                self.buffer.delete_mark(&spot.anchor);
+                self.spot.take();
+                if let Some(t) = live {
+                    t.abort();
+                }
+                return;
+            }
+        };
+        let weak = self.me.clone();
+        let timer = glib::timeout_add_local(Duration::from_millis(250), move || {
+            let Some(e) = weak.upgrade() else { return glib::ControlFlow::Break };
+            if let Some(r) = &*e.recording.borrow() {
+                let s = r.started.elapsed().as_secs();
+                e.rec_time.set_label(&format!("{}:{:02}", s / 60, s % 60));
+            }
+            glib::ControlFlow::Continue
+        });
+        self.rec_time.set_label("0:00");
+        self.rec_status.set_label(if live_on { "Listening…" } else { "Recording…" });
+        self.rec_bar.set_visible(true);
+        self.recording.replace(Some(Recording { rec, started: std::time::Instant::now(), timer, live }));
+    }
+
+    /// Stops the voice memo: saves it into the note, or throws it away.
+    pub fn stop_recording(self: &Rc<Self>, save: bool) {
+        let Some(r) = self.recording.take() else { return };
+        r.timer.remove();
+        if !save {
+            r.rec.cancel();
+            if let Some(t) = r.live {
+                t.abort();
+            }
+            if let Some(spot) = self.spot.take() {
+                self.spot_remove(&spot);
+            }
+            self.rec_bar.set_visible(false);
+            return;
+        }
+        self.rec_status.set_label("Saving…");
+        self.saving.set(true);
+        let e = self.clone();
+        glib::spawn_future_local(async move {
+            e.save_recording(r.rec, r.live).await;
+            e.saving.set(false);
+            if e.close_after_save.get() {
+                e.close();
+            }
+        });
+    }
+
+    async fn save_recording(self: &Rc<Self>, rec: crate::recorder::Recording, live: Option<tokio::task::JoinHandle<()>>) {
+        let e = self;
+        {
+            let bytes = rec.stop().await;
+            // The live transcript's last words arrive after the recording stops.
+            if let Some(t) = live {
+                let _ = t.await;
+            }
+            e.rec_bar.set_visible(false);
+            let bytes = match bytes {
+                Ok(b) => b,
+                Err(err) => {
+                    e.store.toast(&err);
+                    if let Some(spot) = e.spot.take() {
+                        e.spot_remove(&spot);
+                    }
+                    return;
+                }
+            };
+            let had_text = e.spot.borrow().as_ref().is_some_and(|s| e.spot_has_text(s));
+            let (api, id) = (e.store.api.clone(), e.id.clone());
+            let att = match bg(async move { api.upload(&id, "Voice memo.webm", "audio/webm", bytes).await }).await {
+                Ok(att) => att,
+                Err(err) => {
+                    e.store.toast(&format!("Couldn't save the recording: {err}"));
+                    if let Some(spot) = e.spot.take() {
+                        e.spot_done(&spot);
+                    }
+                    return;
+                }
+            };
+            if let Some(spot) = e.spot.take() {
+                e.spot_embed(spot, &att.id);
+            }
+            // Without a live transcript, the whole recording is transcribed under it.
+            if !had_text && e.store.features.borrow().transcription {
+                e.transcribe(&att.id).await;
+            }
+        }
+    }
+
+    /// Makes the transcript's line: an empty line is used as it is (except the title), else a new one after it.
+    fn spot_open(&self, spot: &mut Spot) {
+        if spot.from.is_some() {
+            return;
+        }
+        let it = self.buffer.iter_at_mark(&spot.anchor);
+        let mut start = it;
+        start.set_line_offset(0);
+        let mut end = it;
+        if !end.ends_line() {
+            end.forward_to_line_end();
+        }
+        let empty = self.buffer.text(&start, &end, true).trim().is_empty() && start.line() > 0;
+        let at = if empty {
+            start.offset()
+        } else {
+            let o = end.offset();
+            self.buffer.insert(&mut self.buffer.iter_at_offset(o), "\n");
+            o + 1
+        };
+        let it = self.buffer.iter_at_offset(at);
+        spot.from = Some(self.buffer.create_mark(None, &it, true));
+        spot.to = Some(self.buffer.create_mark(None, &it, false));
+        spot.stretch = Some(self.buffer.create_mark(None, &it, true));
+    }
+
+    /// `text` with a space before it unless it follows one, so words don't run together.
+    fn spaced(&self, spot: &Spot, at: &gtk::TextIter, text: &str) -> String {
+        let from = spot.from.as_ref().map(|m| self.buffer.iter_at_mark(m).offset()).unwrap_or(0);
+        let before = if at.offset() > from {
+            let mut b = *at;
+            b.backward_char();
+            b.char()
+        } else {
+            ' '
+        };
+        if before.is_whitespace() || text.starts_with(char::is_whitespace) { text.to_owned() } else { format!(" {text}") }
+    }
+
+    /// More words of a live transcript.
+    pub fn spot_delta(&self, text: &str) {
+        let mut spot = self.spot.borrow_mut();
+        let Some(spot) = spot.as_mut() else { return };
+        self.spot_open(spot);
+        let to = self.buffer.iter_at_mark(spot.to.as_ref().expect("to"));
+        let insert = self.spaced(spot, &to, text);
+        self.buffer.insert(&mut self.buffer.iter_at_offset(to.offset()), &insert);
+    }
+
+    /// The finished text for the stretch heard so far, in place of its deltas.
+    pub fn spot_final(&self, text: &str) {
+        let mut spot = self.spot.borrow_mut();
+        let Some(spot) = spot.as_mut() else { return };
+        self.spot_open(spot);
+        let (stretch, to) = (spot.stretch.clone().expect("stretch"), spot.to.clone().expect("to"));
+        let s = self.buffer.iter_at_mark(&stretch).offset();
+        let t = self.buffer.iter_at_mark(&to).offset();
+        let clean = text.trim();
+        let insert = if clean.is_empty() { String::new() } else { self.spaced(spot, &self.buffer.iter_at_offset(s), clean) };
+        if t > s {
+            self.buffer.delete(&mut self.buffer.iter_at_offset(s), &mut self.buffer.iter_at_offset(t));
+        }
+        self.buffer.insert(&mut self.buffer.iter_at_offset(s), &insert);
+        self.buffer.move_mark(&stretch, &self.buffer.iter_at_mark(&to));
+    }
+
+    fn spot_has_text(&self, spot: &Spot) -> bool {
+        match (&spot.from, &spot.to) {
+            (Some(f), Some(t)) => self.buffer.iter_at_mark(t).offset() > self.buffer.iter_at_mark(f).offset(),
+            _ => false,
+        }
+    }
+
+    /// Puts the recording's player at the spot, above the transcript.
+    fn spot_embed(&self, mut spot: Spot, id: &str) {
+        self.spot_open(&mut spot);
+        let at = self.buffer.iter_at_mark(spot.from.as_ref().expect("from")).offset();
+        self.edit(|b| b.insert(&mut b.iter_at_offset(at), &format!("![Voice memo](att:{id})\n")));
+        self.spot_done(&spot);
+    }
+
+    /// Takes back a discarded recording's transcript and its line.
+    fn spot_remove(&self, spot: &Spot) {
+        if let (Some(f), Some(t)) = (&spot.from, &spot.to) {
+            let mut from = self.buffer.iter_at_mark(f);
+            let to = self.buffer.iter_at_mark(t);
+            // The line it was given, joined back to the one above.
+            if from.starts_line() && from.line() > 0 {
+                from.backward_char();
+            }
+            let (a, b) = (from.offset(), to.offset());
+            self.buffer.delete(&mut self.buffer.iter_at_offset(a), &mut self.buffer.iter_at_offset(b));
+        }
+        self.spot_done(spot);
+    }
+
+    fn spot_done(&self, spot: &Spot) {
+        for m in [Some(&spot.anchor), spot.from.as_ref(), spot.to.as_ref(), spot.stretch.as_ref()].into_iter().flatten() {
+            if !m.is_deleted() {
+                self.buffer.delete_mark(m);
+            }
+        }
+    }
+
+    /// Puts text on the line under an attachment's line: into the empty line there, or a new one.
+    fn write_under(&self, id: &str, text: &str) {
+        let all = self.shown_text();
+        let needle = format!("att:{id}");
+        let Some(line) = all.lines().position(|l| l.contains(&needle)) else { return };
+        let Some(mut end) = self.buffer.iter_at_line(line as i32) else { return };
+        if !end.ends_line() {
+            end.forward_to_line_end();
+        }
+        let next_empty = all.lines().nth(line + 1).is_some_and(|l| l.trim().is_empty());
+        let at = end.offset();
+        self.edit(|b| {
+            if next_empty {
+                b.insert(&mut b.iter_at_offset(at + 1), text);
+            } else {
+                b.insert(&mut b.iter_at_offset(at), &format!("\n{text}"));
+            }
+        });
+    }
+
+    /// Transcribe on a recording: the whole of it, onto the line under it.
+    pub async fn transcribe(&self, id: &str) {
+        let (api, att) = (self.store.api.clone(), id.to_owned());
+        match bg(async move { api.transcribe(&att).await }).await {
+            Ok(t) if !t.trim().is_empty() => self.write_under(id, t.trim()),
+            Ok(_) => self.store.toast("No speech found in this recording"),
+            Err(e) => self.store.toast(&format!("Couldn't transcribe the recording: {e}")),
+        }
+    }
+
+    /// Get Text on a photo: the text the server reads in it, onto the line under it.
+    pub async fn photo_text(&self, id: &str) {
+        let (api, att) = (self.store.api.clone(), id.to_owned());
+        match bg(async move { api.photo_text(&att).await }).await {
+            Ok(t) if !t.trim().is_empty() => self.write_under(id, t.trim()),
+            Ok(_) => self.store.toast("No text found in this photo"),
+            Err(e) => self.store.toast(&format!("Couldn't read the photo: {e}")),
+        }
+    }
+
+    /// Takes a photo's or recording's line out of the note, with Undo. Text under it stays.
+    pub fn remove_attachment(self: &Rc<Self>, id: &str, what: &str) {
+        let all = self.shown_text();
+        let needle = format!("att:{id}");
+        let Some(line) = all.lines().position(|l| l.contains(&needle)) else { return };
+        let Some(start) = self.buffer.iter_at_line(line as i32) else { return };
+        let mut end = start;
+        end.forward_line();
+        let (a, b) = (start.offset(), end.offset());
+        self.edit(|buf| buf.delete(&mut buf.iter_at_offset(a), &mut buf.iter_at_offset(b)));
+        if let Some(main) = self.main.upgrade() {
+            let e = self.clone();
+            main.toast_undo(&format!("{what} removed"), move || e.run_undo(false));
+        }
+    }
+
+    /// Right-click on a photo or recording: its actions.
+    fn attachment_menu(self: &Rc<Self>, x: f64, y: f64) -> bool {
+        let (bx, by) = self.view.window_to_buffer_coords(gtk::TextWindowType::Widget, x as i32, y as i32);
+        let Some(p) = self.view.picture_at(bx as f32, by as f32) else { return false };
+        let photo = p.texture.is_some();
+        let features = self.store.features.borrow().clone();
+        let menu = gio::Menu::new();
+        let group = gio::SimpleActionGroup::new();
+        let add = |label: &str, name: &str, f: Box<dyn Fn(&Rc<Editor>)>| {
+            let a = gio::SimpleAction::new(name, None);
+            let weak = self.me.clone();
+            a.connect_activate(move |_, _| {
+                if let Some(e) = weak.upgrade() {
+                    f(&e);
+                }
+            });
+            group.add_action(&a);
+            menu.append(Some(label), Some(&format!("media.{name}")));
+        };
+        let id = p.id.clone();
+        if !photo {
+            let i = id.clone();
+            add(if self.is_playing(&id) { "Pause" } else { "Play" }, "play", Box::new(move |e| e.play(i.clone())));
+        }
+        if self.can_edit() {
+            if photo && features.photo_text {
+                let i = id.clone();
+                add("Get Text", "text", Box::new(move |e| {
+                    let (e, i) = (e.clone(), i.clone());
+                    glib::spawn_future_local(async move { e.photo_text(&i).await });
+                }));
+            }
+            if !photo && features.transcription {
+                let i = id.clone();
+                add("Transcribe", "transcribe", Box::new(move |e| {
+                    let (e, i) = (e.clone(), i.clone());
+                    glib::spawn_future_local(async move { e.transcribe(&i).await });
+                }));
+            }
+            let i = id.clone();
+            let what = if photo { "Photo" } else { "Recording" };
+            add(&format!("Remove {what}"), "remove", Box::new(move |e| e.remove_attachment(&i, what)));
+        }
+        if menu.n_items() == 0 {
+            return false;
+        }
+        let popover = gtk::PopoverMenu::from_model(Some(&menu));
+        popover.insert_action_group("media", Some(&group));
+        popover.set_parent(&self.view);
+        popover.set_has_arrow(false);
+        popover.set_pointing_to(Some(&gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+        popover.connect_closed(|p| {
+            let p = p.clone();
+            glib::idle_add_local_once(move || p.unparent());
+        });
+        popover.popup();
+        true
     }
 
     /// Plays a recording, or pauses it if it's playing.
@@ -1476,6 +1891,11 @@ impl Editor {
         self.view.pictures().iter().map(|p| if p.texture.is_some() { "photo".to_owned() } else { p.label.trim().to_owned() }).collect()
     }
 
+    /// The photos and recordings showing, by attachment id.
+    pub fn media_ids(&self) -> Vec<String> {
+        self.view.pictures().iter().map(|p| p.id.clone()).collect()
+    }
+
     /// Adds a file as Add Photo does.
     pub fn add_file(self: &Rc<Self>, path: &str) {
         let (e, file) = (self.clone(), gio::File::for_path(path));
@@ -1492,6 +1912,10 @@ impl Editor {
 
     /// Leaves the note: drops presence, saves, and discards it if it was left blank.
     pub fn close(&self) {
+        if self.saving.get() {
+            self.close_after_save.set(true);
+            return;
+        }
         if self.closed.replace(true) {
             return;
         }
@@ -1503,6 +1927,16 @@ impl Editor {
         }
         if let Some((_, media)) = self.player.take() {
             media.pause();
+        }
+        if let Some(r) = self.recording.take() {
+            r.timer.remove();
+            r.rec.cancel();
+            if let Some(t) = r.live {
+                t.abort();
+            }
+        }
+        if let Some(spot) = self.spot.take() {
+            self.spot_done(&spot);
         }
         self.doc.borrow().clear_presence();
         self.take_outbox();
@@ -1533,6 +1967,25 @@ impl Editor {
             self.store.flush_note(&self.id);
         }
     }
+}
+
+/// Where a voice memo goes, picked when recording starts: on a line of its own under the cursor, or at
+/// the end. Marks follow everyone's edits. A live transcript is written there as it's heard: deltas are
+/// added, and each final replaces the stretch of deltas it covers. The player goes above it.
+struct Spot {
+    anchor: gtk::TextMark,
+    /// The transcript's start and end, and where the stretch still being heard starts, once it has a line.
+    from: Option<gtk::TextMark>,
+    to: Option<gtk::TextMark>,
+    stretch: Option<gtk::TextMark>,
+}
+
+struct Recording {
+    rec: crate::recorder::Recording,
+    started: std::time::Instant,
+    timer: glib::SourceId,
+    /// The live transcript's link, which ends once its last words are in.
+    live: Option<tokio::task::JoinHandle<()>>,
 }
 
 #[derive(Clone)]

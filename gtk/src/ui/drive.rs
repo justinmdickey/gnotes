@@ -41,6 +41,9 @@
 //! tidy | edit-ai <instruction>   Tidy Up or Edit with AI, applied
 //! ai-write <prompt>        the AI Prompt at the cursor
 //! wait-writer <text>|<name>  the line with <text> is marked as written by <name>
+//! record-start | record-stop | record-cancel   a voice memo (GNOTES_AUDIO_SRC stands in for the mic)
+//! live-delta <text> | live-final <text>       live transcript words, as the server sends them
+//! get-text <n>             Get Text on the open note's nth photo or recording (from 0)
 //! wait-answer <text>       Ask's last answer has <text>
 //! cite <n>                 opens the note the last answer's [n] links to
 //! dump <file.json>          the open note's text, title and peers, the sidebar's rows, the status
@@ -100,7 +103,7 @@ pub fn open_screen(main: &Rc<Main>, target: &str) {
         }
         "new-notebook" => dialogs::new_notebook(main, None),
         // With AI services: the note's Summary, Tidy Up's preview, Edit with AI asking.
-        "summary" | "tidy" | "editai" => {
+        "summary" | "tidy" | "editai" | "record" => {
             if let Some(n) = note(arg) {
                 main.open_note(&n.id, false);
                 let (m, kind) = (main.clone(), kind.to_owned());
@@ -110,6 +113,7 @@ pub fn open_screen(main: &Rc<Main>, target: &str) {
                     match kind.as_str() {
                         "summary" => super::ai::summary_dialog(&m, &e),
                         "tidy" => super::ai::rewrite_dialog(&m, &e, super::ai::Rewrite::Tidy),
+                        "record" => e.start_recording(),
                         _ => super::ai::rewrite_dialog(&m, &e, super::ai::Rewrite::Edit),
                     }
                 });
@@ -377,6 +381,33 @@ async fn run(main: &Rc<Main>, cmd: &str, arg: &str) {
                 })
             })
             .await
+        }
+        "record-start" => {
+            if let Some(e) = editor() {
+                e.start_recording();
+            }
+        }
+        "record-stop" | "record-cancel" => {
+            if let Some(e) = editor() {
+                e.stop_recording(cmd == "record-stop");
+            }
+        }
+        "live-delta" => {
+            if let Some(e) = editor() {
+                e.spot_delta(arg);
+            }
+        }
+        "live-final" => {
+            if let Some(e) = editor() {
+                e.spot_final(arg);
+            }
+        }
+        "get-text" => {
+            if let Some(e) = editor()
+                && let Some(id) = e.media_ids().get(arg.parse::<usize>().unwrap_or(0)).cloned()
+            {
+                e.photo_text(&id).await;
+            }
         }
         "wait-answer" => until(&format!("an answer with {arg:?}"), || main.ask.get().is_some_and(|a| a.last_answer().contains(arg))).await,
         "cite" => {

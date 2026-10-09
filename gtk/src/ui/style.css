@@ -128,3 +128,12 @@
 .chip {
   padding: 4px 14px;
 }
+
+.recording-bar {
+  padding: 6px 8px 6px 16px;
+  border-radius: 99px;
+}
+
+.recording-dot {
+  color: #e01b24;
+}

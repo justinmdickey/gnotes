@@ -102,7 +102,12 @@ impl Main {
 
         {
             let toasts = toasts.clone();
-            *store.toast.borrow_mut() = Some(Box::new(move |msg| toasts.add_toast(adw::Toast::new(msg))));
+            *store.toast.borrow_mut() = Some(Box::new(move |msg| {
+                if std::env::var_os("GNOTES_DRIVE").is_some() {
+                    eprintln!("toast: {msg}");
+                }
+                toasts.add_toast(adw::Toast::new(msg))
+            }));
         }
         {
             let w = window.clone();
@@ -222,6 +227,10 @@ impl Main {
     }
 
     pub fn toast(&self, msg: &str) {
+        // Driven runs (e2e) say what the user would have been told.
+        if std::env::var_os("GNOTES_DRIVE").is_some() {
+            eprintln!("toast: {msg}");
+        }
         self.toasts.add_toast(adw::Toast::new(msg));
     }
 
