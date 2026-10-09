@@ -40,6 +40,7 @@
 //! wait-dialog <text>       the dialog showing has <text> in it
 //! tidy | edit-ai <instruction>   Tidy Up or Edit with AI, applied
 //! ai-write <prompt>        the AI Prompt at the cursor
+//! wait-writer <text>|<name>  the line with <text> is marked as written by <name>
 //! wait-answer <text>       Ask's last answer has <text>
 //! cite <n>                 opens the note the last answer's [n] links to
 //! dump <file.json>          the open note's text, title and peers, the sidebar's rows, the status
@@ -365,6 +366,17 @@ async fn run(main: &Rc<Main>, cmd: &str, arg: &str) {
             if let Some(e) = editor() {
                 super::ai::write_here(main, &e, arg).await;
             }
+        }
+        "wait-writer" => {
+            let (text, name) = arg.split_once('|').unwrap_or((arg, ""));
+            until(&format!("{text:?} marked as {name}'s"), || {
+                editor().is_some_and(|e| {
+                    let all = e.shown_text();
+                    let Some(line) = all.lines().position(|l| l.contains(text)) else { return false };
+                    e.line_writer(line as i32).is_some_and(|w| w.starts_with(name))
+                })
+            })
+            .await
         }
         "wait-answer" => until(&format!("an answer with {arg:?}"), || main.ask.get().is_some_and(|a| a.last_answer().contains(arg))).await,
         "cite" => {

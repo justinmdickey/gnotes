@@ -69,6 +69,8 @@ type \\n- [ ] Coffee\\nTea
 signal ${f("typed")}
 wait-file ${f("remote")}
 wait-text Bananas
+wait-writer Bananas|Sam
+signal ${f("blamed")}
 sleep 1200
 undo
 signal ${f("undone")}
@@ -132,8 +134,10 @@ try {
 
   samHere.insert("\n- [ ] Bananas", samHere.text().indexOf("- [ ] Lemons") + "- [ ] Lemons".length);
   signal("remote");
-  await waitFile("undone");
+  await waitFile("blamed");
   check("someone else's edit shows up live", true);
+  check("a line someone else wrote is marked as theirs", true);
+  await waitFile("undone");
   text = await serverText(ids.groceries, (t) => !t.includes("Coffee"));
   check("undo takes back your own typing", !text.includes("Coffee") && !text.includes("Tea"), text.slice(-60));
   check("undo leaves others' edits alone", text.includes("- [ ] Bananas"), text);

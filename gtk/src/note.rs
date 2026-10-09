@@ -374,6 +374,30 @@ impl NoteDoc {
         Some(self.doc.get_cursor_pos(&cursor).ok()?.current.pos)
     }
 
+    /// Who typed last in each of these character ranges (lines): the peer of the character with the
+    /// highest Lamport time, and when (Unix seconds; 0 if not recorded). None for an empty range.
+    pub fn writers(&self, ranges: &[(usize, usize)]) -> Vec<Option<(u64, i64)>> {
+        ranges
+            .iter()
+            .map(|&(from, to)| {
+                let mut last: Option<(u32, u64, i64)> = None;
+                for i in from..to {
+                    let Some(id) = self.text.get_cursor(i, Side::Middle).and_then(|c| c.id) else { continue };
+                    let Some(change) = self.doc.get_change(id) else { continue };
+                    let lamport = change.lamport + (id.counter - change.id.counter) as u32;
+                    if last.is_none_or(|(l, _, _)| lamport > l) {
+                        last = Some((lamport, id.peer, change.timestamp));
+                    }
+                }
+                last.map(|(_, peer, ts)| (peer, ts))
+            })
+            .collect()
+    }
+
+    pub fn peer_id(&self) -> u64 {
+        self.doc.peer_id()
+    }
+
     /// Everyone else with the note open, one entry per editing session.
     pub fn peers(&self) -> Vec<Peer> {
         let mine = self.doc.peer_id().to_string();
@@ -495,6 +519,20 @@ mod tests {
         assert_eq!((peers[0].name.as_str(), peers[0].color.as_str()), ("Ann", "user-red"));
         assert_eq!(peers[0].cursor, Some((2, 5)));
         assert!(a.peers().is_empty(), "you aren't your own peer");
+    }
+
+    #[test]
+    fn lines_go_to_who_typed_last() {
+        let mut a = NoteDoc::new();
+        let mut b = NoteDoc::new();
+        a.insert(0, "first line\nsecond");
+        sync(&a, &mut b);
+        b.insert(17, " changed");
+        sync(&b, &mut a);
+        let w = a.writers(&[(0, 10), (11, 25), (25, 25)]);
+        assert_eq!(w[0].map(|x| x.0), Some(a.peer_id()));
+        assert_eq!(w[1].map(|x| x.0), Some(b.peer_id()));
+        assert_eq!(w[2], None);
     }
 
     #[test]

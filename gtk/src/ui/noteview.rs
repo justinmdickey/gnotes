@@ -58,6 +58,8 @@ mod imp {
         pub cursors: RefCell<Vec<RemoteCursor>>,
         pub pictures: RefCell<Vec<Picture>>,
         pub decor: RefCell<Decor>,
+        /// Lines others wrote, by where they start, in their writer's color.
+        pub bars: RefCell<Vec<(usize, (f32, f32, f32))>>,
     }
 
     #[glib::object_subclass]
@@ -116,6 +118,15 @@ mod imp {
                 return;
             }
             view.draw_decor(&self.decor.borrow(), &snapshot);
+            // Who wrote a line someone else typed in, as a bar in their color beside it.
+            for &(o, (r, g, b)) in self.bars.borrow().iter() {
+                let it = buffer.iter_at_offset(o as i32);
+                let (y, h) = view.line_yrange(&it);
+                let rect = graphene::Rect::new(view.left_margin() as f32 - 20.0, y as f32 + 1.0, 3.0, h as f32 - 2.0);
+                snapshot.push_rounded_clip(&gsk::RoundedRect::from_rect(rect, 1.5));
+                snapshot.append_color(&gtk::gdk::RGBA::new(r, g, b, 0.8), &rect);
+                snapshot.pop();
+            }
             for p in self.pictures.borrow().iter() {
                 let rect = view.picture_rect(p);
                 let radius = if p.texture.is_some() { 8.0 } else { rect.height() / 2.0 };
@@ -206,6 +217,11 @@ impl NoteView {
     pub fn picture_at(&self, x: f32, y: f32) -> Option<Picture> {
         let pictures = self.imp().pictures.borrow();
         pictures.iter().find(|p| self.picture_rect(p).contains_point(&graphene::Point::new(x, y))).cloned()
+    }
+
+    pub fn set_bars(&self, bars: Vec<(usize, (f32, f32, f32))>) {
+        self.imp().bars.replace(bars);
+        self.queue_draw();
     }
 
     pub fn set_decor(&self, decor: Decor) {

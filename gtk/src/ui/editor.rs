@@ -62,6 +62,12 @@ pub struct Editor {
     format_bar: gtk::Widget,
     share_button: gtk::Button,
     menu_button: gtk::MenuButton,
+    /// Whose editing session each Loro peer was, from the server, and when that was last asked.
+    authors: RefCell<HashMap<String, crate::api::Author>>,
+    authors_asked: Cell<i64>,
+    authors_retry: Cell<bool>,
+    /// Lines others wrote: where each starts, and who and when, for its tooltip.
+    blame: RefCell<Vec<(i32, String)>>,
     /// Attachments shown in the note, by id.
     media: RefCell<HashMap<String, Media>>,
     /// Spacing tags made for photos, by height.
@@ -283,6 +289,10 @@ impl Editor {
             share_button: share_button.clone(),
             menu_button,
             media: Default::default(),
+            authors: Default::default(),
+            authors_asked: Cell::new(0),
+            authors_retry: Cell::new(false),
+            blame: Default::default(),
             photo_tags: Default::default(),
             player: Default::default(),
             focus_when_ready: Cell::new(false),
@@ -755,6 +765,25 @@ impl Editor {
         });
         self.view.add_controller(click);
 
+        // Pointing beside a marked line says who wrote it.
+        self.view.set_has_tooltip(true);
+        let weak = Rc::downgrade(self);
+        self.view.connect_query_tooltip(move |view, x, y, _, tip| {
+            let Some(e) = weak.upgrade() else { return false };
+            if x > view.left_margin() {
+                return false;
+            }
+            let (_, by) = view.window_to_buffer_coords(gtk::TextWindowType::Widget, x, y);
+            let (it, _) = view.line_at_y(by);
+            match e.line_writer(it.line()) {
+                Some(w) => {
+                    tip.set_text(Some(&w));
+                    true
+                }
+                None => false,
+            }
+        });
+
         let motion = gtk::EventControllerMotion::new();
         let weak = Rc::downgrade(self);
         motion.connect_motion(move |_, x, y| {
@@ -1169,6 +1198,92 @@ impl Editor {
         }
         self.view.set_pictures(pictures);
         self.styled.replace(styled);
+        self.show_blame(&text);
+    }
+
+    /// Others can edit this note, so lines they wrote are marked.
+    fn shared(&self) -> bool {
+        self.store.note(&self.id).is_some_and(|n| n.shared || n.role != Role::Owner)
+    }
+
+    /// Bars beside the lines someone else typed in last, like web/src/lib/blame.ts.
+    fn show_blame(&self, text: &str) {
+        if !self.shared() {
+            self.view.set_bars(Vec::new());
+            self.blame.borrow_mut().clear();
+            return;
+        }
+        let mut ranges = Vec::new();
+        let mut at = 0;
+        for line in text.split('\n') {
+            let n = line.chars().count();
+            ranges.push((at, at + n));
+            at += n + 1;
+        }
+        let doc = self.doc.borrow();
+        let writers = doc.writers(&ranges);
+        let mine = doc.peer_id();
+        drop(doc);
+        let me = self.store.user();
+        let mut bars = Vec::new();
+        let mut labels = Vec::new();
+        let mut unknown = false;
+        for (line, (range, writer)) in ranges.iter().zip(writers).enumerate() {
+            let Some((peer, ts)) = writer else { continue };
+            let who = if peer == mine {
+                Some((Some(me.id.clone()), me.display_name.clone()))
+            } else {
+                self.authors.borrow().get(&peer.to_string()).map(|a| (a.user_id.clone(), a.name.clone().unwrap_or_else(|| "Someone".into())))
+            };
+            let Some((user, name)) = who else {
+                unknown = true;
+                continue;
+            };
+            if user.as_deref() == Some(me.id.as_str()) {
+                continue;
+            }
+            let color = user.as_deref().map_or("user-unknown", color_for);
+            bars.push((range.0, color_rgb(color)));
+            let when = glib::DateTime::from_unix_local(ts).ok().filter(|_| ts > 0).and_then(|t| t.format("%b %-d, %-l:%M %p").ok());
+            labels.push((line as i32, when.map_or(name.clone(), |w| format!("{name} · {w}"))));
+        }
+        self.view.set_bars(bars);
+        self.blame.replace(labels);
+        if unknown {
+            self.fetch_authors();
+        }
+    }
+
+    /// Asks the server whose sessions wrote this note; again later if a new one turns up.
+    fn fetch_authors(&self) {
+        let now = super::store::now_ms();
+        let wait = 5000 - (now - self.authors_asked.get());
+        if wait > 0 {
+            // Asked a moment ago: look again once the wait is up, if still needed.
+            if !self.authors_retry.replace(true) {
+                let weak = self.me.clone();
+                glib::timeout_add_local_once(Duration::from_millis(wait as u64), move || {
+                    if let Some(e) = weak.upgrade() {
+                        e.authors_retry.set(false);
+                        e.queue_restyle();
+                    }
+                });
+            }
+            return;
+        }
+        self.authors_asked.set(now);
+        let (api, id, weak) = (self.store.api.clone(), self.id.clone(), self.me.clone());
+        glib::spawn_future_local(async move {
+            let Ok(authors) = bg(async move { api.authors(&id).await }).await else { return };
+            let Some(e) = weak.upgrade() else { return };
+            e.authors.replace(authors);
+            e.queue_restyle();
+        });
+    }
+
+    /// Who wrote line `n`, if someone else did.
+    pub fn line_writer(&self, n: i32) -> Option<String> {
+        self.blame.borrow().iter().find(|(l, _)| *l == n).map(|(_, w)| w.clone())
     }
 
     fn photo_tag(&self, space: i32) -> gtk::TextTag {

@@ -26,6 +26,8 @@ const styles = [...(flag("--light") ? [] : ["dark"]), ...(flag("--dark") ? [] : 
 const demo = await startDemo({ ai: flag("--ai") });
 // Sam keeps Groceries open with the cursor in it, so the app has someone to show.
 const sam = await demo.stay(demo.sam, demo.ids.groceries, "Spinach");
+// A line Sam wrote, which Groceries marks as his.
+sam.insert("\n- [ ] Bananas", sam.text().indexOf("- [ ] Lemons") + "- [ ] Lemons".length);
 
 mkdirSync(out, { recursive: true });
 const saved = [];
