@@ -8,7 +8,7 @@ bin="$prefix/bin/gnotes"
 apps="$prefix/share/applications"
 icons="$prefix/share/icons/hicolor/scalable/apps"
 if [ "${1:-}" = "--uninstall" ]; then
-  rm -f "$bin" "$apps/com.erisdor.Gnotes.desktop" "$icons/com.erisdor.Gnotes.svg"
+  rm -f "$bin" "$apps/com.erisdor.Gnotes.desktop" "$icons/com.erisdor.Gnotes.svg" "$prefix/share/metainfo/com.erisdor.Gnotes.metainfo.xml"
   echo "Removed Gnotes from $prefix"
   exit 0
 fi
@@ -16,5 +16,6 @@ cargo build --release -p gnotes-gtk
 install -Dm755 target/release/gnotes "$bin"
 install -Dm644 gtk/data/com.erisdor.Gnotes.desktop "$apps/com.erisdor.Gnotes.desktop"
 install -Dm644 gtk/data/com.erisdor.Gnotes.svg "$icons/com.erisdor.Gnotes.svg"
+install -Dm644 gtk/data/com.erisdor.Gnotes.metainfo.xml "$prefix/share/metainfo/com.erisdor.Gnotes.metainfo.xml"
 if command -v update-desktop-database >/dev/null; then update-desktop-database "$apps" || true; fi
 echo "Installed $bin; Gnotes is in your apps"

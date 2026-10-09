@@ -1,0 +1,47 @@
+# Maintainer: Justin Dickey <justin.dickey@e-gineering.com>
+pkgname=gnotes-gtk
+pkgver=1.5.0
+pkgrel=1
+pkgdesc='Markdown notes for GNOME, on your computer or shared live through your own Gnotes server'
+arch=('x86_64' 'aarch64')
+url='https://github.com/justinmdickey/gnotes'
+license=('MIT')
+depends=('gtk4' 'libadwaita' 'gstreamer' 'gst-plugins-base' 'gst-plugins-good' 'glibc' 'gcc-libs')
+makedepends=('cargo')
+optdepends=(
+  'gst-plugin-pipewire: record voice memos from PipeWire microphones'
+  'ffmpeg: transcribe voice memos with services that only read WAV'
+)
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+prepare() {
+  cd "gnotes-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "gnotes-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  export GNOTES_VERSION="$pkgver"
+  cargo build --frozen --release -p gnotes-gtk
+}
+
+check() {
+  cd "gnotes-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  # The parts that need no display; the rest runs headless in gtk/scripts/e2e.mjs.
+  cargo test --frozen --release -p gnotes-gtk --lib
+}
+
+package() {
+  cd "gnotes-$pkgver"
+  install -Dm755 target/release/gnotes "$pkgdir/usr/bin/gnotes"
+  install -Dm644 gtk/data/com.erisdor.Gnotes.desktop "$pkgdir/usr/share/applications/com.erisdor.Gnotes.desktop"
+  install -Dm644 gtk/data/com.erisdor.Gnotes.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/com.erisdor.Gnotes.svg"
+  install -Dm644 gtk/data/com.erisdor.Gnotes.metainfo.xml "$pkgdir/usr/share/metainfo/com.erisdor.Gnotes.metainfo.xml"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

@@ -1,6 +1,12 @@
 //! The Gnotes GTK client. `api`, `sync`, `note` and `cache` are the parts without GTK, tested against
 //! a real server in `tests/`; `ui` is the app.
 
+/// The release this was built from (`GNOTES_VERSION` at build time, as for the server), or "dev".
+pub const VERSION: &str = match option_env!("GNOTES_VERSION") {
+    Some(v) => v,
+    None => "dev",
+};
+
 pub mod api;
 pub mod cache;
 pub mod local;

@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.erisdor.Gnotes</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Gnotes</name>
+  <summary>Markdown notes, on your computer or shared live</summary>
+  <developer id="com.erisdor">
+    <name>Justin Dickey</name>
+  </developer>
+  <description>
+    <p>Write Markdown notes that read like formatted text. Start writing straight away with your notes kept on this computer, and move them to your own Gnotes server whenever you want them on your phone or to share them.</p>
+    <p>With a server:</p>
+    <ul>
+      <li>Share a note or a whole notebook and edit it together live, with each other's cursors</li>
+      <li>Keep working offline; edits merge when you're back</li>
+      <li>Ask your notes questions, summarize and tidy them, with AI services you choose</li>
+      <li>Record voice memos with transcripts, and read the text in photos</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">com.erisdor.Gnotes.desktop</launchable>
+  <url type="homepage">https://github.com/justinmdickey/gnotes</url>
+  <url type="bugtracker">https://github.com/justinmdickey/gnotes/issues</url>
+  <content_rating type="oars-1.1"/>
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+  <releases>
+    <release version="1.5.0" date="2026-10-09">
+      <description>
+        <p>The first release of the GNOME app.</p>
+      </description>
+    </release>
+  </releases>
+</component>

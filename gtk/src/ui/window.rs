@@ -425,7 +425,7 @@ impl Main {
         let about = adw::AboutDialog::builder()
             .application_name("Gnotes")
             .application_icon(super::APP_ID)
-            .version(env!("CARGO_PKG_VERSION"))
+            .version(crate::VERSION)
             .license_type(gtk::License::MitX11)
             .comments("Markdown notes on your own server, edited live together")
             .build();

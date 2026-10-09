@@ -179,7 +179,7 @@ fn account_page(main: &Rc<Main>, dialog: &adw::PreferencesDialog) -> adw::Prefer
     let about = adw::PreferencesGroup::new();
     let version = gtk::Label::builder().css_classes(["dim-label", "caption"]).build();
     let features = main.store.features.borrow().version.clone();
-    version.set_label(&format!("Gnotes {} · this app {}", if features.is_empty() { "?" } else { &features }, env!("CARGO_PKG_VERSION")));
+    version.set_label(&format!("Gnotes {} · this app {}", if features.is_empty() { "?" } else { &features }, crate::VERSION));
     about.add(&version);
     page.add(&about);
     page

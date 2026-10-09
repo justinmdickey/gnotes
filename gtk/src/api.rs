@@ -344,7 +344,7 @@ pub fn normalize_server(input: &str) -> String {
 
 fn client() -> reqwest::Client {
     reqwest::Client::builder()
-        .user_agent(concat!("Gnotes GTK/", env!("CARGO_PKG_VERSION")))
+        .user_agent(format!("Gnotes GTK/{}", crate::VERSION))
         .connect_timeout(std::time::Duration::from_secs(10))
         .build()
         .expect("HTTP client")
