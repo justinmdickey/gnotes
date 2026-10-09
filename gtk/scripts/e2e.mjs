@@ -213,6 +213,7 @@ const treeRun = demo.runApp({
       "restore Pantry",
       "sleep 800",
       "share-note Snippets|sam|viewer",
+      "drag-note Plumber|Personal",
       "sleep 800",
       `dump ${f("tree2.json")}`,
       "quit",
@@ -230,6 +231,7 @@ const cookbook = t2.notebooks.find((n) => n.name === "Cookbook");
 check("New Notebook and Rename work", !!cookbook && !t2.notebooks.some((n) => n.name === "Recipes"), t2.notebooks.map((n) => n.name));
 check("Move to puts a note in another notebook", t2.notes.find((n) => n.title === "Snippets")?.notebook_id === cookbook?.id);
 check("Restore brings a note back from the trash", t2.notes.some((n) => n.title === "Pantry"));
+check("dragging a note onto a notebook moves it", t2.notes.find((n) => n.title === "Plumber")?.notebook_id === t2.notebooks.find((n) => n.name === "Personal")?.id);
 const samTree = await sam.tree();
 check("Share gives someone else the note", samTree.notes.some((n) => n.title === "Snippets" && n.role === "viewer"), samTree.notes.map((n) => [n.title, n.role]));
 

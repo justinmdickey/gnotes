@@ -50,6 +50,10 @@
   background-color: alpha(currentColor, 0.13);
 }
 
+.navigation-sidebar row.drop-here {
+  background-color: alpha(var(--accent-bg-color), 0.25);
+}
+
 .folder-icon {
   color: var(--accent-color);
 }

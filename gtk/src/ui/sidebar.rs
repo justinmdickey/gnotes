@@ -406,7 +406,12 @@ impl Sidebar {
 
     fn add_heading(&self, label: &str) {
         let l = gtk::Label::builder().label(label).xalign(0.0).css_classes(["heading", "dim-label", "sidebar-heading"]).build();
-        self.push(Row::Heading, &l).add_css_class("heading-row");
+        let row = self.push(Row::Heading, &l);
+        row.add_css_class("heading-row");
+        // Dropping on the Notes heading moves to your top level.
+        if let Some(main) = self.main.upgrade() {
+            drop_into(&main, &row, None);
+        }
     }
 
     fn add_notebook(
@@ -433,6 +438,10 @@ impl Sidebar {
         let row = self.push(Row::Notebook(nb.id.clone()), &b);
         row.set_tooltip_text(Some(&nb.name));
         attach_menu(main, &row, Item::Notebook(nb.clone()));
+        if nb.role.can_edit() {
+            drag_from(&row, &format!("notebook:{}", nb.id));
+            drop_into(main, &row, Some(nb.id.clone()));
+        }
         if open {
             for k in &kids {
                 self.add_notebook(main, tree, map, k, depth + 1);
@@ -453,7 +462,81 @@ impl Sidebar {
         }
         let row = self.push(Row::Note(n.id.clone()), &b);
         attach_menu(main, &row, Item::Note(n.clone()));
+        if n.role.can_edit() {
+            drag_from(&row, &format!("note:{}", n.id));
+        }
     }
+}
+
+/// Rows drag as `note:<id>` or `notebook:<id>`.
+fn drag_from(row: &gtk::ListBoxRow, payload: &str) {
+    let source = gtk::DragSource::builder().actions(gtk::gdk::DragAction::MOVE).build();
+    let payload = payload.to_owned();
+    source.connect_prepare(move |_, _, _| Some(gtk::gdk::ContentProvider::for_value(&payload.to_value())));
+    let r = row.clone();
+    source.connect_drag_begin(move |src, _| {
+        src.set_icon(Some(&gtk::WidgetPaintable::new(Some(&r))), 0, 0);
+    });
+    row.add_controller(source);
+}
+
+/// Something dropped on a notebook row (or the Notes heading, `None`) moves there.
+fn drop_into(main: &Rc<Main>, row: &gtk::ListBoxRow, target: Option<String>) {
+    let drop = gtk::DropTarget::new(String::static_type(), gtk::gdk::DragAction::MOVE);
+    let weak = Rc::downgrade(main);
+    let r = row.clone();
+    drop.connect_enter(move |_, _, _| {
+        r.add_css_class("drop-here");
+        gtk::gdk::DragAction::MOVE
+    });
+    let r = row.clone();
+    drop.connect_leave(move |_| r.remove_css_class("drop-here"));
+    let r = row.clone();
+    drop.connect_drop(move |_, value, _, _| {
+        r.remove_css_class("drop-here");
+        let (Some(main), Ok(payload)) = (weak.upgrade(), value.get::<String>()) else { return false };
+        move_dropped(&main, &payload, target.clone())
+    });
+    row.add_controller(drop);
+}
+
+/// Moves a dragged `note:<id>` or `notebook:<id>` into `target`. False when it can't go there.
+pub fn move_dropped(main: &Rc<Main>, payload: &str, target: Option<String>) -> bool {
+    let tree = main.store.tree.borrow().clone();
+    let Some((kind, id)) = payload.split_once(':') else { return false };
+    let item = match kind {
+        "note" => tree.notes.iter().find(|n| n.id == id).cloned().map(Item::Note),
+        "notebook" => tree.notebooks.iter().find(|n| n.id == id).cloned().map(Item::Notebook),
+        _ => None,
+    };
+    let Some(item) = item else { return false };
+    // Only your own things go to your top level; a notebook can't go into itself or what's in it.
+    let (owner, current) = match &item {
+        Item::Note(n) => (n.role == crate::api::Role::Owner, n.notebook_id.clone()),
+        Item::Notebook(nb) => (nb.role == crate::api::Role::Owner, nb.parent_id.clone()),
+    };
+    if target == current || (target.is_none() && !owner) {
+        return false;
+    }
+    if let (Item::Notebook(nb), Some(t)) = (&item, &target) {
+        let mut at = Some(t.clone());
+        while let Some(x) = at {
+            if x == nb.id {
+                return false;
+            }
+            at = tree.notebooks.iter().find(|n| n.id == x).and_then(|n| n.parent_id.clone());
+        }
+    }
+    if let Some(t) = &target
+        && !tree.notebooks.iter().any(|n| &n.id == t && n.role.can_edit())
+    {
+        return false;
+    }
+    dialogs::move_item(main, &item, target.clone());
+    if let Some(t) = target {
+        main.sidebar().unfold(&t);
+    }
+    true
 }
 
 /// What a row's menu acts on.

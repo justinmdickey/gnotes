@@ -27,6 +27,7 @@
 //! make-notebook <name>      at the top level
 //! rename-notebook <old>|<new>
 //! move-note <title>|<notebook>   ("Notes" is the top level)
+//! drag-note <title>|<notebook>   as dragging it onto that notebook in the sidebar ("Notes": the top)
 //! trash-note <title>
 //! restore <name>            from the trash
 //! share-note <title>|<username>|<editor or viewer>
@@ -286,6 +287,19 @@ async fn run(main: &Rc<Main>, cmd: &str, arg: &str) {
             let target = tree.notebooks.iter().find(|n| n.name == to).map(|n| n.id.clone());
             match tree.notes.iter().find(|n| n.title == title) {
                 Some(n) => dialogs::move_item(main, &Item::Note(n.clone()), target),
+                None => eprintln!("drive: no note {title}"),
+            }
+        }
+        "drag-note" => {
+            let (title, to) = arg.split_once('|').unwrap_or((arg, "Notes"));
+            let tree = main.store.tree.borrow().clone();
+            let target = tree.notebooks.iter().find(|n| n.name == to).map(|n| n.id.clone());
+            match tree.notes.iter().find(|n| n.title == title) {
+                Some(n) => {
+                    if !super::sidebar::move_dropped(main, &format!("note:{}", n.id), target) {
+                        eprintln!("drive: {title} can't be dropped on {to}");
+                    }
+                }
                 None => eprintln!("drive: no note {title}"),
             }
         }
