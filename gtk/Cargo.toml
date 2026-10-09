@@ -14,6 +14,8 @@ adw = { package = "libadwaita", version = "0.9", features = ["v1_7"] }
 anyhow = "1"
 async-channel = "2.5"
 base64 = "0.23.1"
+# Emoji by GitHub's names, for ":taco:" and the emoji picker in notes.
+emojis = "0.9"
 futures-util = "0.3.34"
 # Records voice memos from the microphone.
 gst = { package = "gstreamer", version = "0.25" }

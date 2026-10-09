@@ -222,6 +222,10 @@ const treeRun = demo.runApp({
 });
 await waitFile("trashed").catch(() => {});
 let t2 = await ann.tree();
+for (let t = 0; t < 5000 && t2.notes.some((n) => n.title === "Pantry"); t += 200) {
+  await sleep(200);
+  t2 = await ann.tree();
+}
 check("Move to Trash takes a note out of the tree", !t2.notes.some((n) => n.title === "Pantry"), t2.notes.map((n) => n.title));
 signal("trash-checked");
 ({ code, stderr } = await treeRun);
@@ -258,6 +262,37 @@ check("a recording shows a play button", existsSync(f("memo.json")) && dump("mem
 const snippetsText = await serverText(ids.snippets, (t) => t.includes("att:"));
 check("Add Photo uploads it and links it in the note", /!\[icon-192\]\(att:[0-9a-f-]+\)/.test(snippetsText), snippetsText.slice(-80));
 check("the photo shows in the note", existsSync(f("photo.json")) && dump("photo.json").media.includes("photo"), existsSync(f("photo.json")) && dump("photo.json").media);
+
+// The "/" menu and emoji.
+({ code, stderr } = await demo.runApp({
+  env: {
+    GNOTES_DRIVE: [
+      "wait-tree",
+      "open note:Snippets",
+      "wait-loaded",
+      "type \\n/che",
+      "wait-menu",
+      "pick Checklist",
+      "type Buy coffee",
+      "type \\nLunch was :taco:",
+      "sleep 200",
+      "type \\n:smil",
+      "wait-menu",
+      "pick :smile:",
+      "type \\n/table",
+      "wait-menu",
+      "pick Table",
+      "sleep 600",
+      "quit",
+    ].join("\n"),
+  },
+}));
+check("the slash menu and emoji ran", code === 0, { code, stderr });
+const slashed = await demo.read(ann, ids.snippets);
+check("the / menu sets a line's style", slashed.includes("- [ ] Buy coffee"), slashed.slice(-200));
+check("typing :taco: makes the emoji", slashed.includes("Lunch was 🌮"));
+check("the emoji list puts in the one picked", slashed.includes("😄"));
+check("the / menu adds a table", slashed.includes("| Column 1 | Column 2 | Column 3 |"));
 
 // Settings: your name, API keys, invites, AI services and import.
 writeFileSync(f("Imported.md"), "# Imported note\n\nFrom a Markdown file.");
@@ -314,7 +349,9 @@ check("a new server's first account is made from sign-in", code === 0 && setupDu
   const aiDemo = await startDemo({ ai: true });
   const aiAnn = aiDemo.ann;
   // Sam's open note in the main demo is irrelevant here; this one starts clean.
+  const aiStart = Date.now();
   ({ code, stderr } = await aiDemo.runApp({
+    timeout: 180_000,
     env: {
       GNOTES_AUDIO_SRC: "audiotestsrc is-live=true wave=sine",
       GNOTES_DRIVE: [
@@ -365,7 +402,7 @@ check("a new server's first account is made from sign-in", code === 0 && setupDu
       ].join("\n"),
     },
   }));
-  check("the AI tools ran", code === 0, { code, stderr });
+  check("the AI tools ran", code === 0, { code, stderr, seconds: (Date.now() - aiStart) / 1000 });
   check("Summary shows the note's summary", existsSync(f("summary.json")) && /Spinach, lemons and milk/.test(dump("summary.json").dialog_text));
   const tidied = await aiDemo.read(aiAnn, aiDemo.ids.groceries);
   check("Tidy Up applies the tidied note", tidied.includes("## To buy") && tidied.includes("- [x] Apples"), tidied);

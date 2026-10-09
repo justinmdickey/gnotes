@@ -4,6 +4,7 @@
 #![allow(clippy::type_complexity)]
 
 mod ai;
+mod complete;
 mod ask;
 mod dialogs;
 mod drive;
@@ -16,6 +17,7 @@ mod settings;
 mod shot;
 mod sidebar;
 mod store;
+mod tables;
 mod styling;
 mod window;
 

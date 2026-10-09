@@ -370,3 +370,18 @@ fn records_from_a_gstreamer_source() {
     // About 0.7 s of 16 kHz 16-bit mono.
     assert!(pcm > 10_000, "{pcm} bytes of PCM");
 }
+
+#[test]
+fn a_recording_stopped_at_once_still_stops() {
+    unsafe { std::env::set_var("GNOTES_AUDIO_SRC", "audiotestsrc is-live=true wave=sine") };
+    let dir = tempfile::tempdir().unwrap();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let path = dir.path().to_path_buf();
+    std::thread::spawn(move || {
+        let rec = gnotes_gtk::recorder::Recording::start(&path, None).unwrap();
+        let out = gtk::glib::MainContext::default().block_on(rec.stop());
+        let _ = done_tx.send(out.map(|b| b.len()));
+    });
+    let out = done_rx.recv_timeout(Duration::from_secs(10)).expect("stopping hung");
+    let _ = out;
+}

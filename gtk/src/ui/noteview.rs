@@ -69,7 +69,19 @@ mod imp {
         type ParentType = gtk::TextView;
     }
 
-    impl ObjectImpl for NoteView {}
+    impl ObjectImpl for NoteView {
+        fn dispose(&self) {
+            // Popovers set on the view (the "/" menu, the AI Prompt, a photo's menu) aren't children
+            // GtkTextView knows of; it would loop forever trying to remove them.
+            let mut child = self.obj().first_child();
+            while let Some(c) = child {
+                child = c.next_sibling();
+                if c.is::<gtk::Popover>() {
+                    c.unparent();
+                }
+            }
+        }
+    }
 
     impl WidgetImpl for NoteView {
         fn size_allocate(&self, width: i32, height: i32, baseline: i32) {

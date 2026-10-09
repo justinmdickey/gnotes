@@ -19,6 +19,8 @@
 //! cursor <n>                the cursor at the end of line n (from 0)
 //! wait-shown <text>         <text> shows whole, no marks hidden in it
 //! wait-hidden <text>        some of <text> is hidden by live preview
+//! wait-menu                the "/" menu or emoji list shows (type "/che" or ":ta" to open it)
+//! pick <label>             picks from it
 //! tick <n>                  clicks the nth checkbox, from 0
 //! format <style>            title, heading, subheading, body, check, bullet, number, quote, bold, italic
 //! new-note
@@ -104,7 +106,7 @@ pub fn open_screen(main: &Rc<Main>, target: &str) {
         }
         "new-notebook" => dialogs::new_notebook(main, None),
         // With AI services: the note's Summary, Tidy Up's preview, Edit with AI asking.
-        "summary" | "tidy" | "editai" | "record" => {
+        "summary" | "tidy" | "editai" | "record" | "slash" | "emoji" => {
             if let Some(n) = note(arg) {
                 main.open_note(&n.id, false);
                 let (m, kind) = (main.clone(), kind.to_owned());
@@ -115,6 +117,8 @@ pub fn open_screen(main: &Rc<Main>, target: &str) {
                         "summary" => super::ai::summary_dialog(&m, &e),
                         "tidy" => super::ai::rewrite_dialog(&m, &e, super::ai::Rewrite::Tidy),
                         "record" => e.start_recording(),
+                        "slash" => e.type_text("\n/"),
+                        "emoji" => e.type_text("\n:sm"),
                         _ => super::ai::rewrite_dialog(&m, &e, super::ai::Rewrite::Edit),
                     }
                 });
@@ -133,6 +137,9 @@ pub fn start(main: &Rc<Main>) {
         for line in script.lines().map(str::trim).filter(|l| !l.is_empty()) {
             let (cmd, arg) = line.split_once(' ').unwrap_or((line, ""));
             let arg = arg.replace("\\n", "\n");
+            if std::env::var_os("GNOTES_TRACE").is_some() {
+                eprintln!("drive> {line}");
+            }
             run(&main, cmd, &arg).await;
         }
     });
@@ -247,6 +254,12 @@ async fn run(main: &Rc<Main>, cmd: &str, arg: &str) {
         "undo" | "redo" => {
             if let Some(e) = editor() {
                 e.run_undo(cmd == "redo");
+            }
+        }
+        "wait-menu" => until("the menu", || editor().is_some_and(|e| e.menu_open())).await,
+        "pick" => {
+            if !editor().is_some_and(|e| e.pick_from_menu(arg)) {
+                eprintln!("drive: no {arg} in the menu");
             }
         }
         "tick" => {

@@ -51,11 +51,37 @@ pub fn schedule(window: &adw::ApplicationWindow) {
     });
 }
 
-/// False when there was nothing to draw yet.
+/// False when there was nothing to draw yet. An open popover (a menu) is its own surface, so it goes
+/// in a second file next to it, `<name>-popover.png`.
 pub fn save(window: &adw::ApplicationWindow, path: &std::ffi::OsStr) -> bool {
-    let (w, h) = (window.width(), window.height());
+    fn popover(w: &gtk::Widget) -> Option<gtk::Popover> {
+        if let Some(p) = w.downcast_ref::<gtk::Popover>()
+            && p.is_visible()
+        {
+            return Some(p.clone());
+        }
+        let mut child = w.first_child();
+        while let Some(c) = child {
+            if let Some(p) = popover(&c) {
+                return Some(p);
+            }
+            child = c.next_sibling();
+        }
+        None
+    }
+    if let Some(p) = popover(window.upcast_ref()) {
+        let file = std::path::Path::new(path);
+        let side = file.with_file_name(format!("{}-popover.png", file.file_stem().unwrap_or_default().to_string_lossy()));
+        render(p.upcast_ref(), side.as_os_str());
+    }
+    render(window.upcast_ref(), path)
+}
+
+fn render(widget: &gtk::Widget, path: &std::ffi::OsStr) -> bool {
+    let (w, h) = (widget.width(), widget.height());
+    let window = widget;
     let snapshot = gtk::Snapshot::new();
-    gtk::WidgetPaintable::new(Some(window)).snapshot(&snapshot, w as f64, h as f64);
+    gtk::WidgetPaintable::new(Some(widget)).snapshot(&snapshot, w as f64, h as f64);
     let Some(node) = snapshot.to_node() else {
         window.queue_draw();
         return false;

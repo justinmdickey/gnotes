@@ -50,6 +50,10 @@ pub struct Editor {
     closed: Cell<bool>,
     save_timer: RefCell<Option<glib::SourceId>>,
     style_queued: Cell<bool>,
+    /// The "/" menu and emoji list, and whether a check of what's typed is due.
+    completer: Rc<super::complete::Completer>,
+    complete_queued: Cell<bool>,
+    colon_typed: Cell<bool>,
     /// The lines whose Markdown marks show, around the cursor while the text has focus.
     active: Cell<Option<(i32, i32)>>,
     styled: RefCell<Styled>,
@@ -308,6 +312,9 @@ impl Editor {
             closed: Cell::new(false),
             save_timer: RefCell::new(None),
             style_queued: Cell::new(false),
+            completer: super::complete::Completer::new(&view),
+            complete_queued: Cell::new(false),
+            colon_typed: Cell::new(false),
             active: Cell::new(None),
             styled: RefCell::new(Styled::default()),
             timers: RefCell::new(Vec::new()),
@@ -359,6 +366,14 @@ impl Editor {
         editor.refresh_editable();
         editor.refresh_history();
 
+        {
+            let weak = Rc::downgrade(&editor);
+            editor.completer.on_pick(move |pick| {
+                if let Some(e) = weak.upgrade() {
+                    e.apply_pick(pick);
+                }
+            });
+        }
         editor.connect_buffer();
         editor.connect_view();
         editor.connect_buttons(&style_buttons, [&bold, &italic, &strike, &code], [&check, &bullets, &numbers, &quote], &photo);
@@ -693,6 +708,9 @@ impl Editor {
                 return;
             }
             e.doc.borrow().insert(it.offset() as usize, text);
+            if text.ends_with(':') {
+                e.colon_typed.set(true);
+            }
             e.after_typing();
         });
         let weak = Rc::downgrade(self);
@@ -717,6 +735,126 @@ impl Editor {
     fn after_typing(&self) {
         self.take_outbox();
         self.changed();
+        self.queue_complete();
+    }
+
+    /// Looks at what's before the cursor once the buffer has settled: the "/" menu, emoji.
+    fn queue_complete(&self) {
+        if self.complete_queued.replace(true) {
+            return;
+        }
+        let weak = self.me.clone();
+        glib::idle_add_local_once(move || {
+            if let Some(e) = weak.upgrade() {
+                e.complete_queued.set(false);
+                e.check_complete();
+            }
+        });
+    }
+
+    fn check_complete(self: &Rc<Self>) {
+        let colon = self.colon_typed.replace(false);
+        if !self.view.is_focus() || !self.can_edit() || self.buffer.has_selection() {
+            self.completer.hide();
+            return;
+        }
+        let cursor = self.buffer.iter_at_mark(&self.buffer.get_insert());
+        let at = cursor.offset() as usize;
+        // Code keeps its slashes and colons.
+        let in_code = self.styled.borrow().spans.iter().any(|s| (s.tag == "codeblock" || s.tag == "code") && s.start < at && at <= s.end);
+        if in_code {
+            self.completer.hide();
+            return;
+        }
+        let mut start = cursor;
+        start.set_line_offset(0);
+        let before = self.buffer.text(&start, &cursor, true).to_string();
+        // Like Slack: the closing colon of a whole ":name:" makes it the emoji.
+        if colon && let Some((emoji, n)) = super::complete::emoji_on_colon(&before) {
+            self.completer.hide();
+            let from = at as i32 - n as i32;
+            self.edit(|b| {
+                b.delete(&mut b.iter_at_offset(from), &mut b.iter_at_offset(at as i32));
+                b.insert(&mut b.iter_at_offset(from), emoji);
+            });
+            return;
+        }
+        let open_emoji = self.completer.is_open() && self.completer.kind.get() == super::complete::Kind::Emoji;
+        let Some((kind, back, query)) = super::complete::trigger_with(&before, if open_emoji { 0 } else { 2 }) else {
+            self.completer.hide();
+            return;
+        };
+        let items = match kind {
+            super::complete::Kind::Slash => {
+                let ai = self.store.features.borrow().summaries;
+                super::complete::slash_items(&query, ai)
+            }
+            super::complete::Kind::Emoji => super::complete::emoji_items(&query),
+        };
+        if let Some((_, rect)) = self.cursor_rect() {
+            self.completer.show(&rect, kind, back, items);
+        }
+    }
+
+    /// Runs a pick from the "/" menu or the emoji list, in place of what was typed for it.
+    fn apply_pick(self: &Rc<Self>, pick: super::complete::Pick) {
+        use super::complete::Pick;
+        let at = self.cursor_offset() as i32;
+        let from = at - self.completer.back.get() as i32;
+        self.edit(|b| b.delete(&mut b.iter_at_offset(from.max(0)), &mut b.iter_at_offset(at)));
+        let Some(main) = self.main.upgrade() else { return };
+        match pick {
+            Pick::Block(p) => self.set_block(p),
+            Pick::CodeBlock => self.insert_block("```\n\n```", 1),
+            Pick::Table => self.insert_block(super::tables::TABLE_TEMPLATE, 0),
+            Pick::Board => self.insert_block(super::tables::BOARD_TEMPLATE, 2),
+            Pick::Emoji => {
+                let at = self.cursor_offset() as i32;
+                let after_text = at > 0 && !self.buffer.iter_at_offset(at - 1).char().is_whitespace();
+                self.edit(|b| b.insert(&mut b.iter_at_offset(at), if after_text { " :" } else { ":" }));
+                if let Some((_, rect)) = self.cursor_rect() {
+                    self.completer.show(&rect, super::complete::Kind::Emoji, 1, super::complete::emoji_items(""));
+                }
+            }
+            Pick::Photo => self.pick_photo(),
+            Pick::Voice => self.start_recording(),
+            Pick::Prompt => super::ai::prompt_popover(&main, self),
+            Pick::Tidy => super::ai::rewrite_dialog(&main, self, super::ai::Rewrite::Tidy),
+            Pick::Text(t) => {
+                let at = self.cursor_offset() as i32;
+                self.edit(|b| b.insert(&mut b.iter_at_offset(at), &t));
+            }
+        }
+        self.view.grab_focus();
+    }
+
+    /// Puts a block (code, table, board) on lines of its own at the cursor, with the cursor on its
+    /// line `line`: in place of an empty line, else under the cursor's line.
+    fn insert_block(&self, template: &str, line: i32) {
+        let cursor = self.buffer.iter_at_mark(&self.buffer.get_insert());
+        let mut start = cursor;
+        start.set_line_offset(0);
+        let mut end = cursor;
+        if !end.ends_line() {
+            end.forward_to_line_end();
+        }
+        let empty = self.buffer.text(&start, &end, true).trim().is_empty();
+        let (s, e) = (start.offset(), end.offset());
+        let first_line = if empty { start.line() } else { start.line() + 2 };
+        self.edit(|b| {
+            if empty {
+                b.delete(&mut b.iter_at_offset(s), &mut b.iter_at_offset(e));
+                b.insert(&mut b.iter_at_offset(s), template);
+            } else {
+                b.insert(&mut b.iter_at_offset(e), &format!("\n\n{template}"));
+            }
+        });
+        if let Some(mut it) = self.buffer.iter_at_line(first_line + line) {
+            if !it.ends_line() {
+                it.forward_to_line_end();
+            }
+            self.buffer.place_cursor(&it);
+        }
     }
 
     /// The lines the cursor and selection are on while the text has focus: their marks show.
@@ -790,6 +928,7 @@ impl Editor {
         focus.connect_leave(move |_| {
             if let Some(e) = weak.upgrade() {
                 e.announce_cursor();
+                e.completer.hide();
             }
         });
         self.view.add_controller(focus);
@@ -905,6 +1044,16 @@ impl Editor {
         let shift = mods.contains(gdk::ModifierType::SHIFT_MASK);
         let stop = glib::Propagation::Stop;
         let lower = key.to_lower();
+        if self.completer.is_open() {
+            match key {
+                gdk::Key::Up => self.completer.step(-1),
+                gdk::Key::Down => self.completer.step(1),
+                gdk::Key::Return | gdk::Key::KP_Enter | gdk::Key::Tab => self.completer.pick(),
+                gdk::Key::Escape => self.completer.hide(),
+                _ => return glib::Propagation::Proceed,
+            }
+            return stop;
+        }
         if ctrl {
             match (lower, shift) {
                 (gdk::Key::z, false) => self.undo(false),
@@ -1117,7 +1266,16 @@ impl Editor {
         }
         let weak = Rc::downgrade(self);
         photo.connect_clicked(move |_| {
-            let Some(e) = weak.upgrade() else { return };
+            if let Some(e) = weak.upgrade() {
+                e.pick_photo();
+            }
+        });
+    }
+
+    /// Add Photo: picks image files and puts them in at the cursor.
+    fn pick_photo(self: &Rc<Self>) {
+        {
+            let e = self;
             let Some(main) = e.main.upgrade() else { return };
             let filter = gtk::FileFilter::new();
             filter.set_name(Some("Pictures"));
@@ -1131,7 +1289,7 @@ impl Editor {
                     glib::spawn_future_local(async move { e.upload_file(&file).await });
                 }
             });
-        });
+        }
     }
 
     async fn upload_file(self: &Rc<Self>, file: &gio::File) {
@@ -1761,6 +1919,16 @@ impl Editor {
         true
     }
 
+    /// The "/" menu or emoji list is showing.
+    pub fn menu_open(&self) -> bool {
+        self.completer.is_open()
+    }
+
+    /// Picks an item from the "/" menu or emoji list by its label.
+    pub fn pick_from_menu(&self, label: &str) -> bool {
+        self.completer.pick_named(label)
+    }
+
     /// Where the cursor is, in characters.
     pub fn cursor_offset(&self) -> usize {
         self.buffer.iter_at_mark(&self.buffer.get_insert()).offset() as usize
@@ -1925,6 +2093,7 @@ impl Editor {
         if let Some(t) = self.save_timer.take() {
             t.remove();
         }
+        self.completer.hide();
         if let Some((_, media)) = self.player.take() {
             media.pause();
         }

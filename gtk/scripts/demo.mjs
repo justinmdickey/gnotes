@@ -373,8 +373,12 @@ export async function startDemo({ ai = false } = {}) {
       mkdirSync(join(gtkDir, ".config"), { recursive: true });
       writeFileSync(join(gtkDir, ".config/session.json"), JSON.stringify({ server: base, token: ann.token, user: ann.user }));
     }
+    // GNOTES_GDB: under gdb, for a backtrace when it's interrupted.
+    const [cmd, args] = process.env.GNOTES_GDB
+      ? ["gdb", ["-batch", "-ex", "run", "-ex", "thread apply 1 bt 40", "--args", join(root, "target/debug/gnotes")]]
+      : [join(root, "target/debug/gnotes"), []];
     const app = track(
-      spawn(join(root, "target/debug/gnotes"), [], {
+      spawn(cmd, args, {
         env: {
           ...process.env,
           GDK_BACKEND: "wayland",
@@ -391,10 +395,11 @@ export async function startDemo({ ai = false } = {}) {
           XDG_CONFIG_HOME: join(gtkDir, "xdg"),
           ...extra,
         },
-        stdio: ["ignore", "ignore", "pipe"],
+        stdio: ["ignore", process.env.GNOTES_GDB ? "pipe" : "ignore", "pipe"],
       }),
     );
     let stderr = "";
+    app.stdout?.on("data", (d) => (stderr += d.toString()));
     app.stderr.on("data", (d) => {
       const s = d.toString();
       // GTK warnings about the headless display aren't ours.
