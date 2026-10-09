@@ -316,6 +316,10 @@ check("the / menu adds a table", slashed.includes("| Column 1 | Column 2 | Colum
       "sleep 500",
       "block-click 1|Add Card|1",
       "sleep 500",
+      `dump ${f("blocks.json")}`,
+      "cursor 3",
+      "sleep 500",
+      `dump ${f("into-table.json")}`,
       "quit",
     ].join("\n"),
   },
@@ -324,6 +328,9 @@ check("tables and boards ran", code === 0, { code, stderr });
 const plans = await demo.read(ann, ids.plans);
 check("typing in a table cell changes just that cell", plans.includes("| Kitchen | Olive | May |"), plans);
 check("Add Card on a board adds a card to its column", /## Doing\n- Patch the wall\n- New card/.test(plans), plans);
+const blocks = dump("blocks.json").blocks;
+check("redrawn tables and boards leave nothing behind", blocks[0] === 2 && blocks[1] === 2, blocks);
+check("the cursor steps over a table instead of opening its Markdown", dump("into-table.json").blocks[1] === 2, dump("into-table.json").blocks);
 
 // Settings: your name, API keys, invites, AI services and import.
 writeFileSync(f("Imported.md"), "# Imported note\n\nFrom a Markdown file.");

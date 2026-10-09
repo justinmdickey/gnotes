@@ -409,6 +409,14 @@ impl NoteView {
     }
 
     /// The width a photo may take: the text column.
+    /// The text column the scrolled window around the view has room for, whatever width the view
+    /// itself has right now.
+    pub fn fit_width(&self) -> i32 {
+        let room = self.parent().map_or_else(|| self.width(), |p| p.width());
+        let margin = ((room - COLUMN) / 2).max(MIN_MARGIN);
+        (room - 2 * margin).max(100)
+    }
+
     pub fn column_width(&self) -> i32 {
         (self.width() - self.left_margin() - self.right_margin()).max(100)
     }

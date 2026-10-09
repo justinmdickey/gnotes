@@ -2,10 +2,158 @@
 //! keeps them as plain Markdown (GFM pipe tables; a ```kanban block of "## Column" headings and "- card"
 //! lines); the editor draws them as widgets over their text, and edits go back as the smallest change.
 
-use std::rc::Rc;
+use std::{
+    cell::{Cell as Flag, RefCell},
+    rc::Rc,
+};
 
 use adw::prelude::*;
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Look {
+    Bold,
+    Italic,
+    Strike,
+    Code,
+    Link,
+}
+
+/// Inline Markdown as it reads: the text without its marks, and which bytes of that are bold,
+/// italic, struck, code or a link. `**[[nimbus|the server]]**` reads "the server", bold and linked.
+fn render(src: &str) -> (String, Vec<(usize, usize, Look)>) {
+    fn walk(src: &str, out: &mut String, looks: &mut Vec<(usize, usize, Look)>) {
+        let mut rest = src;
+        while let Some(c) = rest.chars().next() {
+            // A pair of marks around something, as (open, close, look).
+            let pairs = [("**", "**", Look::Bold), ("~~", "~~", Look::Strike), ("`", "`", Look::Code), ("*", "*", Look::Italic)];
+            let mut done = false;
+            for (open, close, look) in pairs {
+                if let Some(after) = rest.strip_prefix(open)
+                    && let Some(end) = after.find(close).filter(|&e| e > 0)
+                {
+                    let start = out.len();
+                    if look == Look::Code {
+                        out.push_str(&after[..end]);
+                    } else {
+                        walk(&after[..end], out, looks);
+                    }
+                    looks.push((start, out.len(), look));
+                    rest = &after[end + close.len()..];
+                    done = true;
+                    break;
+                }
+            }
+            if done {
+                continue;
+            }
+            // [[Note]] or [[Note|what it says]]
+            if let Some(after) = rest.strip_prefix("[[")
+                && let Some(end) = after.find("]]")
+            {
+                let inner = &after[..end];
+                let shown = inner.split_once('|').map_or(inner, |(_, alias)| alias);
+                let start = out.len();
+                out.push_str(shown.trim());
+                looks.push((start, out.len(), Look::Link));
+                rest = &after[end + 2..];
+                continue;
+            }
+            // [text](address)
+            if let Some(after) = rest.strip_prefix('[')
+                && let Some(close) = after.find("](")
+                && let Some(end) = after[close + 2..].find(')')
+            {
+                let start = out.len();
+                walk(&after[..close], out, looks);
+                looks.push((start, out.len(), Look::Link));
+                rest = &after[close + 2 + end + 1..];
+                continue;
+            }
+            out.push(c);
+            rest = &rest[c.len_utf8()..];
+        }
+    }
+    let mut out = String::new();
+    let mut looks = Vec::new();
+    walk(src, &mut out, &mut looks);
+    (out, looks)
+}
+
+/// An entry that shows its Markdown formatted, and as written while it has focus to edit.
+#[derive(Clone)]
+struct RichEntry {
+    entry: gtk::Entry,
+    raw: Rc<RefCell<String>>,
+    editing: Rc<Flag<bool>>,
+    /// Set while the text is swapped between the two, so that isn't taken as typing.
+    quiet: Rc<Flag<bool>>,
+}
+
+impl RichEntry {
+    fn new(entry: gtk::Entry, raw: &str) -> RichEntry {
+        let rich = RichEntry { entry, raw: Rc::new(RefCell::new(raw.to_owned())), editing: Default::default(), quiet: Default::default() };
+        rich.show_formatted();
+        let focus = gtk::EventControllerFocus::new();
+        let r = rich.clone();
+        focus.connect_enter(move |_| {
+            r.editing.set(true);
+            r.swap(&r.raw.borrow().clone(), None);
+        });
+        let r = rich.clone();
+        focus.connect_leave(move |_| {
+            r.raw.replace(r.entry.text().to_string());
+            r.editing.set(false);
+            r.show_formatted();
+        });
+        rich.entry.add_controller(focus);
+        rich
+    }
+
+    /// The Markdown, as written.
+    fn text(&self) -> String {
+        if self.editing.get() { self.entry.text().to_string() } else { self.raw.borrow().clone() }
+    }
+
+    /// A change the user made, not a swap.
+    fn typed(&self) -> bool {
+        !self.quiet.get()
+    }
+
+    fn show_formatted(&self) {
+        let (shown, looks) = render(&self.raw.borrow());
+        let attrs = gtk::pango::AttrList::new();
+        for (s, e, look) in looks {
+            let mut a: gtk::pango::Attribute = match look {
+                Look::Bold => gtk::pango::AttrInt::new_weight(gtk::pango::Weight::Bold).into(),
+                Look::Italic => gtk::pango::AttrInt::new_style(gtk::pango::Style::Italic).into(),
+                Look::Strike => gtk::pango::AttrInt::new_strikethrough(true).into(),
+                Look::Code => gtk::pango::AttrString::new_family(&super::styling::monospace()).into(),
+                Look::Link => {
+                    let c = super::styling::accent();
+                    let color = |v: f32| (v * 65535.0) as u16;
+                    let mut fg: gtk::pango::Attribute = gtk::pango::AttrColor::new_foreground(color(c.red()), color(c.green()), color(c.blue())).into();
+                    fg.set_start_index(s as u32);
+                    fg.set_end_index(e as u32);
+                    attrs.insert(fg);
+                    gtk::pango::AttrInt::new_underline(gtk::pango::Underline::Single).into()
+                }
+            };
+            a.set_start_index(s as u32);
+            a.set_end_index(e as u32);
+            attrs.insert(a);
+        }
+        self.swap(&shown, Some(&attrs));
+    }
+
+    fn swap(&self, text: &str, attrs: Option<&gtk::pango::AttrList>) {
+        self.quiet.set(true);
+        if self.entry.text() != text {
+            self.entry.set_text(text);
+        }
+        self.entry.set_attributes(attrs.unwrap_or(&gtk::pango::AttrList::new()));
+        self.quiet.set(false);
+    }
+}
 
 /// A new 3×2 table, as the "/" menu puts it in.
 pub const TABLE_TEMPLATE: &str = "| Column 1 | Column 2 | Column 3 |\n| --- | --- | --- |\n|  |  |  |\n|  |  |  |";
@@ -199,15 +347,18 @@ pub fn table_widget(table: &Table, editable: bool, on_change: OnChange) -> gtk::
         for c in 0..n {
             let cell = row.get(c);
             let entry = gtk::Entry::builder()
-                .text(cell.map(|c| c.text.as_str()).unwrap_or_default())
                 .has_frame(false)
                 .editable(editable)
                 .hexpand(true)
                 .css_classes(if r == 0 { vec!["table-cell", "table-head"] } else { vec!["table-cell"] })
                 .build();
+            let rich = RichEntry::new(entry.clone(), cell.map(|c| c.text.as_str()).unwrap_or_default());
             let on = on_change.clone();
-            let _ = cell;
-            entry.connect_changed(move |e| on(Change::Cell { row: r, col: c, text: e.text().to_string() }));
+            entry.connect_changed(move |e| {
+                if rich.typed() {
+                    on(Change::Cell { row: r, col: c, text: e.text().to_string() })
+                }
+            });
             grid.attach(&entry, c as i32, r as i32, 1, 1);
             line.push(entry);
         }
@@ -270,7 +421,14 @@ pub fn table_widget(table: &Table, editable: bool, on_change: OnChange) -> gtk::
     more.insert_action_group("table", Some(&group));
     let wrap = gtk::Box::builder().spacing(4).css_classes(["note-block"]).build();
     let frame = gtk::Frame::builder().child(&grid).hexpand(true).css_classes(["table-frame"]).build();
-    wrap.append(&frame);
+    // A table wider than the note scrolls sideways, rather than widening the note.
+    let scroll = gtk::ScrolledWindow::builder()
+        .vscrollbar_policy(gtk::PolicyType::Never)
+        .hexpand(true)
+        .propagate_natural_height(true)
+        .child(&frame)
+        .build();
+    wrap.append(&scroll);
     wrap.append(&more);
     wrap.upcast()
 }
@@ -319,17 +477,19 @@ pub fn board_widget(columns: &[Column], editable: bool, on_change: OnChange) -> 
                 });
                 line.append(&check);
             }
-            let entry = gtk::Entry::builder().text(&card.text).has_frame(false).editable(editable).hexpand(true).build();
+            let entry = gtk::Entry::builder().has_frame(false).editable(editable).hexpand(true).build();
+            let rich = RichEntry::new(entry.clone(), &card.text);
             let rw = rewrite.clone();
-            entry.connect_activate(move |e| {
-                let t = e.text().to_string();
+            let r = rich.clone();
+            entry.connect_activate(move |_| {
+                let t = r.text();
                 rw(&|cols| cols[ci].cards[k].text = t.clone());
             });
             let rw = rewrite.clone();
             let focus = gtk::EventControllerFocus::new();
-            let (e2, original) = (entry.clone(), card.text.clone());
+            let original = card.text.clone();
             focus.connect_leave(move |_| {
-                let t = e2.text().to_string();
+                let t = rich.text();
                 if t != original {
                     rw(&|cols| cols[ci].cards[k].text = t.clone());
                 }
@@ -404,6 +564,16 @@ pub fn board_widget(columns: &[Column], editable: bool, on_change: OnChange) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cells_read_without_their_marks() {
+        let (text, looks) = render("**[[nimbus — the main|nimbus]]** and *a* [site](https://x.y) `ls`");
+        assert_eq!(text, "nimbus and a site ls");
+        assert!(looks.contains(&(0, 6, Look::Bold)) && looks.contains(&(0, 6, Look::Link)));
+        assert!(looks.contains(&(11, 12, Look::Italic)) && looks.contains(&(18, 20, Look::Code)));
+        // Underscores inside words stay.
+        assert_eq!(render("snake_case_name").0, "snake_case_name");
+    }
 
     #[test]
     fn tables_round_trip() {

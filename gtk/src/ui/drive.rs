@@ -55,6 +55,7 @@
 //! cite <n>                 opens the note the last answer's [n] links to
 //! move-to-server <server> <username> <password>   Move to a Server, signing in there
 //! dump <file.json>          the open note's text, title and peers, the sidebar's rows, the status
+//! resize <width>x<height>  the window
 //! shot <file.png>
 //! quit
 //! ```
@@ -278,6 +279,11 @@ async fn run(main: &Rc<Main>, cmd: &str, arg: &str) {
         "type" => {
             if let Some(e) = editor() {
                 e.type_text(arg);
+            }
+        }
+        "resize" => {
+            if let Some((w, h)) = arg.split_once('x').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?))) {
+                main.window.set_default_size(w, h);
             }
         }
         "cursor" => {
@@ -553,6 +559,7 @@ async fn run(main: &Rc<Main>, cmd: &str, arg: &str) {
                 "sidebar": main.sidebar().labels(),
                 "offline_banner": main.sidebar().offline_shown(),
                 "paragraph_style": e.as_ref().map(|e| e.paragraph_style()),
+                "blocks": e.as_ref().map(|e| e.block_counts()),
                 "list": list_rows(main),
                 "dialog_text": dialog_text(main),
                 "ask_answer": main.ask.get().map(|a| a.last_answer()),

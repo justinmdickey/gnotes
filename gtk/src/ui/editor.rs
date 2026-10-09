@@ -89,6 +89,12 @@ pub struct Editor {
     /// The block being dragged by its grip, as lines.
     dragging: Cell<Option<(i32, i32)>>,
     block_check: Cell<bool>,
+    placing_blocks: Cell<bool>,
+    spare_slots: RefCell<Vec<gtk::Box>>,
+    /// The start of the table or board being edited as its Markdown (Edit as Text), if one is.
+    text_block: RefCell<Option<gtk::TextMark>>,
+    /// Where the cursor was, to know which way it was going.
+    last_cursor: Cell<usize>,
     /// Attachments shown in the note, by id.
     media: RefCell<HashMap<String, Media>>,
     /// Spacing tags made for photos, by height.
@@ -188,8 +194,10 @@ impl Editor {
         buffer.set_enable_undo(false);
         styling::make_tags(&buffer);
 
+        // External: the view may be wider than the window for a moment, while tables and boards
+        // catch up with a narrower window, without holding the window at their width.
         let scroll = gtk::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk::PolicyType::Never)
+            .hscrollbar_policy(gtk::PolicyType::External)
             .vexpand(true)
             .child(&view)
             .build();
@@ -266,14 +274,38 @@ impl Editor {
         let mic = icon_button("audio-input-microphone-symbolic", "Voice Memo");
         media.append(&mic);
         bar.append(&media);
-        for part in [&history, &extra, &media] {
-            main.split.bind_property("collapsed", part, "visible").invert_boolean().sync_create().build();
-        }
         let bar_scroll = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::External)
             .vscrollbar_policy(gtk::PolicyType::Never)
             .child(&bar)
             .build();
+        // What fits on the bar at its width and the font in use: undo and media go first, then
+        // strikethrough and code.
+        {
+            let (bar, history, extra, media) = (bar.clone(), history.clone(), extra.clone(), media.clone());
+            let queued = Rc::new(Cell::new(false));
+            bar_scroll.hadjustment().connect_page_size_notify(move |adj| {
+                if queued.replace(true) {
+                    return;
+                }
+                let (bar, history, extra, media, queued) = (bar.clone(), history.clone(), extra.clone(), media.clone(), queued.clone());
+                let room = adj.page_size() as i32;
+                glib::idle_add_local_once(move || {
+                    queued.set(false);
+                    let fits = || bar.measure(gtk::Orientation::Horizontal, -1).1 <= room;
+                    for part in [&history, &extra, &media] {
+                        part.set_visible(true);
+                    }
+                    if !fits() {
+                        history.set_visible(false);
+                        media.set_visible(false);
+                        if !fits() {
+                            extra.set_visible(false);
+                        }
+                    }
+                });
+            });
+        }
         bar_scroll.set_propagate_natural_width(false);
 
         let banner = adw::Banner::new("");
@@ -345,6 +377,10 @@ impl Editor {
             next_block: Cell::new(0),
             dragging: Cell::new(None),
             block_check: Cell::new(false),
+            placing_blocks: Cell::new(false),
+            spare_slots: Default::default(),
+            text_block: Default::default(),
+            last_cursor: Cell::new(0),
             recording: Default::default(),
             spot: Default::default(),
             saving: Cell::new(false),
@@ -395,6 +431,14 @@ impl Editor {
         {
             let weak = Rc::downgrade(&editor);
             editor.view.on_width(move || {
+                if let Some(e) = weak.upgrade() {
+                    e.queue_restyle();
+                }
+            });
+            // A narrower window narrows the scrolled window before the view, which tables and
+            // boards hold at their width until they're laid out again.
+            let weak = Rc::downgrade(&editor);
+            scroll.hadjustment().connect_page_size_notify(move |_| {
                 if let Some(e) = weak.upgrade() {
                     e.queue_restyle();
                 }
@@ -930,7 +974,41 @@ impl Editor {
     }
 
     /// Tells the others where the cursor is, while the text has focus.
+    /// Keeps the cursor out of the Markdown under a table or board, as the PWA does: it steps over
+    /// the block, down or up the way it was going. Edit as Text lets it in.
+    fn skip_blocks(&self) {
+        let insert = self.buffer.iter_at_mark(&self.buffer.get_insert());
+        let here = insert.offset() as usize;
+        let before = self.last_cursor.replace(here);
+        if !self.view.is_focus() || self.buffer.has_selection() || self.text_block.borrow().is_some() {
+            return;
+        }
+        let len = self.buffer.char_count() as usize;
+        let Some((s, e)) = self.blocks.borrow().iter().map(|b| (b.start, b.end.min(len))).find(|&(s, e)| here >= s && here <= e) else { return };
+        let weak = self.me.clone();
+        // Not from inside the mark-set handler this runs in.
+        glib::idle_add_local_once(move || {
+            let Some(ed) = weak.upgrade() else { return };
+            let b = &ed.buffer;
+            let target = if here >= before {
+                let mut it = b.iter_at_offset(e as i32);
+                if !it.forward_line() && ed.can_edit() {
+                    // Nothing after it: a line to type on.
+                    b.insert(&mut b.end_iter(), "\n");
+                    it = b.end_iter();
+                }
+                it
+            } else {
+                let mut it = b.iter_at_offset(s as i32);
+                it.backward_char();
+                it
+            };
+            b.place_cursor(&target);
+        });
+    }
+
     fn announce_cursor(&self) {
+        self.skip_blocks();
         // Live preview: marks show on the line being edited.
         let active = self.active_lines();
         if self.active.replace(active) != active {
@@ -1952,63 +2030,84 @@ impl Editor {
     /// Tables and boards as widgets over their Markdown, which shrinks away, except while the
     /// cursor is in them: then the Markdown shows, to edit as text.
     fn show_blocks(&self, text: &str, styled: &markdown::Styled, active: Option<(i32, i32)>) {
+        // Measuring a block can resize the view and restyle it from inside here; that pass would
+        // take the blocks list half-built and leave its own widgets behind. Do it again after instead.
+        if self.placing_blocks.replace(true) {
+            self.queue_restyle();
+            return;
+        }
+        self.place_blocks(text, styled, active);
+        self.placing_blocks.set(false);
+    }
+
+    fn place_blocks(&self, text: &str, styled: &markdown::Styled, active: Option<(i32, i32)>) {
         let chars: Vec<char> = text.chars().collect();
         let mut wanted: Vec<(BlockKind, usize, usize)> = styled.tables.iter().map(|&(s, e)| (BlockKind::Table, s, e)).collect();
         wanted.extend(styled.code_blocks.iter().filter(|b| styling::is_board(b)).map(|b| (BlockKind::Board, b.fence, b.end)));
         wanted.sort_by_key(|w| w.1);
         let at = |o: usize| self.buffer.iter_at_offset(o as i32);
+        // A block shows as its Markdown only after Edit as Text, and only while the cursor is in it.
+        let as_text = self.text_block.borrow().as_ref().map(|m| self.buffer.iter_at_mark(m).offset() as usize);
+        let mut still_text = false;
         wanted.retain(|&(_, s, e)| {
             let (a, b) = (at(s).line(), at(e).line());
-            active.is_none_or(|(x, y)| y < a || x > b)
+            let cursor_in = active.is_some_and(|(x, y)| y >= a && x <= b);
+            let editing = cursor_in && as_text.is_some_and(|t| (s..=e).contains(&t));
+            still_text |= editing;
+            !editing
         });
+        if !still_text && let Some(m) = self.text_block.take() {
+            self.buffer.delete_mark(&m);
+        }
         let focus = self.view.root().and_then(|r| r.focus());
-        let mut old = self.blocks.take();
+        // By kind and order, as they were; taken out as they're matched.
+        let mut old: Vec<Option<BlockView>> = self.blocks.take().into_iter().map(Some).collect();
         let mut kept = Vec::new();
         let editable = self.can_edit();
-        let width = self.view.column_width();
+        // The column the window has room for, not the view's own width: blocks as wide as the view
+        // would keep it from ever getting narrower.
+        let width = self.view.fit_width();
         for (i, &(kind, s, e)) in wanted.iter().enumerate() {
             let block_text: String = chars[s..e].iter().collect();
             // The same block as before, by kind and order: kept as it is when unchanged, or while
             // someone types in it; drawn again otherwise.
             let nth = wanted[..i].iter().filter(|w| w.0 == kind).count();
-            let prev = old.iter().enumerate().filter(|(_, b)| b.kind == kind).nth(nth).map(|(p, _)| p);
+            let prev = old.iter().enumerate().filter(|(_, b)| b.as_ref().is_some_and(|b| b.kind == kind)).nth(nth).map(|(p, _)| p);
             let typing_in = |w: &gtk::Widget| focus.as_ref().is_some_and(|f| f.is_ancestor(w) || f == w);
-            let fresh = || {
+            let fresh = |slot: gtk::Box| {
                 let id = self.next_block.get() + 1;
                 self.next_block.set(id);
-                (id, self.block_widget(kind, id, &block_text, editable))
-            };
-            let (id, widget) = match prev.map(|p| old.remove(p)) {
-                Some(b) if b.text == block_text || typing_in(&b.widget) => (b.id, b.widget),
-                Some(b) => {
-                    self.view.remove(&b.widget);
-                    fresh()
+                while let Some(c) = slot.first_child() {
+                    slot.remove(&c);
                 }
-                None => fresh(),
+                slot.append(&self.block_widget(kind, id, &block_text, editable));
+                (id, slot)
             };
-            widget.set_size_request(width, -1);
-            if widget.parent().is_none() {
-                self.view.add_overlay(&widget, 0, 0);
-            }
+            let (id, slot) = match prev.and_then(|p| old[p].take()) {
+                Some(b) if b.text == block_text || typing_in(b.slot.upcast_ref()) => (b.id, b.slot),
+                Some(b) => fresh(b.slot),
+                None => fresh(self.free_slot()),
+            };
+            slot.set_size_request(width, -1);
             // The Markdown shrinks away; its first line makes room for the widget.
             self.buffer.apply_tag_by_name("hidden", &at(s), &at(e));
             // What it measures at, or what it was given if that's more, once it's been laid out.
-            let (_, measured, _, _) = widget.measure(gtk::Orientation::Vertical, width);
-            let h = measured.max(widget.height());
+            let (_, measured, _, _) = slot.measure(gtk::Orientation::Vertical, width);
+            let h = measured.max(slot.height());
             let mut line_end = at(s);
             if !line_end.ends_line() {
                 line_end.forward_to_line_end();
             }
             self.buffer.apply_tag(&self.photo_tag(h + 12), &at(s), &line_end);
             let loc = self.view.iter_location(&at(s));
-            self.view.move_overlay(&widget, loc.x(), loc.y() + 4);
-            kept.push(BlockView { id, kind, start: s, end: e, text: block_text, widget });
+            self.view.move_overlay(&slot, loc.x(), loc.y() + 4);
+            kept.push(BlockView { id, kind, start: s, end: e, text: block_text, slot });
         }
-        for b in old {
-            self.view.remove(&b.widget);
+        for b in old.into_iter().flatten() {
+            self.release_slot(b.slot);
         }
         // Once laid out, a block may turn out taller than it measured: make room again.
-        let pending: Vec<(gtk::Widget, i32)> = kept.iter().map(|b| (b.widget.clone(), b.widget.height())).collect();
+        let pending: Vec<(gtk::Box, i32)> = kept.iter().map(|b| (b.slot.clone(), b.slot.height())).collect();
         self.blocks.replace(kept);
         if !pending.is_empty() && !self.block_check.replace(true) {
             let weak = self.me.clone();
@@ -2020,6 +2119,27 @@ impl Editor {
                 }
             });
         }
+    }
+
+    /// An empty slot over the text for a table or board. GTK has no way to take a widget back out
+    /// of a text view's overlays (gtk_text_view_remove only knows anchored children), so slots are
+    /// added once and kept: emptied and hidden when their block goes, and used again for the next.
+    fn free_slot(&self) -> gtk::Box {
+        if let Some(slot) = self.spare_slots.borrow_mut().pop() {
+            slot.set_visible(true);
+            return slot;
+        }
+        let slot = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        self.view.add_overlay(&slot, 0, 0);
+        slot
+    }
+
+    fn release_slot(&self, slot: gtk::Box) {
+        while let Some(c) = slot.first_child() {
+            slot.remove(&c);
+        }
+        slot.set_visible(false);
+        self.spare_slots.borrow_mut().push(slot);
     }
 
     /// The widget for block `id`, wired to change its Markdown.
@@ -2079,8 +2199,14 @@ impl Editor {
             }
             Change::Rewrite(new) => self.rewrite_block(start, &old, &new),
             Change::EditText => {
+                if let Some(m) = self.text_block.take() {
+                    self.buffer.delete_mark(&m);
+                }
+                let it = self.buffer.iter_at_offset(start as i32);
+                self.text_block.replace(Some(self.buffer.create_mark(None, &it, true)));
                 self.view.grab_focus();
-                self.buffer.place_cursor(&self.buffer.iter_at_offset(start as i32));
+                self.buffer.place_cursor(&it);
+                self.queue_restyle();
             }
         }
     }
@@ -2332,8 +2458,23 @@ impl Editor {
     }
 
     /// Table or board `n`'s widget, as drawn now.
+    /// Tables and boards attached to the view, and how many the editor keeps track of. For tests:
+    /// the two differ when one has been left behind.
+    pub fn block_counts(&self) -> (usize, usize) {
+        fn count(w: &gtk::Widget) -> usize {
+            let mut n = usize::from(w.has_css_class("note-block"));
+            let mut c = w.first_child();
+            while let Some(child) = c {
+                n += count(&child);
+                c = child.next_sibling();
+            }
+            n
+        }
+        (count(self.view.upcast_ref()), self.blocks.borrow().len())
+    }
+
     pub fn block_widget_at(&self, n: usize) -> Option<gtk::Widget> {
-        self.blocks.borrow().get(n).map(|b| b.widget.clone())
+        self.blocks.borrow().get(n).map(|b| b.slot.clone().upcast())
     }
 
     /// Shows the grip beside line `n` and a drop line before line `drop`, as during a drag. For screenshots.
@@ -2594,7 +2735,8 @@ struct BlockView {
     start: usize,
     end: usize,
     text: String,
-    widget: gtk::Widget,
+    /// The slot in the view its widget is in (see `free_slot`).
+    slot: gtk::Box,
 }
 
 #[derive(Clone)]
