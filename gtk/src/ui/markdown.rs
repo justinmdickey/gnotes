@@ -273,10 +273,13 @@ pub fn analyze(text: &str) -> Styled {
             from = open + 2;
             continue;
         }
-        hide(&mut out, open, open + 2);
-        out.spans.push(Span { start: ci[open + 2], end: ci[close], tag: "link" });
+        // [[Title|alias]] shows only the alias.
+        let shown = title.find('|').map_or(open + 2, |p| open + 2 + p + 1);
+        let target = title.split('|').next().unwrap_or(title).trim();
+        hide(&mut out, open, shown);
+        out.spans.push(Span { start: ci[shown], end: ci[close], tag: "link" });
         hide(&mut out, close, close + 2);
-        out.links.push(Link { start: ci[open], end: ci[close + 2], url: format!("wiki:{title}") });
+        out.links.push(Link { start: ci[open], end: ci[close + 2], url: format!("wiki:{target}") });
         from = close + 2;
     }
     out
@@ -344,11 +347,13 @@ mod tests {
 
     #[test]
     fn finds_tasks_links_and_photos() {
-        let text = "- [x] milk\n- [ ] eggs\n\nSee [docs](https://example.com) and https://gnome.org.\n![p](att:123) [[Pantry]]";
+        let text = "- [x] milk\n- [ ] eggs\n\nSee [docs](https://example.com) and https://gnome.org.\n![p](att:123) [[Pantry]] [[Tardis — the box|Tardis]]";
         let s = analyze(text);
         assert_eq!(s.tasks, vec![(2, true), (13, false)]);
         let urls: Vec<&str> = s.links.iter().map(|l| l.url.as_str()).collect();
-        assert_eq!(urls, vec!["https://example.com", "https://gnome.org", "wiki:Pantry"]);
+        assert_eq!(urls, vec!["https://example.com", "https://gnome.org", "wiki:Pantry", "wiki:Tardis — the box"]);
+        assert!(tags(text).contains(&("Tardis".into(), "link")));
+        assert!(tags(text).contains(&("[[Tardis — the box|".into(), "mark")));
         assert_eq!(s.images[0].url, "att:123");
         assert!(tags(text).contains(&("milk".into(), "done")));
     }

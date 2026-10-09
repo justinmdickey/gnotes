@@ -357,6 +357,13 @@ async fn run(main: &Rc<Main>, cmd: &str, arg: &str) {
                 eprintln!("drive: no checkbox {arg}");
             }
         }
+        "follow" => {
+            if let Some(e) = editor()
+                && !e.follow_link(arg.parse().unwrap_or(0))
+            {
+                eprintln!("drive: no link {arg}");
+            }
+        }
         "format" => {
             if let Some(e) = editor() {
                 e.format(arg);

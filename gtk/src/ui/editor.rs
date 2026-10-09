@@ -1466,25 +1466,28 @@ impl Editor {
                 self.tick(start, done);
                 true
             }
-            Some(Target::Link(url)) => {
-                let Some(main) = self.main.upgrade() else { return false };
-                if let Some(title) = url.strip_prefix("wiki:") {
-                    let found = main.store.tree.borrow().notes.iter().find(|n| n.title.trim().eq_ignore_ascii_case(title.trim())).map(|n| n.id.clone());
-                    match found {
-                        Some(id) => main.open_note(&id, false),
-                        None => main.toast(&format!("No note called “{title}”")),
-                    }
-                } else if url.starts_with("http://") || url.starts_with("https://") || url.starts_with("mailto:") {
-                    gtk::UriLauncher::new(&url).launch(Some(&main.window), gio::Cancellable::NONE, |_| {});
-                }
-                true
-            }
+            Some(Target::Link(url)) => self.follow(&url),
             Some(Target::Recording(id)) => {
                 self.play(id);
                 true
             }
             None => false,
         }
+    }
+
+    /// Opens a link: a [[wiki link]]'s note here, a web or mail link outside.
+    fn follow(&self, url: &str) -> bool {
+        let Some(main) = self.main.upgrade() else { return false };
+        if let Some(title) = url.strip_prefix("wiki:") {
+            let found = main.store.tree.borrow().notes.iter().find(|n| n.title.trim().eq_ignore_ascii_case(title.trim())).map(|n| n.id.clone());
+            match found {
+                Some(id) => main.open_note(&id, false),
+                None => main.toast(&format!("No note called “{title}”")),
+            }
+        } else if url.starts_with("http://") || url.starts_with("https://") || url.starts_with("mailto:") {
+            gtk::UriLauncher::new(url).launch(Some(&main.window), gio::Cancellable::NONE, |_| {});
+        }
+        true
     }
 
     fn connect_buttons(self: &Rc<Self>, styles: &gtk::MenuButton, inline: [&gtk::Button; 4], blocks: [&gtk::Button; 4], photo: &gtk::Button) {
@@ -2598,6 +2601,13 @@ impl Editor {
         let Some((start, done)) = self.styled.borrow().tasks.get(n).copied() else { return false };
         self.tick(start, done);
         true
+    }
+
+    /// Follows the nth link in the note, as a click on it would.
+    pub fn follow_link(&self, n: usize) -> bool {
+        self.restyle();
+        let Some(url) = self.styled.borrow().links.get(n).map(|l| l.url.clone()) else { return false };
+        self.follow(&url)
     }
 
     /// The format bar's styles by name, on the line at the end.

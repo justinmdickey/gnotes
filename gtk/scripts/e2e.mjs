@@ -94,6 +94,10 @@ new-note
 type Fresh idea
 signal ${f("fresh")}
 wait-file ${f("fresh-checked")}
+type \\n[[Groceries|the list]]
+follow 0
+wait-text Spinach
+dump ${f("followed.json")}
 new-note
 open note:Groceries
 wait-loaded
@@ -169,6 +173,9 @@ try {
   const fresh = tree.notes.find((n) => n.title === "Fresh idea");
   check("New Note makes a note you can type in", !!fresh, tree.notes.map((n) => n.title));
   signal("fresh-checked");
+  await waitFile("followed.json");
+  d = dump("followed.json");
+  check("a [[Title|alias]] link opens the note it names", d.title === "Groceries", d);
 
   await waitFile("blank");
   await sleep(800);
