@@ -8,6 +8,8 @@ url='https://github.com/justinmdickey/gnotes'
 license=('MIT')
 depends=('gtk4' 'libadwaita' 'gstreamer' 'gst-plugins-base' 'gst-plugins-good' 'glibc' 'gcc-libs')
 makedepends=('cargo')
+# The bundled SQLite (C) built with LTO can't be linked into Rust code.
+options=('!lto')
 optdepends=(
   'gst-plugin-pipewire: record voice memos from PipeWire microphones'
   'ffmpeg: transcribe voice memos with services that only read WAV'
