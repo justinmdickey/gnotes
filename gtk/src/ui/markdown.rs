@@ -34,6 +34,8 @@ pub struct CodeBlock {
 #[derive(Clone, Debug, Default)]
 pub struct Styled {
     pub code_blocks: Vec<CodeBlock>,
+    /// Pipe tables, start to end, in characters.
+    pub tables: Vec<(usize, usize)>,
     pub spans: Vec<Span>,
     /// Where each checkbox's `[` is, and whether it's ticked.
     pub tasks: Vec<(usize, bool)>,
@@ -235,7 +237,11 @@ pub fn analyze(text: &str) -> Styled {
                 hide(&mut out, r.start, r.end);
                 out.images.push(Link { start: ci[r.start], end: ci[r.end], url: dest_url.to_string() });
             }
-            Event::Start(Tag::Table(_)) => span(&mut out, r.start, r.end, "table"),
+            Event::Start(Tag::Table(_)) => {
+                span(&mut out, r.start, r.end, "table");
+                let end = text[..r.end].trim_end_matches(['\n', '\r']).len().max(r.start);
+                out.tables.push((ci[r.start], ci[end]));
+            }
             Event::Rule => span(&mut out, r.start, r.end, "mark"),
             _ => {}
         }

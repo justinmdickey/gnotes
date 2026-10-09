@@ -296,6 +296,27 @@ check("the emoji list puts in the one picked", slashed.includes("😄"));
 check("a code block's language can be picked", slashed.includes("```python\nkubectl"), slashed);
 check("the / menu adds a table", slashed.includes("| Column 1 | Column 2 | Column 3 |"));
 
+// Tables and boards, drawn as widgets.
+({ code, stderr } = await demo.runApp({
+  env: {
+    GNOTES_DRIVE: [
+      "wait-tree",
+      "open note:Plans",
+      "wait-loaded",
+      "sleep 500",
+      "block-entry 0|4|Olive",
+      "sleep 500",
+      "block-click 1|Add Card|1",
+      "sleep 500",
+      "quit",
+    ].join("\n"),
+  },
+}));
+check("tables and boards ran", code === 0, { code, stderr });
+const plans = await demo.read(ann, ids.plans);
+check("typing in a table cell changes just that cell", plans.includes("| Kitchen | Olive | May |"), plans);
+check("Add Card on a board adds a card to its column", /## Doing\n- Patch the wall\n- New card/.test(plans), plans);
+
 // Settings: your name, API keys, invites, AI services and import.
 writeFileSync(f("Imported.md"), "# Imported note\n\nFrom a Markdown file.");
 ({ code, stderr } = await demo.runApp({

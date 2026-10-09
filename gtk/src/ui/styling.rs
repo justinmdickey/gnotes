@@ -10,6 +10,11 @@ use super::{
     noteview::{Decor, NoteView}
 };
 
+/// A ```kanban block, drawn as a board rather than as code.
+pub fn is_board(b: &markdown::CodeBlock) -> bool {
+    b.info.split_whitespace().next().is_some_and(|w| w.eq_ignore_ascii_case("kanban"))
+}
+
 pub fn make_tags(buffer: &gtk::TextBuffer) {
     for name in markdown::TAGS {
         buffer.create_tag(Some(name), &[]);
@@ -107,7 +112,7 @@ pub fn apply(view: &NoteView, text: &str, active: Option<(i32, i32)>) -> Styled 
     // Code by language; a block with none gets a guess, for colors only.
     let chars: Vec<char> = text.chars().collect();
     let mut labels = Vec::new();
-    for b in &styled.code_blocks {
+    for b in styled.code_blocks.iter().filter(|b| !is_board(b)) {
         let code: String = chars[b.content.0..b.content.1].iter().collect();
         let named = b.info.split_whitespace().next().unwrap_or_default().to_lowercase();
         let (lang, label) = if named == code::PLAIN {
@@ -134,7 +139,7 @@ pub fn apply(view: &NoteView, text: &str, active: Option<(i32, i32)>) -> Styled 
     }
     view.set_decor(Decor {
         code_labels: labels,
-        code_areas: styled.code_blocks.iter().map(|b| (b.fence, b.end)).collect(),
+        code_areas: styled.code_blocks.iter().filter(|b| !is_board(b)).map(|b| (b.fence, b.end)).collect(),
         checks: styled.tasks.clone(),
         bullets: styled.bullets.clone(),
         quotes: styled.quotes.clone(),

@@ -141,3 +141,52 @@
 .recording-dot {
   color: #e01b24;
 }
+
+/* Tables and boards drawn over their Markdown (tables.rs). */
+.table-frame {
+  border-radius: 10px;
+}
+
+.note-table entry.table-cell {
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  outline: none;
+  min-height: 34px;
+  border-right: 1px solid alpha(currentColor, 0.1);
+  border-bottom: 1px solid alpha(currentColor, 0.1);
+}
+
+.note-table entry.table-head {
+  font-weight: 700;
+  background-color: alpha(currentColor, 0.05);
+}
+
+.note-table entry.table-cell:focus-within {
+  background-color: alpha(var(--accent-bg-color), 0.12);
+}
+
+.board-column {
+  padding: 6px;
+}
+
+.board-column entry {
+  background: none;
+  box-shadow: none;
+}
+
+.board-title {
+  font-weight: 700;
+}
+
+.board-card {
+  padding: 2px 4px;
+  border-radius: 8px;
+  background-color: alpha(currentColor, 0.05);
+}
+
+.card-remove {
+  min-width: 24px;
+  min-height: 24px;
+  opacity: 0.5;
+}

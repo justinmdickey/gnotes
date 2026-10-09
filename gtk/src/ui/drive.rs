@@ -22,6 +22,8 @@
 //! wait-menu                the "/" menu or emoji list shows (type "/che" or ":ta" to open it)
 //! pick <label>             picks from it
 //! code-lang <n>|<lang>     as picking the nth code block's language
+//! block-entry <n>|<k>|<text>     types into the kth field of table or board n (cells row by row)
+//! block-click <n>|<label>|<k>    clicks the kth button labeled <label> in table or board n
 //! tick <n>                  clicks the nth checkbox, from 0
 //! format <style>            title, heading, subheading, body, check, bullet, number, quote, bold, italic
 //! new-note
@@ -146,6 +148,20 @@ pub fn start(main: &Rc<Main>) {
     });
 }
 
+/// Every widget of type T under `w`, in order.
+fn widgets<T: IsA<gtk::Widget>>(w: &gtk::Widget) -> Vec<T> {
+    let mut out = Vec::new();
+    if let Some(t) = w.downcast_ref::<T>() {
+        out.push(t.clone());
+    }
+    let mut child = w.first_child();
+    while let Some(c) = child {
+        out.extend(widgets::<T>(&c));
+        child = c.next_sibling();
+    }
+    out
+}
+
 /// The text in the dialog showing: its labels and text views.
 fn dialog_text(main: &Main) -> String {
     fn walk(w: &gtk::Widget, out: &mut String) {
@@ -267,6 +283,33 @@ async fn run(main: &Rc<Main>, cmd: &str, arg: &str) {
             let (n, lang) = arg.split_once('|').unwrap_or((arg, ""));
             if let Some(e) = editor() {
                 e.set_code_language(n.parse().unwrap_or(0), lang);
+            }
+        }
+        "block-entry" | "block-click" => {
+            let parts: Vec<&str> = arg.splitn(3, '|').collect();
+            let (Some(e), &[n, a, b]) = (editor(), &parts[..]) else { return };
+            let Some(w) = e.block_widget_at(n.parse().unwrap_or(0)) else {
+                eprintln!("drive: no table or board {n}");
+                return;
+            };
+            if cmd == "block-entry" {
+                let entries = widgets::<gtk::Entry>(&w);
+                match entries.get(a.parse::<usize>().unwrap_or(0)) {
+                    Some(entry) => {
+                        entry.set_text(b);
+                        entry.emit_activate();
+                    }
+                    None => eprintln!("drive: no field {a}"),
+                }
+            } else {
+                let buttons: Vec<gtk::Button> = widgets::<gtk::Button>(&w)
+                    .into_iter()
+                    .filter(|btn| widgets::<gtk::Label>(btn.upcast_ref()).iter().any(|l| l.label() == a))
+                    .collect();
+                match buttons.get(b.parse::<usize>().unwrap_or(0)) {
+                    Some(btn) => btn.emit_clicked(),
+                    None => eprintln!("drive: no button {a}"),
+                }
             }
         }
         "tick" => {

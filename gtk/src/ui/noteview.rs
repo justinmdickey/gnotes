@@ -62,6 +62,9 @@ mod imp {
         pub cursors: RefCell<Vec<RemoteCursor>>,
         pub pictures: RefCell<Vec<Picture>>,
         pub decor: RefCell<Decor>,
+        /// Called when the width changes, as text rewraps and what's placed over it moves.
+        pub on_width: RefCell<Option<Box<dyn Fn()>>>,
+        pub last_width: std::cell::Cell<i32>,
         /// Where each code block's language label was drawn, to click.
         pub label_rects: RefCell<Vec<graphene::Rect>>,
         /// Lines others wrote, by where they start, in their writer's color.
@@ -92,6 +95,11 @@ mod imp {
     impl WidgetImpl for NoteView {
         fn size_allocate(&self, width: i32, height: i32, baseline: i32) {
             let view = self.obj();
+            if self.last_width.replace(width) != width
+                && let Some(f) = &*self.on_width.borrow()
+            {
+                f();
+            }
             let margin = ((width - COLUMN) / 2).max(MIN_MARGIN);
             if view.left_margin() != margin {
                 // Changing margins resizes the view; do it after this allocation.
@@ -99,6 +107,10 @@ mod imp {
                 glib::idle_add_local_once(move || {
                     view.set_left_margin(margin);
                     view.set_right_margin(margin);
+                    // The text moved: so does what's placed over it.
+                    if let Some(f) = &*view.imp().on_width.borrow() {
+                        f();
+                    }
                 });
             }
             self.parent_size_allocate(width, height, baseline);
@@ -247,6 +259,10 @@ impl NoteView {
     pub fn picture_at(&self, x: f32, y: f32) -> Option<Picture> {
         let pictures = self.imp().pictures.borrow();
         pictures.iter().find(|p| self.picture_rect(p).contains_point(&graphene::Point::new(x, y))).cloned()
+    }
+
+    pub fn on_width(&self, f: impl Fn() + 'static) {
+        self.imp().on_width.replace(Some(Box::new(f)));
     }
 
     pub fn set_bars(&self, bars: Vec<(usize, (f32, f32, f32))>) {

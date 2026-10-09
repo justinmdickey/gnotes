@@ -314,6 +314,27 @@ export async function startDemo({ ai = false } = {}) {
     "Inline `cargo test` runs everything, ~~slowly~~.",
   ].join("\n"));
   await write(ann, memo, `# Plumber\n\n![Voice memo](att:${recording.id})\n\nCall about the leak under the sink.`);
+  const plans = await ann.note();
+  await write(ann, plans, [
+    "# Plans",
+    "",
+    "| Room | Paint | Done by |",
+    "| --- | --- | --- |",
+    "| Kitchen | Sage | May |",
+    "| Hall | White | June |",
+    "",
+    "```kanban",
+    "## To do",
+    "- [ ] Buy paint",
+    "- Move the couch",
+    "",
+    "## Doing",
+    "- Patch the wall",
+    "",
+    "## Done",
+    "- [x] Pick colors",
+    "```",
+  ].join("\n"));
   await write(sam, sync, "# Weekly sync\n\nQuick check-in on the **mobile release**.\n\n## Action items\n- [ ] Sam: write the release notes\n- [ ] Ann: try the beta");
   await ann.call("DELETE", `/notes/${await ann.note()}`);
   // Titles and previews settle a moment after the last edit.
@@ -441,7 +462,7 @@ export async function startDemo({ ai = false } = {}) {
     data,
     ann,
     sam,
-    ids: { home, kitchen, groceries, pantry, snippets, memo, family, sync, photo: photo.id, recording: recording.id },
+    ids: { home, kitchen, groceries, pantry, snippets, memo, plans, family, sync, photo: photo.id, recording: recording.id },
     open,
     read,
     write,

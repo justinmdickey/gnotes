@@ -82,6 +82,10 @@ pub struct Editor {
     rec_bar: gtk::Box,
     rec_time: gtk::Label,
     rec_status: gtk::Label,
+    /// Tables and boards drawn as widgets over their Markdown.
+    blocks: RefCell<Vec<BlockView>>,
+    next_block: Cell<u64>,
+    block_check: Cell<bool>,
     /// Attachments shown in the note, by id.
     media: RefCell<HashMap<String, Media>>,
     /// Spacing tags made for photos, by height.
@@ -327,6 +331,9 @@ impl Editor {
             share_button: share_button.clone(),
             menu_button,
             media: Default::default(),
+            blocks: Default::default(),
+            next_block: Cell::new(0),
+            block_check: Cell::new(false),
             recording: Default::default(),
             spot: Default::default(),
             saving: Cell::new(false),
@@ -371,6 +378,14 @@ impl Editor {
             editor.completer.on_pick(move |pick| {
                 if let Some(e) = weak.upgrade() {
                     e.apply_pick(pick);
+                }
+            });
+        }
+        {
+            let weak = Rc::downgrade(&editor);
+            editor.view.on_width(move || {
+                if let Some(e) = weak.upgrade() {
+                    e.queue_restyle();
                 }
             });
         }
@@ -1818,8 +1833,160 @@ impl Editor {
             pictures.push(Picture { at: img.end, id: id.to_owned(), texture, label, width: w, height: h });
         }
         self.view.set_pictures(pictures);
+        self.show_blocks(&text, &styled, active);
         self.styled.replace(styled);
         self.show_blame(&text);
+    }
+
+    /// Tables and boards as widgets over their Markdown, which shrinks away, except while the
+    /// cursor is in them: then the Markdown shows, to edit as text.
+    fn show_blocks(&self, text: &str, styled: &markdown::Styled, active: Option<(i32, i32)>) {
+        let chars: Vec<char> = text.chars().collect();
+        let mut wanted: Vec<(BlockKind, usize, usize)> = styled.tables.iter().map(|&(s, e)| (BlockKind::Table, s, e)).collect();
+        wanted.extend(styled.code_blocks.iter().filter(|b| styling::is_board(b)).map(|b| (BlockKind::Board, b.fence, b.end)));
+        wanted.sort_by_key(|w| w.1);
+        let at = |o: usize| self.buffer.iter_at_offset(o as i32);
+        wanted.retain(|&(_, s, e)| {
+            let (a, b) = (at(s).line(), at(e).line());
+            active.is_none_or(|(x, y)| y < a || x > b)
+        });
+        let focus = self.view.root().and_then(|r| r.focus());
+        let mut old = self.blocks.take();
+        let mut kept = Vec::new();
+        let editable = self.can_edit();
+        let width = self.view.column_width();
+        for (i, &(kind, s, e)) in wanted.iter().enumerate() {
+            let block_text: String = chars[s..e].iter().collect();
+            // The same block as before, by kind and order: kept as it is when unchanged, or while
+            // someone types in it; drawn again otherwise.
+            let nth = wanted[..i].iter().filter(|w| w.0 == kind).count();
+            let prev = old.iter().enumerate().filter(|(_, b)| b.kind == kind).nth(nth).map(|(p, _)| p);
+            let typing_in = |w: &gtk::Widget| focus.as_ref().is_some_and(|f| f.is_ancestor(w) || f == w);
+            let fresh = || {
+                let id = self.next_block.get() + 1;
+                self.next_block.set(id);
+                (id, self.block_widget(kind, id, &block_text, editable))
+            };
+            let (id, widget) = match prev.map(|p| old.remove(p)) {
+                Some(b) if b.text == block_text || typing_in(&b.widget) => (b.id, b.widget),
+                Some(b) => {
+                    self.view.remove(&b.widget);
+                    fresh()
+                }
+                None => fresh(),
+            };
+            widget.set_size_request(width, -1);
+            if widget.parent().is_none() {
+                self.view.add_overlay(&widget, 0, 0);
+            }
+            // The Markdown shrinks away; its first line makes room for the widget.
+            self.buffer.apply_tag_by_name("hidden", &at(s), &at(e));
+            // What it measures at, or what it was given if that's more, once it's been laid out.
+            let (_, measured, _, _) = widget.measure(gtk::Orientation::Vertical, width);
+            let h = measured.max(widget.height());
+            let mut line_end = at(s);
+            if !line_end.ends_line() {
+                line_end.forward_to_line_end();
+            }
+            self.buffer.apply_tag(&self.photo_tag(h + 12), &at(s), &line_end);
+            let loc = self.view.iter_location(&at(s));
+            self.view.move_overlay(&widget, loc.x(), loc.y() + 4);
+            kept.push(BlockView { id, kind, start: s, end: e, text: block_text, widget });
+        }
+        for b in old {
+            self.view.remove(&b.widget);
+        }
+        // Once laid out, a block may turn out taller than it measured: make room again.
+        let pending: Vec<(gtk::Widget, i32)> = kept.iter().map(|b| (b.widget.clone(), b.widget.height())).collect();
+        self.blocks.replace(kept);
+        if !pending.is_empty() && !self.block_check.replace(true) {
+            let weak = self.me.clone();
+            glib::timeout_add_local_once(Duration::from_millis(100), move || {
+                let Some(e) = weak.upgrade() else { return };
+                e.block_check.set(false);
+                if pending.iter().any(|(w, h)| (w.height() - h).abs() > 2) {
+                    e.queue_restyle();
+                }
+            });
+        }
+    }
+
+    /// The widget for block `id`, wired to change its Markdown.
+    fn block_widget(&self, kind: BlockKind, id: u64, text: &str, editable: bool) -> gtk::Widget {
+        let weak = self.me.clone();
+        let on: super::tables::OnChange = Rc::new(move |change| {
+            if let Some(e) = weak.upgrade() {
+                e.block_change(id, change);
+            }
+        });
+        match kind {
+            BlockKind::Table => match super::tables::parse_table(text) {
+                Some(t) => super::tables::table_widget(&t, editable, on),
+                None => gtk::Label::new(None).upcast(),
+            },
+            BlockKind::Board => super::tables::board_widget(&super::tables::parse_board(text), editable, on),
+        }
+    }
+
+    /// A change from a table's or board's widget, made to its Markdown as the smallest edit.
+    fn block_change(&self, id: u64, change: super::tables::Change) {
+        use super::tables::Change;
+        let Some((start, end)) = self.blocks.borrow().iter().find(|b| b.id == id).map(|b| (b.start, b.end)) else { return };
+        let all: Vec<char> = self.shown_text().chars().collect();
+        let Some(old) = all.get(start..end.min(all.len())).map(|c| c.iter().collect::<String>()) else { return };
+        match change {
+            Change::Cell { row, col, text } => {
+                let Some(t) = super::tables::parse_table(&old) else { return };
+                let cell = if row == 0 { t.header.get(col) } else { t.rows.get(row - 1).and_then(|r| r.get(col)) };
+                let new = match cell {
+                    Some(c) => {
+                        // An empty cell has no place of its own between its spaces: fill the space between the pipes.
+                        let empty = c.from == c.to;
+                        let (s, e) = if empty { (c.seg.0, c.seg.1) } else { (c.from, c.to) };
+                        let (s, e) = ((start + s) as i32, (start + e) as i32);
+                        let esc = if empty { format!(" {} ", super::tables::escape_cell(&text)) } else { super::tables::escape_cell(&text) };
+                        self.edit(|b| {
+                            b.delete(&mut b.iter_at_offset(s), &mut b.iter_at_offset(e));
+                            b.insert(&mut b.iter_at_offset(s), &esc);
+                        });
+                        None
+                    }
+                    // A cell its row was missing: the table is written out again.
+                    None => {
+                        let header: Vec<String> = t.header.iter().map(|c| c.text.clone()).collect();
+                        let mut rows: Vec<Vec<String>> = t.rows.iter().map(|r| r.iter().map(|c| c.text.clone()).collect()).collect();
+                        if let Some(r) = rows.get_mut(row.wrapping_sub(1)) {
+                            r.resize(col + 1, String::new());
+                            r[col] = text;
+                        }
+                        Some(super::tables::table_markdown(&header, &t.delimiter, &rows))
+                    }
+                };
+                if let Some(new) = new {
+                    self.rewrite_block(start, &old, &new);
+                }
+            }
+            Change::Rewrite(new) => self.rewrite_block(start, &old, &new),
+            Change::EditText => {
+                self.view.grab_focus();
+                self.buffer.place_cursor(&self.buffer.iter_at_offset(start as i32));
+            }
+        }
+    }
+
+    fn rewrite_block(&self, start: usize, old: &str, new: &str) {
+        let changes = super::ai::changes_between(old, new);
+        self.edit(|b| {
+            for c in changes.iter().rev() {
+                let (s, e) = ((start + c.from) as i32, (start + c.to) as i32);
+                if e > s {
+                    b.delete(&mut b.iter_at_offset(s), &mut b.iter_at_offset(e));
+                }
+                if !c.insert.is_empty() {
+                    b.insert(&mut b.iter_at_offset(s), &c.insert);
+                }
+            }
+        });
     }
 
     /// Others can edit this note, so lines they wrote are marked.
@@ -1965,6 +2132,11 @@ impl Editor {
             }
         });
         true
+    }
+
+    /// Table or board `n`'s widget, as drawn now.
+    pub fn block_widget_at(&self, n: usize) -> Option<gtk::Widget> {
+        self.blocks.borrow().get(n).map(|b| b.widget.clone())
     }
 
     /// The "/" menu or emoji list is showing.
@@ -2203,6 +2375,23 @@ struct Recording {
     timer: glib::SourceId,
     /// The live transcript's link, which ends once its last words are in.
     live: Option<tokio::task::JoinHandle<()>>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum BlockKind {
+    Table,
+    Board,
+}
+
+/// A table or board shown as a widget: where its Markdown is, and what it was drawn from.
+struct BlockView {
+    /// Its widget's edits find it by this, wherever it has moved to.
+    id: u64,
+    kind: BlockKind,
+    start: usize,
+    end: usize,
+    text: String,
+    widget: gtk::Widget,
 }
 
 #[derive(Clone)]
