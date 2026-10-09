@@ -3,7 +3,7 @@
 // each PNG itself (GNOTES_SHOT, gtk/src/ui/shot.rs), so it shows exactly what GTK drew.
 //
 // Usage: cargo build -p gnotes-server -p gnotes-gtk && node gtk/scripts/shot.mjs [options] [screen...]
-//   screens: login home note:<title> notebook:<name> recent search:<query> shared trash
+//   screens: login local local:settings home note:<title> notebook:<name> recent search:<query> shared trash
 //            share:<title> move:<title> new-notebook   (default: home note:Groceries)
 //   --narrow | --wide     window size (default: both)
 //   --dark | --light      style (default: both)
@@ -37,10 +37,13 @@ for (const target of targets) {
       const file = join(out, `gtk-${target.replace(/[^\w.-]+/g, "_")}-${sizeName}-${style}.png`);
       rmSync(file, { force: true });
       const { code, stderr } = await demo.runApp({
-        signedIn: target !== "login",
+        // local[:screen]: notes on this computer, then that screen.
+        signedIn: target !== "login" && !target.startsWith("local"),
         style,
         size,
-        env: { GNOTES_OPEN: target, GNOTES_SHOT: file },
+        env: target.startsWith("local")
+          ? { GNOTES_LOCAL: "1", GNOTES_OPEN: target.split(":").slice(1).join(":") || "home", GNOTES_SHOT: file }
+          : { GNOTES_OPEN: target, GNOTES_SHOT: file },
         timeout: 20_000,
       });
       if (code !== 0 || stderr) console.error(`${target}: exit ${code}\n${stderr}`);

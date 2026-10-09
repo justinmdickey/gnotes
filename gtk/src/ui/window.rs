@@ -41,6 +41,7 @@ impl Window {
         }
         super::shot::schedule(&window);
         match Session::load() {
+            Some(session) if session.local => open_local(&window),
             Some(session) => Main::show(&window, session),
             None => show_login(&window, None),
         }
@@ -50,12 +51,44 @@ impl Window {
 
 fn show_login(window: &adw::ApplicationWindow, server: Option<String>) {
     let w = window.clone();
-    window.set_content(Some(&login::page(server, move |session| {
+    window.set_content(Some(&login::page(server, true, move |session| {
         if let Err(e) = session.save() {
             eprintln!("saving the session: {e}");
         }
         Main::show(&w, session);
     })));
+}
+
+/// Starts the built-in server for the notes on this computer, then shows them.
+fn open_local(window: &adw::ApplicationWindow) {
+    let opening = adw::StatusPage::builder()
+        .title("Opening Your Notes…")
+        .child(&adw::Spinner::builder().width_request(32).height_request(32).build())
+        .build();
+    window.set_content(Some(&opening));
+    let w = window.clone();
+    glib::spawn_future_local(async move {
+        match start_local().await {
+            Ok(session) => Main::show(&w, session),
+            Err(e) => {
+                eprintln!("opening the notes on this computer: {e}");
+                show_login(&w, None);
+            }
+        }
+    });
+}
+
+/// The notes on this computer: starts the built-in server, signs in, and keeps that as the session.
+pub async fn start_local() -> Result<Session, String> {
+    let name = glib::real_name().to_string_lossy().trim().to_owned();
+    let name = if name.is_empty() || name == "Unknown" { glib::user_name().to_string_lossy().into_owned() } else { name };
+    let dir = crate::local::data_dir();
+    let (api, user) = bg(async move { crate::local::start(&dir, &name).await }).await.map_err(|e| format!("{e:#}"))?;
+    let session = Session { server: api.base.clone(), token: api.token.clone(), user, local: true };
+    if let Err(e) = session.save() {
+        eprintln!("saving the session: {e}");
+    }
+    Ok(session)
 }
 
 /// The signed-in window.
@@ -259,6 +292,7 @@ impl Main {
         action("logout", Box::new(|m| m.sign_out(true)));
         action("about", Box::new(|m| m.about()));
         action("settings", Box::new(super::settings::open));
+        action("move-to-server", Box::new(|m| super::settings::move_dialog(m, None)));
         action("signed-out-toast", Box::new(|m| m.toast("Signed out. Sign in again to keep syncing.")));
         if let Some(app) = self.window.application() {
             app.set_accels_for_action("win.new-note", &["<Control>n"]);
@@ -342,6 +376,24 @@ impl Main {
                 main.open_note(&id, false);
             }
         });
+    }
+
+    /// Closes this account's window contents and opens `session` instead, e.g. after Move to a Server.
+    pub fn switch_to(self: &Rc<Self>, session: Session) {
+        if let Some(e) = self.editor.take() {
+            e.close();
+        }
+        if let Some(a) = self.ask.get() {
+            a.end();
+        }
+        self.store.sync.stop();
+        if let Err(e) = session.save() {
+            eprintln!("saving the session: {e}");
+        }
+        unsafe {
+            let _ = self.window.steal_data::<Rc<Main>>("gnotes-main");
+        }
+        Main::show(&self.window, session);
     }
 
     /// Closes everything and goes back to sign-in. `server_too` also ends the session on the server

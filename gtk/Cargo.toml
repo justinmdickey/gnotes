@@ -17,6 +17,8 @@ base64 = "0.23.1"
 # Emoji by GitHub's names, for ":taco:" and the emoji picker in notes.
 emojis = "0.9"
 futures-util = "0.3.34"
+# Runs inside the app for notes on this computer, with no server to set up.
+gnotes-server = { path = "../server" }
 # Records voice memos from the microphone.
 gst = { package = "gstreamer", version = "0.25" }
 gst-app = { package = "gstreamer-app", version = "0.25" }
@@ -36,5 +38,4 @@ tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-webpki-roots"]
 uuid = { version = "1.26.1", features = ["v7"] }
 
 [dev-dependencies]
-gnotes-server = { path = "../server" }
 tempfile = "3.27.0"

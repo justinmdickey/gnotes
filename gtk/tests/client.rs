@@ -385,3 +385,56 @@ fn a_recording_stopped_at_once_still_stops() {
     let out = done_rx.recv_timeout(Duration::from_secs(10)).expect("stopping hung");
     let _ = out;
 }
+
+#[tokio::test]
+async fn local_notes_start_with_no_setup_and_move_to_a_server() {
+    let dir = tempfile::tempdir().unwrap();
+    let (local, me) = gnotes_gtk::local::start(dir.path(), "Ann").await.unwrap();
+    assert_eq!(me.display_name, "Ann");
+    let home = local.create_notebook("Home", None).await.unwrap();
+    let kitchen = local.create_notebook("Kitchen", Some(&home)).await.unwrap();
+    let note = local.create_note(Some(&kitchen), None).await.unwrap();
+    let png = base64::Engine::decode(
+        &base64::engine::general_purpose::STANDARD,
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQAY3Y2wAAAAAElFTkSuQmCC",
+    )
+    .unwrap();
+    let att = local.upload(&note, "dot.png", "image/png", png.clone()).await.unwrap();
+    let (sync, events) = SyncClient::start(local.clone());
+    online(&events).await;
+    let mut doc = NoteDoc::new();
+    join(&sync, &events, &note, &mut doc).await;
+    doc.insert(0, &format!("# Groceries\n\nmilk 🥛\n![dot](att:{})\n", att.id));
+    send(&sync, &note, &doc);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    sync.stop();
+    let loose = local.create_note(None, None).await.unwrap();
+    let _ = loose;
+
+    let server = start().await;
+    let remote = user(&server, "ann").await;
+    let moved = gnotes_gtk::migrate::move_all(&local, &remote, |_, _| {}).await.unwrap();
+    assert_eq!(moved, gnotes_gtk::migrate::Moved { notebooks: 2, notes: 2, attachments: 1 });
+
+    let tree = remote.tree().await.unwrap();
+    let kitchen2 = tree.notebooks.iter().find(|n| n.name == "Kitchen").unwrap();
+    let home2 = tree.notebooks.iter().find(|n| n.name == "Home").unwrap();
+    assert_eq!(kitchen2.parent_id.as_deref(), Some(home2.id.as_str()));
+    let moved_note = tree.notes.iter().find(|n| n.id == note).expect("the note keeps its id");
+    assert_eq!(moved_note.notebook_id.as_deref(), Some(kitchen2.id.as_str()));
+    assert_eq!(moved_note.title, "Groceries");
+
+    let (rs, rev) = SyncClient::start(remote.clone());
+    online(&rev).await;
+    let mut there = NoteDoc::new();
+    join(&rs, &rev, &note, &mut there).await;
+    let text = there.text();
+    assert!(text.starts_with("# Groceries\n\nmilk 🥛\n![dot](att:"), "{text}");
+    assert!(!text.contains(&att.id), "links point at the server's copy");
+    let new_id: String = text.split("att:").nth(1).unwrap().chars().take(36).collect();
+    assert_eq!(remote.attachment(&new_id).await.unwrap(), png);
+
+    // The notes on this computer are still there, and the next start signs in to them.
+    let (again, _) = gnotes_gtk::local::start(dir.path(), "Ann").await.unwrap();
+    assert_eq!(again.tree().await.unwrap().notes.len(), 2);
+}

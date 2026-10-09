@@ -443,6 +443,37 @@ check("a new server's first account is made from sign-in", code === 0 && setupDu
   check("the AI Prompt writes at the cursor", /# Pantry\n- Olive oil\n- Coffee beans/.test(edited), edited.slice(0, 80));
 }
 
+// Notes on this computer: no server to set up, then moved to one.
+({ code, stderr } = await demo.runApp({
+  signedIn: false,
+  env: {
+    GNOTES_LOCAL: "1",
+    GNOTES_DRIVE: ["wait-status online", "make-notebook Ideas", "wait-row Ideas", "new-note", "type Written here first", "sleep 800", `dump ${f("local.json")}`, "quit"].join("\n"),
+  },
+}));
+const localDump = existsSync(f("local.json")) ? dump("local.json") : {};
+check("Start Writing opens notes on this computer, with no server", code === 0 && localDump.local === true && localDump.status === "online", { code, stderr, localDump });
+({ code, stderr } = await demo.runApp({
+  fresh: false,
+  signedIn: false,
+  env: {
+    GNOTES_DRIVE: [
+      "wait-row Ideas",
+      "open note:Written here first",
+      "wait-text Written here first",
+      `move-to-server ${demo.base} sam password123`,
+      "wait-row Family",
+      `dump ${f("moved.json")}`,
+      "quit",
+    ].join("\n"),
+  },
+}));
+const movedDump = existsSync(f("moved.json")) ? dump("moved.json") : {};
+check("notes on this computer are there at the next start", code === 0, { code, stderr });
+check("Move to a Server switches the app to the server", movedDump.local === false && movedDump.user === "Sam", movedDump);
+const samNotes = await sam.tree();
+check("Move to a Server takes the notes and notebooks along", samNotes.notes.some((n) => n.title === "Written here first") && samNotes.notebooks.some((n) => n.name === "Ideas"), samNotes.notes.map((n) => n.title));
+
 // Signing in through the form, then starting again signed in, then starting with no server.
 ({ code, stderr } = await demo.runApp({
   signedIn: false,

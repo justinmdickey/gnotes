@@ -195,7 +195,11 @@ impl Sidebar {
         let items = gio::Menu::new();
         items.append(Some("Settings"), Some("win.settings"));
         items.append(Some("About Gnotes"), Some("win.about"));
-        items.append(Some("Log Out"), Some("win.logout"));
+        if main.store.local {
+            items.append(Some("Move to a Server…"), Some("win.move-to-server"));
+        } else {
+            items.append(Some("Log Out"), Some("win.logout"));
+        }
         menu.append_section(Some(&me.display_name), &items);
         self.account.set_menu_model(Some(&menu));
         self.account.set_child(Some(&super::person(&me.display_name, crate::note::color_for(&me.id), 26)));
@@ -204,6 +208,8 @@ impl Sidebar {
     fn show_status(&self) {
         let Some(main) = self.main.upgrade() else { return };
         let (text, class) = match main.store.status.get() {
+            // The built-in server is always there; nothing leaves this computer.
+            Status::Online if main.store.local => ("On this computer", "online"),
             Status::Online => ("Connected", "online"),
             Status::Connecting => ("Connecting…", "connecting"),
             Status::Offline => ("Offline", "offline"),
@@ -372,8 +378,11 @@ impl Sidebar {
         }
         let shared_notes = shared_notes(&tree);
         // The heading opens the Shared page: what's shared with you, then what you've shared.
-        let l = gtk::Label::builder().label("Shared").xalign(0.0).css_classes(["heading", "dim-label", "sidebar-heading"]).build();
-        self.push(Row::Shared, &l).add_css_class("heading-row");
+        // Notes on this computer have no one to share with.
+        if !main.store.local {
+            let l = gtk::Label::builder().label("Shared").xalign(0.0).css_classes(["heading", "dim-label", "sidebar-heading"]).build();
+            self.push(Row::Shared, &l).add_css_class("heading-row");
+        }
         for nb in &shared {
             self.add_notebook(&main, &tree, &map, nb, 0);
         }

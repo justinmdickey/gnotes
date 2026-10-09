@@ -3,6 +3,8 @@
 
 pub mod api;
 pub mod cache;
+pub mod local;
+pub mod migrate;
 pub mod note;
 pub mod recorder;
 pub mod sync;

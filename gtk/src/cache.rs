@@ -56,6 +56,9 @@ pub struct Session {
     pub server: String,
     pub token: String,
     pub user: User,
+    /// Notes on this computer: the built-in server (local.rs), started afresh each time.
+    #[serde(default)]
+    pub local: bool,
 }
 
 impl Session {

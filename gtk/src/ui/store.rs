@@ -46,6 +46,8 @@ fn notify(watchers: &RefCell<Vec<Watcher>>) {
 
 pub struct Store {
     pub api: Api,
+    /// Notes on this computer, through the built-in server.
+    pub local: bool,
     user: RefCell<User>,
     /// Which optional services the server has on; refreshed when they may have changed.
     pub features: RefCell<Features>,
@@ -70,7 +72,8 @@ pub struct Store {
 impl Store {
     pub fn start(session: &Session) -> Rc<Store> {
         let api = Api::resume(session.server.clone(), session.token.clone());
-        let cache = Cache::for_account(&session.server, &session.user.id);
+        // The built-in server's address changes each start; its copies stay in one place.
+        let cache = Cache::for_account(if session.local { "local" } else { &session.server }, &session.user.id);
         let (sync, events) = {
             let _rt = crate::runtime().enter();
             SyncClient::start(api.clone())
@@ -79,6 +82,7 @@ impl Store {
         add_queued(&mut tree, &cache.queued());
         let store = Rc::new(Store {
             api,
+            local: session.local,
             user: RefCell::new(session.user.clone()),
             features: Default::default(),
             features_watchers: Default::default(),
@@ -112,7 +116,7 @@ impl Store {
 
     /// After a name change: kept for next time too.
     pub fn set_user(&self, user: User) {
-        let session = Session { server: self.api.base.clone(), token: self.api.token.clone(), user: user.clone() };
+        let session = Session { server: self.api.base.clone(), token: self.api.token.clone(), user: user.clone(), local: self.local };
         let _ = session.save();
         *self.user.borrow_mut() = user;
         self.tree_changed();

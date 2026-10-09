@@ -53,6 +53,7 @@
 //! get-text <n>             Get Text on the open note's nth photo or recording (from 0)
 //! wait-answer <text>       Ask's last answer has <text>
 //! cite <n>                 opens the note the last answer's [n] links to
+//! move-to-server <server> <username> <password>   Move to a Server, signing in there
 //! dump <file.json>          the open note's text, title and peers, the sidebar's rows, the status
 //! shot <file.png>
 //! quit
@@ -502,6 +503,22 @@ async fn run(main: &Rc<Main>, cmd: &str, arg: &str) {
                 main.open_note(&id, true);
             }
         }
+        "move-to-server" => {
+            let parts: Vec<String> = arg.split_whitespace().map(str::to_owned).collect();
+            let [server, user, pass] = &parts[..] else { return };
+            let (s, u, p) = (server.clone(), user.clone(), pass.clone());
+            match crate::bg(async move { crate::api::Api::login(&s, &u, &p).await }).await {
+                Ok((api, user)) => {
+                    let session = crate::cache::Session { server: api.base.clone(), token: api.token.clone(), user, local: false };
+                    let dialog = adw::Dialog::new();
+                    dialog.present(Some(&main.window));
+                    if !super::settings::move_to(main, &dialog, session).await {
+                        eprintln!("drive: the move failed");
+                    }
+                }
+                Err(e) => eprintln!("drive: signing in to {server}: {e}"),
+            }
+        }
         "dump" => {
             let e = editor();
             let v = json!({
@@ -518,6 +535,7 @@ async fn run(main: &Rc<Main>, cmd: &str, arg: &str) {
                 "ask_answer": main.ask.get().map(|a| a.last_answer()),
                 "status": status(main.store.status.get()),
                 "user": main.store.user().display_name,
+                "local": main.store.local,
                 "dialog": main.window.visible_dialog().map(|d| d.title().to_string()),
                 "features": {
                     "summaries": main.store.features.borrow().summaries,

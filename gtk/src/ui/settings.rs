@@ -52,8 +52,11 @@ pub fn open(main: &Rc<Main>) {
 pub fn open_at(main: &Rc<Main>, page: &str) {
     let dialog = adw::PreferencesDialog::builder().title("Settings").search_enabled(false).build();
     dialog.add(&account_page(main, &dialog));
-    if main.store.user().is_admin {
+    // Notes on this computer have no one else to manage; AI services still apply.
+    if main.store.user().is_admin && !main.store.local {
         dialog.add(&people_page(main, &dialog));
+    }
+    if main.store.user().is_admin {
         dialog.add(&services_page(main, &dialog));
     }
     dialog.set_visible_page_name(page);
@@ -69,7 +72,7 @@ fn account_page(main: &Rc<Main>, dialog: &adw::PreferencesDialog) -> adw::Prefer
     let profile = adw::PreferencesGroup::new();
     let who = adw::ActionRow::builder()
         .title(glib::markup_escape_text(&me.display_name))
-        .subtitle(format!("@{}{}", me.username, if me.is_admin { " · Admin" } else { "" }))
+        .subtitle(if main.store.local { "Notes on this computer".to_owned() } else { format!("@{}{}", me.username, if me.is_admin { " · Admin" } else { "" }) })
         .build();
     who.add_prefix(&super::person(&me.display_name, crate::note::color_for(&me.id), 32));
     profile.add(&who);
@@ -92,6 +95,8 @@ fn account_page(main: &Rc<Main>, dialog: &adw::PreferencesDialog) -> adw::Prefer
     let (m, d) = (main.clone(), dialog.clone());
     change.connect_clicked(move |_| change_password(&m, &d));
     password.add_suffix(&change);
+    // The account for notes on this computer has a password nobody types.
+    password.set_visible(!main.store.local);
     account.add(&password);
     page.add(&account);
 
@@ -125,6 +130,25 @@ fn account_page(main: &Rc<Main>, dialog: &adw::PreferencesDialog) -> adw::Prefer
     logout.set_action_name(Some("win.logout"));
     here.add_suffix(&logout);
     devices.add(&here);
+    // Notes on this computer: no other devices or API to speak of, but a server to move to.
+    if main.store.local {
+        devices.set_visible(false);
+        let here = adw::PreferencesGroup::builder()
+            .title("This Computer")
+            .description("Your notes are kept on this computer only.")
+            .build();
+        let row = adw::ActionRow::builder()
+            .title("Move to a Server")
+            .subtitle("Use your notes on other devices, and share them")
+            .build();
+        let go = button("Move…");
+        go.add_css_class("suggested-action");
+        let (m, d) = (main.clone(), dialog.clone());
+        go.connect_clicked(move |_| move_dialog(&m, Some(&d)));
+        row.add_suffix(&go);
+        here.add(&row);
+        page.add(&here);
+    }
     page.add(&devices);
 
     let keys = adw::PreferencesGroup::builder()
@@ -135,6 +159,7 @@ fn account_page(main: &Rc<Main>, dialog: &adw::PreferencesDialog) -> adw::Prefer
     keys.set_header_suffix(Some(&new_key));
     let list = gtk::ListBox::builder().css_classes(["boxed-list"]).selection_mode(gtk::SelectionMode::None).build();
     keys.add(&list);
+    keys.set_visible(!main.store.local);
     page.add(&keys);
     let reload_keys = {
         let (m, list, dialog) = (main.clone(), list.clone(), dialog.clone());
@@ -753,4 +778,65 @@ pub async fn save_service(main: &Rc<Main>, kind: &str, body: ServiceInput) -> Op
     let saved = call(main, async move { api.save_service(&kind, &body).await }).await;
     main.store.refresh_features();
     saved
+}
+
+/// Move to a Server: sign in (or set up, or join) on a server, then everything here moves there and
+/// the app switches to it. The notes stay on this computer too, in a backup folder.
+pub fn move_dialog(main: &Rc<Main>, parent: Option<&adw::PreferencesDialog>) {
+    let dialog = adw::Dialog::builder().title("Move to a Server").content_width(460).content_height(640).build();
+    let (m, d) = (main.clone(), dialog.clone());
+    let signin = super::login::page(None, false, move |session| {
+        let (m, d) = (m.clone(), d.clone());
+        glib::spawn_future_local(async move { move_to(&m, &d, session).await });
+    });
+    dialog.set_child(Some(&signin));
+    match parent {
+        Some(p) => dialog.present(Some(p)),
+        None => dialog.present(Some(&main.window)),
+    }
+}
+
+/// Moves everything here to the server of `session`, showing how far it's got in `dialog`, then
+/// switches to it. True when it did.
+pub async fn move_to(main: &Rc<Main>, dialog: &adw::Dialog, session: crate::cache::Session) -> bool {
+    let bar = gtk::ProgressBar::builder().show_text(true).text("Getting ready…").build();
+    let page = adw::StatusPage::builder()
+        .icon_name("send-to-symbolic")
+        .title("Moving Your Notes…")
+        .description(format!("To {}", session.server))
+        .child(&adw::Clamp::builder().maximum_size(300).child(&bar).build())
+        .build();
+    dialog.set_child(Some(&page));
+    dialog.set_can_close(false);
+    let (tx, rx) = async_channel::unbounded::<(usize, usize)>();
+    let b = bar.clone();
+    glib::spawn_future_local(async move {
+        while let Ok((done, total)) = rx.recv().await {
+            b.set_fraction(if total == 0 { 1.0 } else { done as f64 / total as f64 });
+            b.set_text(Some(&format!("{done} of {total} notes")));
+        }
+    });
+    let (from, to) = (main.store.api.clone(), crate::api::Api::resume(session.server.clone(), session.token.clone()));
+    let result = bg(async move { crate::migrate::move_all(&from, &to, move |d, t| { let _ = tx.try_send((d, t)); }).await }).await;
+    dialog.set_can_close(true);
+    match result {
+        Ok(moved) => {
+            // Kept, out of the way, so Start Writing begins afresh rather than with these again.
+            let here = crate::local::data_dir();
+            let stamp = glib::DateTime::now_local().ok().and_then(|t| t.format("%Y-%m-%d-%H%M%S").ok()).unwrap_or_default();
+            if let Err(e) = std::fs::rename(&here, here.with_file_name(format!("local-moved-{stamp}"))) {
+                eprintln!("keeping the moved notes aside: {e}");
+            }
+            dialog.force_close();
+            main.switch_to(session);
+            main.toast(&format!("Moved {} {} to the server", moved.notes, if moved.notes == 1 { "note" } else { "notes" }));
+            true
+        }
+        Err(e) => {
+            page.set_title("Couldn't Move Your Notes");
+            page.set_description(Some(&glib::markup_escape_text(&format!("{e:#}. Your notes are still here."))));
+            bar.set_visible(false);
+            false
+        }
+    }
 }

@@ -1,5 +1,6 @@
-//! Sign in, like web/src/Login.svelte with the server added: or, on a new server, make its first
-//! account (the admin); or join with an invite link, like web/src/Join.svelte.
+//! The first screen: start writing with notes on this computer, or sign in to a server, like
+//! web/src/Login.svelte with the server added: or, on a new server, make its first account (the
+//! admin); or join with an invite link, like web/src/Join.svelte.
 
 use std::{
     cell::{Cell, RefCell},
@@ -37,8 +38,10 @@ struct Form {
     done: Box<dyn Fn(Session)>,
 }
 
-/// The sign-in page; `done` gets the new session.
-pub fn page(last_server: Option<String>, done: impl Fn(Session) + 'static) -> gtk::Widget {
+/// The sign-in page; `done` gets the new session. With `offer_local`, it first offers notes on this
+/// computer (unless coming back from a server, `last_server`).
+pub fn page(last_server: Option<String>, offer_local: bool, done: impl Fn(Session) + 'static) -> gtk::Widget {
+    let welcome = offer_local && last_server.is_none();
     let server = adw::EntryRow::builder().title("Server").text(last_server.unwrap_or_default()).build();
     server.set_input_purpose(gtk::InputPurpose::Url);
     let link = adw::EntryRow::builder().title("Invite Link").visible(false).build();
@@ -55,17 +58,38 @@ pub fn page(last_server: Option<String>, done: impl Fn(Session) + 'static) -> gt
     let switch = gtk::Button::builder().label("Have an invite link?").halign(gtk::Align::Center).css_classes(["flat"]).build();
     let spinner = adw::Spinner::builder().visible(false).build();
 
+    let form = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(24).visible(!welcome).build();
+    form.append(&group);
+    form.append(&error);
+    form.append(&button);
+    form.append(&spinner);
+    form.append(&switch);
+
+    // Notes on this computer, or a server: the choice a first start offers.
+    let start = gtk::Button::builder().label("Start Writing").halign(gtk::Align::Center).css_classes(["suggested-action", "pill"]).build();
+    let start_note = gtk::Label::builder()
+        .label("Notes stay on this computer. Move them to a server any time.")
+        .wrap(true)
+        .justify(gtk::Justification::Center)
+        .css_classes(["dim-label", "caption"])
+        .build();
+    let to_server = gtk::Button::builder().label("Sign In to a Server").halign(gtk::Align::Center).css_classes(["pill"]).build();
+    let starting = adw::Spinner::builder().visible(false).build();
+    let choice = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(12).visible(welcome).build();
+    choice.append(&start);
+    choice.append(&start_note);
+    choice.append(&starting);
+    choice.append(&gtk::Box::builder().height_request(12).build());
+    choice.append(&to_server);
+
     let column = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(24).build();
-    column.append(&group);
-    column.append(&error);
-    column.append(&button);
-    column.append(&spinner);
-    column.append(&switch);
+    column.append(&choice);
+    column.append(&form);
 
     let status = adw::StatusPage::builder()
         .icon_name(super::APP_ID)
         .title("Gnotes")
-        .description("Sign in to your notes server")
+        .description(if welcome { "Markdown notes, on this computer or your own server" } else { "Sign in to your notes server" })
         .child(&adw::Clamp::builder().maximum_size(400).child(&column).build())
         .vexpand(true)
         .build();
@@ -75,7 +99,7 @@ pub fn page(last_server: Option<String>, done: impl Fn(Session) + 'static) -> gt
     view.add_top_bar(&header);
     view.set_content(Some(&scroll));
 
-    let form = Rc::new(Form {
+    let form_state = Rc::new(Form {
         mode: Cell::new(Mode::SignIn),
         status,
         server: server.clone(),
@@ -92,13 +116,46 @@ pub fn page(last_server: Option<String>, done: impl Fn(Session) + 'static) -> gt
         done: Box::new(done),
     });
 
-    for entry in [server.upcast_ref::<adw::EntryRow>(), &link, &username, &form.name, password.upcast_ref()] {
-        let f = form.clone();
+    for entry in [server.upcast_ref::<adw::EntryRow>(), &link, &username, &form_state.name, password.upcast_ref()] {
+        let f = form_state.clone();
         entry.connect_entry_activated(move |_| f.submit());
     }
-    let f = form.clone();
+    let f = form_state.clone();
     button.connect_clicked(move |_| f.submit());
-    let f = form.clone();
+    {
+        let (choice, form_box, f) = (choice.clone(), form.clone(), form_state.clone());
+        to_server.connect_clicked(move |_| {
+            choice.set_visible(false);
+            form_box.set_visible(true);
+            f.status.set_description(Some("Sign in to your notes server"));
+            f.server.grab_focus();
+        });
+    }
+    let start_local = {
+        let (f, start, starting) = (form_state.clone(), start.clone(), starting.clone());
+        move || {
+            start.set_sensitive(false);
+            starting.set_visible(true);
+            let (f, start, starting) = (f.clone(), start.clone(), starting.clone());
+            glib::spawn_future_local(async move {
+                match super::window::start_local().await {
+                    Ok(session) => (f.done)(session),
+                    Err(e) => {
+                        start.set_sensitive(true);
+                        starting.set_visible(false);
+                        f.status.set_description(Some(&format!("Couldn't open notes here: {e}")));
+                    }
+                }
+            });
+        }
+    };
+    let s = start_local.clone();
+    start.connect_clicked(move |_| s());
+    // For gtk/scripts/e2e.mjs: GNOTES_LOCAL=1 picks notes on this computer.
+    if welcome && std::env::var_os("GNOTES_LOCAL").is_some() {
+        glib::idle_add_local_once(start_local);
+    }
+    let f = form_state.clone();
     switch.connect_clicked(move |_| {
         let next = if f.mode.get() == Mode::Join { Mode::SignIn } else { Mode::Join };
         f.set_mode(next);
@@ -109,11 +166,11 @@ pub fn page(last_server: Option<String>, done: impl Fn(Session) + 'static) -> gt
         }
     });
     // A new server may need its first account; an invite link says who it's from.
-    let f = form.clone();
+    let f = form_state.clone();
     server.connect_changed(move |_| f.check_later());
-    let f = form.clone();
+    let f = form_state.clone();
     link.connect_changed(move |_| f.check_later());
-    form.check_later();
+    form_state.check_later();
 
     // For gtk/scripts/e2e.mjs: fill the form and submit it.
     //   GNOTES_LOGIN="<server> <username> <password>"
@@ -128,21 +185,21 @@ pub fn page(last_server: Option<String>, done: impl Fn(Session) + 'static) -> gt
     } else if let Some([s, u, n, p]) = script("GNOTES_SETUP").as_deref() {
         server.set_text(s);
         username.set_text(u);
-        form.name.set_text(n);
+        form_state.name.set_text(n);
         password.set_text(p);
         Some(Mode::Setup)
     } else if let Some([l, u, n, p]) = script("GNOTES_JOIN").as_deref() {
-        form.set_mode(Mode::Join);
+        form_state.set_mode(Mode::Join);
         link.set_text(l);
         username.set_text(u);
-        form.name.set_text(n);
+        form_state.name.set_text(n);
         password.set_text(p);
         Some(Mode::Join)
     } else {
         None
     };
     if let Some(mode) = auto {
-        let f = form.clone();
+        let f = form_state.clone();
         // After the server check has picked the form.
         glib::timeout_add_local_once(std::time::Duration::from_millis(1200), move || {
             if f.mode.get() != mode {
@@ -272,7 +329,7 @@ impl Form {
             f.button.set_sensitive(true);
             f.spinner.set_visible(false);
             match result {
-                Ok((api, user)) => (f.done)(Session { server: api.base.clone(), token: api.token.clone(), user }),
+                Ok((api, user)) => (f.done)(Session { server: api.base.clone(), token: api.token.clone(), user, local: false }),
                 Err(e) => f.show_error(&e.to_string()),
             }
         });
