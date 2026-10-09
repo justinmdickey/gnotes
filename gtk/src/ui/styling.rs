@@ -15,6 +15,19 @@ pub fn is_board(b: &markdown::CodeBlock) -> bool {
     b.info.split_whitespace().next().is_some_and(|w| w.eq_ignore_ascii_case("kanban"))
 }
 
+/// The theme's accent color. Read off a widget styled `.accent` rather than from the style manager,
+/// so a theme or a gtk.css that sets its own accent is followed too.
+pub fn accent() -> gdk::RGBA {
+    let probe = gtk::Label::builder().css_classes(["accent"]).build();
+    probe.color()
+}
+
+/// The monospace font family the desktop uses.
+pub fn monospace() -> String {
+    let name = adw::StyleManager::default().monospace_font_name();
+    gtk::pango::FontDescription::from_string(&name).family().map(|f| f.to_string()).unwrap_or_else(|| "monospace".into())
+}
+
 pub fn make_tags(buffer: &gtk::TextBuffer) {
     for name in markdown::TAGS {
         buffer.create_tag(Some(name), &[]);
@@ -27,7 +40,8 @@ pub fn color_tags(view: &NoteView) {
         let fg = view.color();
         let dark = fg.red() + fg.green() + fg.blue() > 1.5;
         let dim = gdk::RGBA::new(fg.red(), fg.green(), fg.blue(), 0.45);
-        let accent = adw::StyleManager::default().accent_color().to_standalone_rgba(dark);
+        let accent = accent();
+        let mono = monospace();
         let code_bg = gdk::RGBA::new(fg.red(), fg.green(), fg.blue(), if dark { 0.08 } else { 0.06 });
         let table = view.buffer().tag_table();
         let tag = |name: &str| table.lookup(name).expect("tag");
@@ -43,16 +57,16 @@ pub fn color_tags(view: &NoteView) {
         set("bold", &[("weight", &700i32)]);
         set("italic", &[("style", &gtk::pango::Style::Italic)]);
         set("strike", &[("strikethrough", &true)]);
-        set("code", &[("family", &"monospace"), ("background-rgba", &code_bg)]);
+        set("code", &[("family", &mono), ("background-rgba", &code_bg)]);
         // Its panel is drawn behind it (noteview.rs), within the text column.
-        set("codeblock", &[("family", &"monospace")]);
-        set("table", &[("family", &"monospace")]);
+        set("codeblock", &[("family", &mono)]);
+        set("table", &[("family", &mono)]);
         set("quote", &[("foreground-rgba", &dim)]);
         set("mark", &[("foreground-rgba", &dim)]);
         set("bullet", &[("foreground-rgba", &dim), ("weight", &700i32)]);
         set("link", &[("foreground-rgba", &accent), ("underline", &gtk::pango::Underline::Single)]);
         // A checkbox's `[ ]`: monospace, so the box drawn over it has room.
-        set("task", &[("family", &"monospace")]);
+        set("task", &[("family", &mono)]);
         set("done", &[("foreground-rgba", &dim), ("strikethrough", &true)]);
         // Live preview: marks hidden off the edited line; bullets and boxes drawn over clear text.
         // Pango takes an alpha of 0 as no alpha at all, so this is the least above it.
@@ -144,7 +158,7 @@ pub fn apply(view: &NoteView, text: &str, active: Option<(i32, i32)>) -> Styled 
         bullets: styled.bullets.clone(),
         quotes: styled.quotes.clone(),
         placeholder: text.is_empty() && view.is_editable(),
-        accent: Some(adw::StyleManager::default().accent_color().to_standalone_rgba(dark)),
+        accent: Some(accent()),
     });
     styled
 }

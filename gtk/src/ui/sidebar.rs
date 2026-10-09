@@ -1,5 +1,5 @@
 //! The sidebar, like the PWA's desktop one (web/src/Sidebar.svelte): Search, Recent, your notebooks
-//! with their notes, what's shared with you, Trash, and the connection at the bottom.
+//! with their notes, what's shared with you, Trash; the main menu, and a banner while offline.
 
 use std::{
     cell::RefCell,
@@ -38,9 +38,8 @@ pub struct Sidebar {
     rows: RefCell<Vec<Row>>,
     /// Notebooks showing what's inside. Notebooks start folded.
     open: RefCell<HashSet<String>>,
-    status: gtk::Label,
-    dot: gtk::Box,
-    account: gtk::MenuButton,
+    offline: adw::Banner,
+    menu: gtk::MenuButton,
     /// Set while rows are rebuilt or selected from code, so that isn't taken as a click.
     quiet: std::cell::Cell<bool>,
 }
@@ -136,26 +135,20 @@ impl Sidebar {
             .build();
 
         let header = adw::HeaderBar::new();
-        let new_notebook = gtk::Button::builder()
-            .icon_name("folder-new-symbolic")
-            .tooltip_text("New Notebook")
-            .action_name("win.new-notebook")
+        let new_note = gtk::Button::builder()
+            .icon_name("list-add-symbolic")
+            .tooltip_text("New Note (Ctrl+N)")
+            .action_name("win.new-note")
             .build();
-        header.pack_start(&new_notebook);
-
-        let account_button = gtk::MenuButton::builder().tooltip_text("Account").css_classes(["flat", "circular", "account"]).build();
-        header.pack_end(&account_button);
-
-        let dot = gtk::Box::builder().css_classes(["status-dot"]).valign(gtk::Align::Center).build();
-        let status = gtk::Label::builder().xalign(0.0).css_classes(["caption", "dim-label"]).build();
-        let footer = gtk::Box::builder().spacing(8).css_classes(["sidebar-footer"]).build();
-        footer.append(&dot);
-        footer.append(&status);
+        header.pack_start(&new_note);
+        let menu = gtk::MenuButton::builder().icon_name("open-menu-symbolic").tooltip_text("Main Menu").primary(true).build();
+        header.pack_end(&menu);
+        let offline = adw::Banner::new("Offline: changes sync when you reconnect");
 
         let view = adw::ToolbarView::new();
         view.add_top_bar(&header);
+        view.add_top_bar(&offline);
         view.set_content(Some(&scroll));
-        view.add_bottom_bar(&footer);
 
         let sidebar = Rc::new(Sidebar {
             widget: view.upcast(),
@@ -163,9 +156,8 @@ impl Sidebar {
             list: list.clone(),
             rows: Default::default(),
             open: Default::default(),
-            status,
-            dot,
-            account: account_button,
+            offline,
+            menu,
             quiet: Default::default(),
         });
 
@@ -187,38 +179,44 @@ impl Sidebar {
         sidebar
     }
 
-    /// Your avatar and its menu, which follow a name change.
-    fn show_account(&self) {
+    /// The main menu, as GNOME apps have it; the account part follows a name change.
+    fn show_menu(&self) {
         let Some(main) = self.main.upgrade() else { return };
-        let me = main.store.user();
         let menu = gio::Menu::new();
-        let items = gio::Menu::new();
-        items.append(Some("Settings"), Some("win.settings"));
-        items.append(Some("About Gnotes"), Some("win.about"));
+        let notes = gio::Menu::new();
+        notes.append(Some("New Notebook"), Some("win.new-notebook"));
+        notes.append(Some("Import Notes…"), Some("win.import"));
+        menu.append_section(None, &notes);
+        let account = gio::Menu::new();
         if main.store.local {
-            items.append(Some("Move to a Server…"), Some("win.move-to-server"));
+            account.append(Some("Move to a Server…"), Some("win.move-to-server"));
+            menu.append_section(None, &account);
         } else {
-            items.append(Some("Log Out"), Some("win.logout"));
+            account.append(Some("Log Out"), Some("win.logout"));
+            menu.append_section(Some(&main.store.user().display_name), &account);
         }
-        menu.append_section(Some(&me.display_name), &items);
-        self.account.set_menu_model(Some(&menu));
-        self.account.set_child(Some(&super::person(&me.display_name, crate::note::color_for(&me.id), 26)));
+        let app = gio::Menu::new();
+        app.append(Some("Preferences"), Some("win.settings"));
+        app.append(Some("Keyboard Shortcuts"), Some("win.shortcuts"));
+        app.append(Some("About Gnotes"), Some("win.about"));
+        menu.append_section(None, &app);
+        self.menu.set_menu_model(Some(&menu));
     }
 
+    /// Whether the offline banner shows. For tests.
+    pub fn offline_shown(&self) -> bool {
+        self.offline.is_revealed()
+    }
+
+    /// Opens the main menu, for screenshots.
+    pub fn open_menu(&self) {
+        self.menu.popup();
+    }
+
+    /// The banner shows only while a server is out of reach; notes on this computer never are.
     fn show_status(&self) {
         let Some(main) = self.main.upgrade() else { return };
-        let (text, class) = match main.store.status.get() {
-            // The built-in server is always there; nothing leaves this computer.
-            Status::Online if main.store.local => ("On this computer", "online"),
-            Status::Online => ("Connected", "online"),
-            Status::Connecting => ("Connecting…", "connecting"),
-            Status::Offline => ("Offline", "offline"),
-        };
-        self.status.set_label(text);
-        for c in ["online", "connecting", "offline"] {
-            self.dot.remove_css_class(c);
-        }
-        self.dot.add_css_class(class);
+        self.offline.set_revealed(main.store.status.get() == Status::Offline && !main.store.local);
     }
 
     fn activate(self: &Rc<Self>, index: i32) {
@@ -350,7 +348,7 @@ impl Sidebar {
 
     fn rebuild(self: &Rc<Self>) {
         let Some(main) = self.main.upgrade() else { return };
-        self.show_account();
+        self.show_menu();
         self.quiet.set(true);
         self.list.remove_all();
         self.rows.borrow_mut().clear();
@@ -369,6 +367,10 @@ impl Sidebar {
         }
         self.add_simple(Row::Search, "system-search-symbolic", "Search", None);
         self.add_simple(Row::Recent, "document-open-recent-symbolic", "Recent", None);
+        // What's shared with you, then what you've shared. Notes on this computer have no one to share with.
+        if !main.store.local {
+            self.add_simple(Row::Shared, "folder-publicshare-symbolic", "Shared", None);
+        }
         self.add_heading("Notes");
         for nb in &own {
             self.add_notebook(&main, &tree, &map, nb, 0);
@@ -377,11 +379,8 @@ impl Sidebar {
             self.add_note(&main, &n, 0);
         }
         let shared_notes = shared_notes(&tree);
-        // The heading opens the Shared page: what's shared with you, then what you've shared.
-        // Notes on this computer have no one to share with.
-        if !main.store.local {
-            let l = gtk::Label::builder().label("Shared").xalign(0.0).css_classes(["heading", "dim-label", "sidebar-heading"]).build();
-            self.push(Row::Shared, &l).add_css_class("heading-row");
+        if !shared.is_empty() || !shared_notes.is_empty() {
+            self.add_heading("Shared with You");
         }
         for nb in &shared {
             self.add_notebook(&main, &tree, &map, nb, 0);
@@ -389,6 +388,8 @@ impl Sidebar {
         for n in &shared_notes {
             self.add_note(&main, n, 0);
         }
+        let line = gtk::Separator::new(gtk::Orientation::Horizontal);
+        self.push(Row::Heading, &line).add_css_class("separator-row");
         self.add_simple(Row::Trash, "user-trash-symbolic", "Trash", None);
         self.quiet.set(false);
         self.select();
@@ -418,7 +419,9 @@ impl Sidebar {
         let row = self.push(Row::Heading, &l);
         row.add_css_class("heading-row");
         // Dropping on the Notes heading moves to your top level.
-        if let Some(main) = self.main.upgrade() {
+        if label == "Notes"
+            && let Some(main) = self.main.upgrade()
+        {
             drop_into(&main, &row, None);
         }
     }
@@ -436,7 +439,6 @@ impl Sidebar {
         let notes = notes_in(tree, &nb.id);
         let icon = if open { "folder-open-symbolic" } else { "folder-symbolic" };
         let (b, _) = row_box(depth, icon, &nb.name);
-        b.first_child().expect("icon").add_css_class("folder-icon");
         if nb.shared {
             b.append(&shared_badge());
         }

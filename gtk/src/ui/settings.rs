@@ -50,7 +50,7 @@ pub fn open(main: &Rc<Main>) {
 
 /// Opens Settings on a page: account, people or ai.
 pub fn open_at(main: &Rc<Main>, page: &str) {
-    let dialog = adw::PreferencesDialog::builder().title("Settings").search_enabled(false).build();
+    let dialog = adw::PreferencesDialog::builder().title("Preferences").search_enabled(false).build();
     dialog.add(&account_page(main, &dialog));
     // Notes on this computer have no one else to manage; AI services still apply.
     if main.store.user().is_admin && !main.store.local {
@@ -343,7 +343,7 @@ fn new_key_dialog(main: &Rc<Main>, parent: &adw::PreferencesDialog, reload: Rc<d
     dialog.present(Some(parent));
 }
 
-fn pick_import(main: &Rc<Main>) {
+pub fn pick_import(main: &Rc<Main>) {
     let filter = gtk::FileFilter::new();
     filter.set_name(Some("Markdown, text and zip files"));
     for p in ["*.md", "*.markdown", "*.txt", "*.zip"] {

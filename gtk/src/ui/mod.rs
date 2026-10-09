@@ -50,6 +50,29 @@ fn install_icon() {
     gtk::IconTheme::for_display(&gtk::gdk::Display::default().expect("display")).add_search_path(dir);
 }
 
+/// Note text in the desktop's document font, as GNOME's Text Editor has it, kept up to date.
+fn follow_document_font() {
+    let css = gtk::CssProvider::new();
+    gtk::style_context_add_provider_for_display(
+        &gtk::gdk::Display::default().expect("display"),
+        &css,
+        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+    );
+    let load = move |manager: &adw::StyleManager| {
+        let font = gtk::pango::FontDescription::from_string(&manager.document_font_name());
+        let family = font.family().map(|f| f.replace('"', "")).unwrap_or_else(|| "sans-serif".into());
+        let mut rule = format!("font-family: \"{family}\";");
+        if font.size() > 0 {
+            let size = font.size() as f64 / gtk::pango::SCALE as f64;
+            rule.push_str(&format!(" font-size: {size}{};", if font.is_size_absolute() { "px" } else { "pt" }));
+        }
+        css.load_from_string(&format!(".note-text {{ {rule} }}"));
+    };
+    let manager = adw::StyleManager::default();
+    load(&manager);
+    manager.connect_document_font_name_notify(load);
+}
+
 pub fn run() -> gtk::glib::ExitCode {
     // Start the runtime before any window, so the first request doesn't wait for it.
     let _ = crate::runtime();
@@ -69,6 +92,7 @@ pub fn run() -> gtk::glib::ExitCode {
             &css,
             gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
         );
+        follow_document_font();
     });
     app.connect_activate(|app| {
         if let Some(win) = app.active_window() {

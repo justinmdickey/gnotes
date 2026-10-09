@@ -73,7 +73,8 @@ use super::{
 use crate::sync::Status;
 
 /// Opens a screen by name: `note:<title>`, `notebook:<name>`, `recent`, `search:<query>`, `shared`,
-/// `trash`, `share:<title>`, `move:<title>`, `new-notebook`, `home`.
+/// `trash`, `share:<title>`, `move:<title>`, `new-notebook`, `menu`, `shortcuts`, `notemenu:<title>`,
+/// `styles:<title>`, `home`.
 pub fn open_screen(main: &Rc<Main>, target: &str) {
     let (kind, arg) = target.split_once(':').unwrap_or((target, ""));
     let note = |title: &str| main.store.tree.borrow().notes.iter().find(|n| n.title == title).cloned();
@@ -131,6 +132,26 @@ pub fn open_screen(main: &Rc<Main>, target: &str) {
             }
         }
         "settings" => super::settings::open_at(main, if arg.is_empty() { "account" } else { arg }),
+        "menu" => {
+            // Once the window has settled; a popover asked for sooner doesn't open.
+            let m = main.clone();
+            glib::timeout_add_local_once(Duration::from_millis(500), move || m.sidebar().open_menu());
+        }
+        "shortcuts" => {
+            WidgetExt::activate_action(&main.window, "win.shortcuts", None).ok();
+        }
+        // The note menu, or the paragraph styles, of a note.
+        "notemenu" | "styles" => {
+            if let Some(n) = note(arg) {
+                main.open_note(&n.id, false);
+                let (m, kind) = (main.clone(), kind.to_owned());
+                glib::timeout_add_local_once(Duration::from_millis(800), move || {
+                    if let Some(e) = m.editor() {
+                        e.open_menu(kind == "styles");
+                    }
+                });
+            }
+        }
         "home" | "login" => {}
         _ => eprintln!("unknown screen {target}"),
     }
@@ -530,6 +551,8 @@ async fn run(main: &Rc<Main>, cmd: &str, arg: &str) {
                 "media": e.as_ref().map(|e| e.media_shown()).unwrap_or_default(),
                 "note": main.open_id(),
                 "sidebar": main.sidebar().labels(),
+                "offline_banner": main.sidebar().offline_shown(),
+                "paragraph_style": e.as_ref().map(|e| e.paragraph_style()),
                 "list": list_rows(main),
                 "dialog_text": dialog_text(main),
                 "ask_answer": main.ask.get().map(|a| a.last_answer()),

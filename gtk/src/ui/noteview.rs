@@ -177,7 +177,7 @@ mod imp {
             if let Some(o) = self.drop_at.get() {
                 let it = buffer.iter_at_offset(o as i32);
                 let (y, _) = view.line_yrange(&it);
-                let accent = adw::StyleManager::default().accent_color().to_standalone_rgba(fg.red() + fg.green() + fg.blue() > 1.5);
+                let accent = crate::ui::styling::accent();
                 snapshot.append_color(&accent, &graphene::Rect::new(view.left_margin() as f32 - 8.0, y as f32 - 1.0, view.column_width() as f32 + 16.0, 2.0));
             }
             // Who wrote a line someone else typed in, as a bar in their color beside it.
@@ -368,8 +368,9 @@ impl NoteView {
             let it = buffer.iter_at_offset(*o as i32);
             let loc = self.iter_location(&it);
             let layout = self.create_pango_layout(Some(&format!("{label}  ▾")));
+            // Caption-sized, like a code block's label in GNOME's Text Editor.
             let mut font = self.pango_context().font_description().unwrap_or_default();
-            font.set_size(font.size() * 85 / 100);
+            font.set_size(font.size() * 3 / 4);
             layout.set_font_description(Some(&font));
             let (w, h) = layout.pixel_size();
             let right = (self.left_margin() + self.column_width()) as f32;

@@ -183,7 +183,6 @@ pub fn move_to(main: &Rc<Main>, item: &Item) {
         let here = id == current;
         let row = adw::ActionRow::builder().title(glib::markup_escape_text(&label)).activatable(!here).sensitive(!here).build();
         let icon = gtk::Image::from_icon_name(if id.is_none() { "user-home-symbolic" } else { "folder-symbolic" });
-        icon.add_css_class("folder-icon");
         icon.set_margin_start(depth as i32 * 18);
         row.add_prefix(&icon);
         if here {

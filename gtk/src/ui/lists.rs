@@ -15,15 +15,6 @@ use crate::{
     bg,
 };
 
-fn new_note_button() -> gtk::Button {
-    gtk::Button::builder()
-        .icon_name("document-edit-symbolic")
-        .tooltip_text("New Note (Ctrl+N)")
-        .action_name("win.new-note")
-        .css_classes(["suggested-action"])
-        .build()
-}
-
 fn page(tag: &str, title: &str, header: adw::HeaderBar, content: &impl IsA<gtk::Widget>) -> adw::NavigationPage {
     let view = adw::ToolbarView::new();
     view.add_top_bar(&header);
@@ -32,9 +23,7 @@ fn page(tag: &str, title: &str, header: adw::HeaderBar, content: &impl IsA<gtk::
 }
 
 fn header() -> adw::HeaderBar {
-    let h = adw::HeaderBar::new();
-    h.pack_end(&new_note_button());
-    h
+    adw::HeaderBar::new()
 }
 
 /// A scrolling column of boxed lists.
@@ -107,12 +96,23 @@ fn note_row(main: &Rc<Main>, n: &TreeNote, subtitle: &str) -> adw::ActionRow {
     row
 }
 
+/// Text with its Markdown marks taken out, for a one-line preview: `*good*` reads "good", a table
+/// row `| Room | Paint |` reads "Room · Paint".
+fn plain(text: &str) -> String {
+    let text = text.replace(['*', '`'], "").replace("~~", "");
+    text.split('|')
+        .map(str::trim)
+        .filter(|cell| !cell.is_empty() && !cell.chars().all(|c| matches!(c, '-' | ':' | ' ')))
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
 /// The note's notebook, and its preview, as a list row says it.
 fn where_and_preview(main: &Main, n: &TreeNote) -> String {
     let tree = main.store.tree.borrow();
     let path = sidebar::path_of(&tree, n.notebook_id.clone());
     let place = if path.is_empty() && n.role == Role::Owner { "Notes".to_owned() } else if path.is_empty() { n.owner.clone() } else { path };
-    let preview = n.preview.trim();
+    let preview = plain(&n.preview);
     let line = if preview.is_empty() { place } else { format!("{place} · {preview}") };
     glib::markup_escape_text(&line).to_string()
 }
@@ -180,7 +180,8 @@ fn snippet_markup(parts: &[crate::api::SnippetPart]) -> String {
     parts
         .iter()
         .map(|p| {
-            let t = glib::markup_escape_text(&p.text.replace('\n', " "));
+            // Pieces of a line: marks out, spaces kept.
+            let t = glib::markup_escape_text(&p.text.replace(['*', '`'], "").replace("~~", "").replace(['\n', '|'], " "));
             if p.hit { format!("<b>{t}</b>") } else { t.to_string() }
         })
         .collect()
@@ -360,7 +361,6 @@ fn notebook_row(main: &Rc<Main>, id: &str, name: &str, subtitle: &str) -> adw::A
         .activatable(true)
         .build();
     let icon = gtk::Image::from_icon_name("folder-symbolic");
-    icon.add_css_class("folder-icon");
     row.add_prefix(&icon);
     let (weak, id) = (Rc::downgrade(main), id.to_owned());
     row.connect_activated(move |_| {
@@ -387,7 +387,7 @@ pub fn trash_page(main: &Rc<Main>) -> adw::NavigationPage {
 
     let h = header();
     let empty_button = gtk::Button::builder().label("Empty Trash").css_classes(["destructive-action"]).visible(false).build();
-    h.pack_start(&empty_button);
+    h.pack_end(&empty_button);
 
     let load: Rc<dyn Fn()> = {
         let (weak, col, stack, empty_button) = (Rc::downgrade(main), col.clone(), stack.clone(), empty_button.clone());
@@ -490,4 +490,15 @@ pub fn trash_page(main: &Rc<Main>) -> adw::NavigationPage {
         });
     }
     page("trash", "Trash", h, &stack)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn previews_read_plain() {
+        assert_eq!(plain("Eggs and *good* butter"), "Eggs and good butter");
+        assert_eq!(plain("| Room | Paint | Done by |\n|---|---|"), "Room · Paint · Done by");
+    }
 }

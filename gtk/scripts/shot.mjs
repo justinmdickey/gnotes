@@ -4,13 +4,15 @@
 //
 // Usage: cargo build -p gnotes-server -p gnotes-gtk && node gtk/scripts/shot.mjs [options] [screen...]
 //   screens: login local local:settings home note:<title> notebook:<name> recent search:<query> shared trash
-//            share:<title> move:<title> new-notebook   (default: home note:Groceries)
+//            share:<title> move:<title> new-notebook menu shortcuts notemenu:<title> styles:<title>   (default: home note:Groceries)
 //   --narrow | --wide     window size (default: both)
 //   --dark | --light      style (default: both)
 //   --ai                  stand-in AI services, for summary:<title> tidy:<title> editai:<title>
+//   --my-theme            your own GTK config (gtk.css, fonts) instead of stock Adwaita
 //   --out <dir>           where PNGs go (default: /tmp/gnotes-shots)
 // Needs web/node_modules (loro-crdt, to write the demo notes) and sway.
 import { mkdirSync, rmSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { startDemo } from "./demo.mjs";
 
@@ -41,9 +43,12 @@ for (const target of targets) {
         signedIn: target !== "login" && !target.startsWith("local"),
         style,
         size,
-        env: target.startsWith("local")
-          ? { GNOTES_LOCAL: "1", GNOTES_OPEN: target.split(":").slice(1).join(":") || "home", GNOTES_SHOT: file }
-          : { GNOTES_OPEN: target, GNOTES_SHOT: file },
+        env: {
+          ...(target.startsWith("local")
+            ? { GNOTES_LOCAL: "1", GNOTES_OPEN: target.split(":").slice(1).join(":") || "home", GNOTES_SHOT: file }
+            : { GNOTES_OPEN: target, GNOTES_SHOT: file }),
+          ...(flag("--my-theme") ? { XDG_CONFIG_HOME: join(homedir(), ".config") } : {}),
+        },
         timeout: 20_000,
       });
       if (code !== 0 || stderr) console.error(`${target}: exit ${code}\n${stderr}`);

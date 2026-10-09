@@ -8,7 +8,7 @@ pkgbase = gnotes-gtk
 	license = MIT
 	makedepends = cargo
 	depends = gtk4
-	depends = libadwaita
+	depends = libadwaita>=1:1.8
 	depends = gstreamer
 	depends = gst-plugins-base
 	depends = gst-plugins-good

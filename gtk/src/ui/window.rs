@@ -291,6 +291,8 @@ impl Main {
         action("recent", Box::new(|m| m.show_place(Place::Recent)));
         action("logout", Box::new(|m| m.sign_out(true)));
         action("about", Box::new(|m| m.about()));
+        action("shortcuts", Box::new(|m| m.shortcuts()));
+        action("import", Box::new(super::settings::pick_import));
         action("settings", Box::new(super::settings::open));
         action("move-to-server", Box::new(|m| super::settings::move_dialog(m, None)));
         action("signed-out-toast", Box::new(|m| m.toast("Signed out. Sign in again to keep syncing.")));
@@ -299,6 +301,7 @@ impl Main {
             app.set_accels_for_action("win.new-notebook", &["<Control><Shift>n"]);
             app.set_accels_for_action("win.search", &["<Control>f", "<Control>k"]);
             app.set_accels_for_action("win.settings", &["<Control>comma"]);
+            app.set_accels_for_action("win.shortcuts", &["<Control>question"]);
         }
     }
 
@@ -427,8 +430,57 @@ impl Main {
             .application_icon(super::APP_ID)
             .version(crate::VERSION)
             .license_type(gtk::License::MitX11)
-            .comments("Markdown notes on your own server, edited live together")
+            .comments("Markdown notes on your computer, or shared live through your own server")
+            .website("https://github.com/justinmdickey/gnotes")
             .build();
         about.present(Some(&self.window));
+    }
+
+    /// Keyboard Shortcuts, from the main menu or Ctrl+?.
+    fn shortcuts(&self) {
+        let dialog = adw::ShortcutsDialog::new();
+        let sections: [(&str, &[(&str, &str)]); 3] = [
+            (
+                "General",
+                &[
+                    ("New Note", "<Control>n"),
+                    ("New Notebook", "<Control><Shift>n"),
+                    ("Search", "<Control>f"),
+                    ("Preferences", "<Control>comma"),
+                    ("Keyboard Shortcuts", "<Control>question"),
+                ],
+            ),
+            (
+                "Editing",
+                &[
+                    ("Undo", "<Control>z"),
+                    ("Redo", "<Control><Shift>z"),
+                    ("Bold", "<Control>b"),
+                    ("Italic", "<Control>i"),
+                    ("Strikethrough", "<Control><Shift>x"),
+                    ("Insert", "slash"),
+                ],
+            ),
+            (
+                "Paragraphs",
+                &[
+                    ("Title", "<Control><Shift>t"),
+                    ("Heading", "<Control><Shift>h"),
+                    ("Subheading", "<Control><Shift>j"),
+                    ("Body", "<Control><Shift>b"),
+                    ("Checklist", "<Control><Shift>l"),
+                    ("Bulleted List", "<Control><Shift>8"),
+                    ("Numbered List", "<Control><Shift>7"),
+                ],
+            ),
+        ];
+        for (title, items) in sections {
+            let section = adw::ShortcutsSection::new(Some(title));
+            for (name, accel) in items {
+                section.add(adw::ShortcutsItem::new(name, accel));
+            }
+            dialog.add(section);
+        }
+        dialog.present(Some(&self.window));
     }
 }

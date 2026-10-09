@@ -64,6 +64,7 @@ pub struct Editor {
     undo_button: gtk::Button,
     redo_button: gtk::Button,
     format_bar: gtk::Widget,
+    style_button: gtk::MenuButton,
     share_button: gtk::Button,
     menu_button: gtk::MenuButton,
     /// Whose editing session each Loro peer was, from the server, and when that was last asked.
@@ -157,9 +158,8 @@ fn icon_button(icon: &str, tooltip: &str) -> gtk::Button {
     gtk::Button::builder().icon_name(icon).tooltip_text(tooltip).css_classes(["flat"]).build()
 }
 
-fn text_button(label: &str, tooltip: &str) -> gtk::Button {
-    gtk::Button::builder().label(label).tooltip_text(tooltip).css_classes(["flat", "text-style"]).build()
-}
+/// The paragraph styles the format bar offers, with the Markdown that starts their line.
+const PARAGRAPH_STYLES: [(&str, &str); 4] = [("Title", "# "), ("Heading", "## "), ("Subheading", "### "), ("Body", "")];
 
 /// Where the cursor should go after ops: the end of the last change.
 fn ops_end(ops: &[Op]) -> Option<usize> {
@@ -196,12 +196,6 @@ impl Editor {
 
         let title = adw::WindowTitle::new(sidebar::UNTITLED, "");
         let header = adw::HeaderBar::builder().title_widget(&title).build();
-        let new_note = gtk::Button::builder()
-            .icon_name("document-edit-symbolic")
-            .tooltip_text("New Note")
-            .action_name("win.new-note")
-            .css_classes(["suggested-action"])
-            .build();
         let menu_button = gtk::MenuButton::builder().icon_name("view-more-symbolic").tooltip_text("Note Menu").build();
         let share_content = adw::ButtonContent::builder().icon_name("send-to-symbolic").label("Share").build();
         // Narrow windows have room for the icon only.
@@ -217,7 +211,6 @@ impl Editor {
             .visible(false)
             .build();
         let peers_box = gtk::Box::builder().spacing(4).valign(gtk::Align::Center).build();
-        header.pack_end(&new_note);
         header.pack_end(&menu_button);
         header.pack_end(&share_button);
         header.pack_end(&peers_box);
@@ -226,42 +219,56 @@ impl Editor {
         let bar = gtk::Box::builder().spacing(2).css_classes(["format-bar", "toolbar"]).halign(gtk::Align::Center).build();
         let undo_button = icon_button("edit-undo-symbolic", "Undo (Ctrl+Z)");
         let redo_button = icon_button("edit-redo-symbolic", "Redo (Ctrl+Shift+Z)");
-        bar.append(&undo_button);
-        bar.append(&redo_button);
-        bar.append(&gtk::Separator::new(gtk::Orientation::Vertical));
-        let styles = [
-            ("Title", "Title (Ctrl+Shift+T)", "# "),
-            ("Heading", "Heading (Ctrl+Shift+H)", "## "),
-            ("Subheading", "Subheading (Ctrl+Shift+J)", "### "),
-            ("Body", "Body (Ctrl+Shift+B)", ""),
-        ];
-        let mut style_buttons = Vec::new();
-        for (label, tip, prefix) in styles {
-            let b = text_button(label, tip);
-            bar.append(&b);
-            style_buttons.push((b, prefix));
+        // Narrow windows keep the formatting; undo is on the keyboard, photos and memos in the note menu.
+        let history = gtk::Box::builder().spacing(2).build();
+        history.append(&undo_button);
+        history.append(&redo_button);
+        history.append(&gtk::Separator::new(gtk::Orientation::Vertical));
+        bar.append(&history);
+        // The paragraph style, named for the line the cursor is on.
+        let styles = gio::Menu::new();
+        for (label, prefix) in PARAGRAPH_STYLES {
+            let item = gio::MenuItem::new(Some(label), None);
+            item.set_action_and_target_value(Some("format.style"), Some(&prefix.to_variant()));
+            styles.append_item(&item);
         }
+        let style_button = gtk::MenuButton::builder()
+            .label("Body")
+            .tooltip_text("Paragraph Style")
+            .menu_model(&styles)
+            .css_classes(["flat", "paragraph-style"])
+            .build();
+        bar.append(&style_button);
         bar.append(&gtk::Separator::new(gtk::Orientation::Vertical));
         let bold = icon_button("format-text-bold-symbolic", "Bold (Ctrl+B)");
         let italic = icon_button("format-text-italic-symbolic", "Italic (Ctrl+I)");
         let strike = icon_button("format-text-strikethrough-symbolic", "Strikethrough (Ctrl+Shift+X)");
         let code = gtk::Button::builder().label("</>").tooltip_text("Code").css_classes(["flat", "code-button"]).build();
-        for b in [&bold, &italic, &strike, &code] {
-            bar.append(b);
-        }
+        bar.append(&bold);
+        bar.append(&italic);
+        // Strikethrough and code are typed as Markdown on narrow windows.
+        let extra = gtk::Box::builder().spacing(2).build();
+        extra.append(&strike);
+        extra.append(&code);
+        bar.append(&extra);
         bar.append(&gtk::Separator::new(gtk::Orientation::Vertical));
         let check = icon_button("checkbox-checked-symbolic", "Checklist (Ctrl+Shift+L)");
         let bullets = icon_button("view-list-bullet-symbolic", "Bulleted List (Ctrl+Shift+8)");
         let numbers = icon_button("view-list-ordered-symbolic", "Numbered List (Ctrl+Shift+7)");
-        let quote = gtk::Button::builder().label("“").tooltip_text("Quote").css_classes(["flat", "text-style", "quote-button"]).build();
+        let quote = gtk::Button::builder().label("“").tooltip_text("Quote").css_classes(["flat", "quote-button"]).build();
         for b in [&check, &bullets, &numbers, &quote] {
             bar.append(b);
         }
-        bar.append(&gtk::Separator::new(gtk::Orientation::Vertical));
+        let media = gtk::Box::builder().spacing(2).build();
+        media.append(&gtk::Separator::new(gtk::Orientation::Vertical));
         let photo = icon_button("camera-photo-symbolic", "Add Photo");
-        bar.append(&photo);
+        media.append(&photo);
         let mic = icon_button("audio-input-microphone-symbolic", "Voice Memo");
-        bar.append(&mic);
+        media.append(&mic);
+        bar.append(&media);
+        for part in [&history, &extra, &media] {
+            main.split.bind_property("collapsed", part, "visible").invert_boolean().sync_create().build();
+        }
         let bar_scroll = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::External)
             .vscrollbar_policy(gtk::PolicyType::Never)
@@ -330,6 +337,7 @@ impl Editor {
             undo_button: undo_button.clone(),
             redo_button: redo_button.clone(),
             format_bar: bar_scroll.upcast(),
+            style_button: style_button.clone(),
             share_button: share_button.clone(),
             menu_button,
             media: Default::default(),
@@ -394,7 +402,7 @@ impl Editor {
         }
         editor.connect_buffer();
         editor.connect_view();
-        editor.connect_buttons(&style_buttons, [&bold, &italic, &strike, &code], [&check, &bullets, &numbers, &quote], &photo);
+        editor.connect_buttons(&style_button, [&bold, &italic, &strike, &code], [&check, &bullets, &numbers, &quote], &photo);
         for (button, save) in [(&mic, None), (&rec_stop, Some(true)), (&rec_cancel, Some(false))] {
             let weak = Rc::downgrade(&editor);
             button.connect_clicked(move |_| {
@@ -435,16 +443,23 @@ impl Editor {
             });
         }
         {
-            let weak = Rc::downgrade(&editor);
-            adw::StyleManager::default().connect_dark_notify(move |_| {
-                // After the new style reaches the view.
-                let weak = weak.clone();
-                glib::idle_add_local_once(move || {
-                    if let Some(e) = weak.upgrade() {
-                        e.color_tags();
-                    }
-                });
-            });
+            // Light or dark, a new accent or monospace font: after the new style reaches the view.
+            let restyle = {
+                let weak = Rc::downgrade(&editor);
+                move |_: &adw::StyleManager| {
+                    let weak = weak.clone();
+                    glib::idle_add_local_once(move || {
+                        if let Some(e) = weak.upgrade() {
+                            e.color_tags();
+                            e.restyle();
+                        }
+                    });
+                }
+            };
+            let manager = adw::StyleManager::default();
+            manager.connect_dark_notify(restyle.clone());
+            manager.connect_accent_color_notify(restyle.clone());
+            manager.connect_monospace_font_name_notify(restyle);
             let weak = Rc::downgrade(&editor);
             view.connect_realize(move |_| {
                 if let Some(e) = weak.upgrade() {
@@ -537,6 +552,12 @@ impl Editor {
                     dialogs::move_to(m, &Item::Note(n));
                 }
             }));
+        }
+        if role.is_some_and(Role::can_edit) {
+            let media = gio::Menu::new();
+            menu.insert_section(1, None, &media);
+            action(&media, "Add Photo…", "photo", open(|_, e| e.pick_photo()));
+            action(&media, "Record Voice Memo", "record", open(|_, e| e.start_recording()));
         }
         if role == Some(Role::Owner) {
             add("Move to Trash", "trash", Box::new(dialogs::trash_note));
@@ -885,6 +906,29 @@ impl Editor {
         Some((a.min(b), a.max(b)))
     }
 
+    /// Opens the note menu, or the paragraph styles, for screenshots.
+    pub fn open_menu(&self, styles: bool) {
+        if styles { self.style_button.popup() } else { self.menu_button.popup() }
+    }
+
+    /// The style the format bar names. For tests.
+    pub fn paragraph_style(&self) -> String {
+        self.style_button.label().map(|l| l.to_string()).unwrap_or_default()
+    }
+
+    /// Names the cursor's line's style on the format bar.
+    fn show_paragraph_style(&self) {
+        let mut start = self.buffer.iter_at_mark(&self.buffer.get_insert());
+        start.set_line_offset(0);
+        let mut end = start;
+        end.forward_chars(4);
+        let head = self.buffer.text(&start, &end, true);
+        let name = PARAGRAPH_STYLES.iter().find(|(_, p)| !p.is_empty() && head.starts_with(p)).map_or("Body", |(n, _)| n);
+        if self.style_button.label().as_deref() != Some(name) {
+            self.style_button.set_label(name);
+        }
+    }
+
     /// Tells the others where the cursor is, while the text has focus.
     fn announce_cursor(&self) {
         // Live preview: marks show on the line being edited.
@@ -892,6 +936,7 @@ impl Editor {
         if self.active.replace(active) != active {
             self.queue_restyle();
         }
+        self.show_paragraph_style();
         let doc = self.doc.borrow();
         if !doc.has_data {
             return;
@@ -1364,7 +1409,7 @@ impl Editor {
         }
     }
 
-    fn connect_buttons(self: &Rc<Self>, styles: &[(gtk::Button, &'static str)], inline: [&gtk::Button; 4], blocks: [&gtk::Button; 4], photo: &gtk::Button) {
+    fn connect_buttons(self: &Rc<Self>, styles: &gtk::MenuButton, inline: [&gtk::Button; 4], blocks: [&gtk::Button; 4], photo: &gtk::Button) {
         let on = |b: &gtk::Button, f: Box<dyn Fn(&Editor)>| {
             let weak = Rc::downgrade(self);
             b.connect_clicked(move |_| {
@@ -1376,10 +1421,17 @@ impl Editor {
         };
         on(&self.undo_button, Box::new(|e| e.undo(false)));
         on(&self.redo_button, Box::new(|e| e.undo(true)));
-        for (b, prefix) in styles {
-            let p = *prefix;
-            on(b, Box::new(move |e| e.set_block(p)));
-        }
+        let style = gio::SimpleAction::new("style", Some(glib::VariantTy::STRING));
+        let weak = Rc::downgrade(self);
+        style.connect_activate(move |_, prefix| {
+            if let (Some(e), Some(p)) = (weak.upgrade(), prefix.and_then(|p| p.str())) {
+                e.set_block(p);
+                e.view.grab_focus();
+            }
+        });
+        let group = gio::SimpleActionGroup::new();
+        group.add_action(&style);
+        styles.insert_action_group("format", Some(&group));
         for (b, m) in inline.iter().zip(["**", "*", "~~", "`"]) {
             on(b, Box::new(move |e| e.wrap(m)));
         }

@@ -65,6 +65,10 @@ wait-shown **Saturday**
 signal ${f("preview")}
 wait-peer Sam
 dump ${f("open.json")}
+cursor 0
+dump ${f("title-line.json")}
+cursor 2
+sleep 100
 type \\n- [ ] Coffee\\nTea
 signal ${f("typed")}
 wait-file ${f("remote")}
@@ -121,6 +125,7 @@ try {
   check("opens a note with its text", d.text.startsWith("# Groceries") && d.title === "Groceries", d);
   check("shows who else has the note open", d.peers.includes("Sam"), d.peers);
   check("the open note is highlighted in the sidebar", d.sidebar.includes("> Groceries"), d.sidebar);
+  check("the format bar names the cursor's paragraph style", d.paragraph_style === "Body" && dump("title-line.json").paragraph_style === "Title", [d.paragraph_style, dump("title-line.json").paragraph_style]);
 
   let text = await serverText(ids.groceries, (t) => t.includes("Tea"));
   let ann_ = samHere.peers().find((p) => p.name === "Ann");
@@ -175,6 +180,7 @@ try {
   await waitFile("offline-typed");
   d = dump("offline.json");
   check("typing offline keeps the note to push later", d.status === "offline" && d.dirty.includes(ids.groceries) && d.text.endsWith("Written offline"), d);
+  check("a banner says the app is offline", d.offline_banner === true && dump("open.json").offline_banner === false, d.offline_banner);
   const made = dump("offline-new.json");
   check("a note made offline is queued", made.queued.includes(made.note), made);
   await demo.startServer();

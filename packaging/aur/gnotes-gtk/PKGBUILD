@@ -6,7 +6,7 @@ pkgdesc='Markdown notes for GNOME, on your computer or shared live through your 
 arch=('x86_64' 'aarch64')
 url='https://github.com/justinmdickey/gnotes'
 license=('MIT')
-depends=('gtk4' 'libadwaita' 'gstreamer' 'gst-plugins-base' 'gst-plugins-good' 'glibc' 'gcc-libs')
+depends=('gtk4' 'libadwaita>=1:1.8' 'gstreamer' 'gst-plugins-base' 'gst-plugins-good' 'glibc' 'gcc-libs')
 makedepends=('cargo')
 # The bundled SQLite (C) built with LTO can't be linked into Rust code.
 options=('!lto')
