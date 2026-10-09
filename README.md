@@ -53,7 +53,7 @@ Tailscale instead of a public domain, settings, optional AI features, backups an
 
 ## The GNOME app
 
-On a Linux desktop with GTK 4 and libadwaita, build and install the native client with `gtk/install.sh` (it goes in `~/.local`), then open **Gnotes** from your apps and sign in with your server's address. It edits live alongside the web app and keeps working offline; Ask, the AI tools and voice recording are web-only for now.
+On a Linux desktop with GTK 4 and libadwaita, build and install the native client with `gtk/install.sh` (it goes in `~/.local`), then open **Gnotes** from your apps and sign in with your server's address. It does what the web app does on a desktop, edits live alongside it, and keeps working offline.
 
 To let an agent or script read and write your notes, make an API key in **Account › API Keys**: [docs/API.md](docs/API.md).
 
