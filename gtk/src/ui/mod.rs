@@ -4,6 +4,7 @@
 #![allow(clippy::type_complexity)]
 
 mod ai;
+mod ask;
 mod dialogs;
 mod drive;
 mod editor;

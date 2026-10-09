@@ -18,6 +18,7 @@ pub enum Place {
     Note(String),
     Recent,
     Search,
+    Ask,
     Shared,
     Trash,
 }
@@ -68,6 +69,8 @@ pub struct Main {
     /// The notebook New Note goes into; None is the top level.
     pub folder: RefCell<Option<String>>,
     pub sidebar: OnceCell<Rc<Sidebar>>,
+    /// The Ask conversation, kept while you're elsewhere.
+    pub ask: OnceCell<Rc<super::ask::Ask>>,
     /// Text the Search page starts with.
     pub query: RefCell<String>,
     editor: RefCell<Option<Rc<Editor>>>,
@@ -93,6 +96,7 @@ impl Main {
             folder: RefCell::new(None),
             sidebar: OnceCell::new(),
             query: Default::default(),
+            ask: OnceCell::new(),
             editor: RefCell::new(None),
         });
 
@@ -128,6 +132,7 @@ impl Main {
                     if let Some(prev) = main.nav.visible_page().and_then(|p| p.tag()) {
                         main.place.replace(match prev.as_str() {
                             "recent" => Place::Recent,
+                            "ask" => Place::Ask,
                             "search" => Place::Search,
                             "shared" => Place::Shared,
                             "trash" => Place::Trash,
@@ -202,6 +207,16 @@ impl Main {
         });
     }
 
+    pub fn ask(self: &Rc<Self>) -> &Rc<super::ask::Ask> {
+        self.ask.get_or_init(|| super::ask::Ask::new(self))
+    }
+
+    /// Opens Ask and asks `question`, as a new conversation.
+    pub fn ask_question(self: &Rc<Self>, question: &str) {
+        self.show_place(Place::Ask);
+        self.ask().start(question);
+    }
+
     pub fn sidebar(&self) -> &Rc<Sidebar> {
         self.sidebar.get().expect("sidebar")
     }
@@ -257,6 +272,7 @@ impl Main {
             Place::Nothing => lists::empty_page(self),
             Place::Recent => lists::recent_page(self),
             Place::Search => lists::search_page(self),
+            Place::Ask => self.ask().page.clone(),
             Place::Shared => lists::shared_page(self),
             Place::Trash => lists::trash_page(self),
             Place::Note(_) => unreachable!(),
@@ -284,7 +300,7 @@ impl Main {
         let editor = Editor::new(self, id);
         let page = editor.page.clone();
         *self.editor.borrow_mut() = Some(editor);
-        let listing = matches!(&*self.place.borrow(), Place::Recent | Place::Search | Place::Shared | Place::Trash);
+        let listing = matches!(&*self.place.borrow(), Place::Recent | Place::Search | Place::Ask | Place::Shared | Place::Trash);
         if over_list && listing {
             self.nav.push(&page);
         } else {
@@ -324,6 +340,9 @@ impl Main {
     pub fn sign_out(self: &Rc<Self>, server_too: bool) {
         if let Some(e) = self.editor.take() {
             e.close();
+        }
+        if let Some(a) = self.ask.get() {
+            a.end();
         }
         self.store.sync.stop();
         if server_too {

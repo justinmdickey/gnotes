@@ -40,6 +40,8 @@
 //! wait-dialog <text>       the dialog showing has <text> in it
 //! tidy | edit-ai <instruction>   Tidy Up or Edit with AI, applied
 //! ai-write <prompt>        the AI Prompt at the cursor
+//! wait-answer <text>       Ask's last answer has <text>
+//! cite <n>                 opens the note the last answer's [n] links to
 //! dump <file.json>          the open note's text, title and peers, the sidebar's rows, the status
 //! shot <file.png>
 //! quit
@@ -75,6 +77,13 @@ pub fn open_screen(main: &Rc<Main>, target: &str) {
             }
         }
         "recent" => main.show_place(Place::Recent),
+        "ask" => {
+            if arg.is_empty() {
+                main.show_place(Place::Ask);
+            } else {
+                main.ask_question(arg);
+            }
+        }
         "search" => {
             main.query.replace(arg.to_owned());
             main.show_place(Place::Search);
@@ -357,6 +366,12 @@ async fn run(main: &Rc<Main>, cmd: &str, arg: &str) {
                 super::ai::write_here(main, &e, arg).await;
             }
         }
+        "wait-answer" => until(&format!("an answer with {arg:?}"), || main.ask.get().is_some_and(|a| a.last_answer().contains(arg))).await,
+        "cite" => {
+            if let Some(id) = main.ask.get().and_then(|a| a.cited_note(arg.parse().unwrap_or(1))) {
+                main.open_note(&id, true);
+            }
+        }
         "dump" => {
             let e = editor();
             let v = json!({
@@ -370,6 +385,7 @@ async fn run(main: &Rc<Main>, cmd: &str, arg: &str) {
                 "sidebar": main.sidebar().labels(),
                 "list": list_rows(main),
                 "dialog_text": dialog_text(main),
+                "ask_answer": main.ask.get().map(|a| a.last_answer()),
                 "status": status(main.store.status.get()),
                 "user": main.store.user().display_name,
                 "dialog": main.window.visible_dialog().map(|d| d.title().to_string()),

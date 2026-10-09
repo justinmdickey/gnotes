@@ -21,6 +21,7 @@ use crate::{
 
 #[derive(Clone, Debug, PartialEq)]
 enum Row {
+    Ask,
     Search,
     Recent,
     Heading,
@@ -179,6 +180,8 @@ impl Sidebar {
         main.store.on_tree(move || weak.upgrade().map(|s| s.rebuild()).is_some());
         let weak = Rc::downgrade(&sidebar);
         main.store.on_status(move || weak.upgrade().map(|s| s.show_status()).is_some());
+        let weak = Rc::downgrade(&sidebar);
+        main.store.on_features(move || weak.upgrade().map(|s| s.rebuild()).is_some());
         sidebar.rebuild();
         sidebar.show_status();
         sidebar
@@ -219,6 +222,7 @@ impl Sidebar {
         let Some(main) = self.main.upgrade() else { return };
         let Some(row) = self.rows.borrow().get(index as usize).cloned() else { return };
         match row {
+            Row::Ask => main.show_place(Place::Ask),
             Row::Search => main.show_place(Place::Search),
             Row::Recent => main.show_place(Place::Recent),
             Row::Shared => main.show_place(Place::Shared),
@@ -313,6 +317,7 @@ impl Sidebar {
             Place::Note(id) => Row::Note(id.clone()),
             Place::Recent => Row::Recent,
             Place::Search => Row::Search,
+            Place::Ask => Row::Ask,
             Place::Shared => Row::Shared,
             Place::Trash => Row::Trash,
             Place::Nothing => {
@@ -352,6 +357,10 @@ impl Sidebar {
         let shared: Vec<&TreeNotebook> =
             tops.iter().filter(|n| n.role != crate::api::Role::Owner && !hidden.contains(n.id.as_str())).collect();
 
+        // Ask, the AI search, once AI services are set up; plain word search either way.
+        if main.store.features.borrow().ask {
+            self.add_simple(Row::Ask, "starred-symbolic", "Ask", None);
+        }
         self.add_simple(Row::Search, "system-search-symbolic", "Search", None);
         self.add_simple(Row::Recent, "document-open-recent-symbolic", "Recent", None);
         self.add_heading("Notes");

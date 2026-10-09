@@ -326,6 +326,13 @@ check("a new server's first account is made from sign-in", code === 0 && setupDu
         "cursor 0",
         "ai-write Add two more staples",
         "wait-text Olive oil",
+        "wait-row Ask",
+        "open ask:what do I still need to buy for the groceries?",
+        "wait-answer spinach",
+        `dump ${f("ask.json")}`,
+        "cite 1",
+        "wait-loaded",
+        `dump ${f("cited.json")}`,
         "quit",
       ].join("\n"),
     },
@@ -336,6 +343,8 @@ check("a new server's first account is made from sign-in", code === 0 && setupDu
   check("Tidy Up applies the tidied note", tidied.includes("## To buy") && tidied.includes("- [x] Apples"), tidied);
   const edited = await aiDemo.read(aiAnn, aiDemo.ids.pantry);
   check("Edit with AI applies the change", edited.includes("## Action items"), edited);
+  check("Ask shows in the sidebar and streams an answer", existsSync(f("ask.json")) && /spinach, lemons and milk/.test(dump("ask.json").dialog_text + JSON.stringify(dump("ask.json"))));
+  check("an answer's citation opens its note", existsSync(f("cited.json")) && dump("cited.json").title === "Groceries", existsSync(f("cited.json")) && dump("cited.json").title);
   check("the AI Prompt writes at the cursor", /# Pantry\n- Olive oil\n- Coffee beans/.test(edited), edited.slice(0, 80));
 }
 

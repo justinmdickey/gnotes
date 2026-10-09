@@ -252,6 +252,15 @@ pub fn search_page(main: &Rc<Main>) -> adw::NavigationPage {
                     }
                 }
             }
+            // Ask Your Notes: first when the search reads like a question, otherwise last.
+            if main.store.features.borrow().ask {
+                let row = adw::ActionRow::builder().title("Ask Your Notes").subtitle(glib::markup_escape_text(&q)).activatable(true).build();
+                row.add_prefix(&gtk::Image::from_icon_name("starred-symbolic"));
+                let (m, question) = (main.clone(), q.clone());
+                row.connect_activated(move |_| m.ask_question(&question));
+                if super::ask::questionish(&q) { list.prepend(&row) } else { list.append(&row) }
+                count += 1;
+            }
             col.append(&list);
             none.set_description(Some(&format!("Nothing matches “{}”", glib::markup_escape_text(&q))));
             stack.set_visible_child_name(if count == 0 { "none" } else { "list" });

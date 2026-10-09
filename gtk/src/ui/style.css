@@ -105,3 +105,26 @@
 .peer.user-orange { background-color: #e66100; }
 .peer.user-purple { background-color: #9141ac; }
 .peer.user-red { background-color: #e01b24; }
+
+.ask-question {
+  padding: 8px 14px;
+  border-radius: 18px;
+  background-color: alpha(var(--accent-bg-color), 0.15);
+}
+
+.ask-answer {
+  font-size: 15px;
+}
+
+.cite-number {
+  min-width: 22px;
+  min-height: 22px;
+  border-radius: 99px;
+  font-size: 12px;
+  font-weight: 700;
+  background-color: alpha(currentColor, 0.1);
+}
+
+.chip {
+  padding: 4px 14px;
+}
