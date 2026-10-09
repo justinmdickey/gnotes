@@ -69,6 +69,9 @@ mod imp {
         pub label_rects: RefCell<Vec<graphene::Rect>>,
         /// Lines others wrote, by where they start, in their writer's color.
         pub bars: RefCell<Vec<(usize, (f32, f32, f32))>>,
+        /// The grip beside the line pointed at (where it starts), and where a dragged block would land.
+        pub grip: std::cell::Cell<Option<usize>>,
+        pub drop_at: std::cell::Cell<Option<usize>>,
     }
 
     #[glib::object_subclass]
@@ -160,6 +163,23 @@ mod imp {
                 return;
             }
             view.draw_decor(&self.decor.borrow(), &snapshot);
+            // The grip to drag a block by, and the line where a dragged one would go.
+            let fg = view.color();
+            if let Some(o) = self.grip.get() {
+                let (x, y, h) = view.grip_place(o);
+                for row in 0..3 {
+                    for col in 0..2 {
+                        let r = graphene::Rect::new(x + 3.0 + col as f32 * 5.0, y + h / 2.0 - 6.0 + row as f32 * 5.0, 2.5, 2.5);
+                        snapshot.append_color(&gtk::gdk::RGBA::new(fg.red(), fg.green(), fg.blue(), 0.5), &r);
+                    }
+                }
+            }
+            if let Some(o) = self.drop_at.get() {
+                let it = buffer.iter_at_offset(o as i32);
+                let (y, _) = view.line_yrange(&it);
+                let accent = adw::StyleManager::default().accent_color().to_standalone_rgba(fg.red() + fg.green() + fg.blue() > 1.5);
+                snapshot.append_color(&accent, &graphene::Rect::new(view.left_margin() as f32 - 8.0, y as f32 - 1.0, view.column_width() as f32 + 16.0, 2.0));
+            }
             // Who wrote a line someone else typed in, as a bar in their color beside it.
             for &(o, (r, g, b)) in self.bars.borrow().iter() {
                 let it = buffer.iter_at_offset(o as i32);
@@ -263,6 +283,26 @@ impl NoteView {
 
     pub fn on_width(&self, f: impl Fn() + 'static) {
         self.imp().on_width.replace(Some(Box::new(f)));
+    }
+
+    /// Where the grip for the line starting at `o` goes: x, y and the line's height, in buffer coordinates.
+    pub fn grip_place(&self, o: usize) -> (f32, f32, f32) {
+        let (y, h) = self.line_yrange(&self.buffer().iter_at_offset(o as i32));
+        // Its first display line only, for a line that wraps.
+        let first = self.iter_location(&self.buffer().iter_at_offset(o as i32)).height().min(h);
+        (self.left_margin() as f32 - 34.0, y as f32, first as f32)
+    }
+
+    pub fn set_grip(&self, line_start: Option<usize>) {
+        if self.imp().grip.replace(line_start) != line_start {
+            self.queue_draw();
+        }
+    }
+
+    pub fn set_drop(&self, at: Option<usize>) {
+        if self.imp().drop_at.replace(at) != at {
+            self.queue_draw();
+        }
     }
 
     pub fn set_bars(&self, bars: Vec<(usize, (f32, f32, f32))>) {

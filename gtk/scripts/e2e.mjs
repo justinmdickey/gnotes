@@ -280,6 +280,7 @@ check("the photo shows in the note", existsSync(f("photo.json")) && dump("photo.
       "wait-menu",
       "pick :smile:",
       "code-lang 0|python",
+      "move-line 4|2",
       "type \\n/table",
       "wait-menu",
       "pick Table",
@@ -294,6 +295,7 @@ check("the / menu sets a line's style", slashed.includes("- [ ] Buy coffee"), sl
 check("typing :taco: makes the emoji", slashed.includes("Lunch was 🌮"));
 check("the emoji list puts in the one picked", slashed.includes("😄"));
 check("a code block's language can be picked", slashed.includes("```python\nkubectl"), slashed);
+check("dragging a block's grip moves it, whole", slashed.startsWith("# Snippets\n\n```python\nkubectl get pods -A\nflux reconcile kustomization apps\n```\nHandy commands"), slashed.slice(0, 120));
 check("the / menu adds a table", slashed.includes("| Column 1 | Column 2 | Column 3 |"));
 
 // Tables and boards, drawn as widgets.

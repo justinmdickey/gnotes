@@ -85,6 +85,8 @@ pub struct Editor {
     /// Tables and boards drawn as widgets over their Markdown.
     blocks: RefCell<Vec<BlockView>>,
     next_block: Cell<u64>,
+    /// The block being dragged by its grip, as lines.
+    dragging: Cell<Option<(i32, i32)>>,
     block_check: Cell<bool>,
     /// Attachments shown in the note, by id.
     media: RefCell<HashMap<String, Media>>,
@@ -333,6 +335,7 @@ impl Editor {
             media: Default::default(),
             blocks: Default::default(),
             next_block: Cell::new(0),
+            dragging: Cell::new(None),
             block_check: Cell::new(false),
             recording: Default::default(),
             spot: Default::default(),
@@ -1001,10 +1004,66 @@ impl Editor {
         let weak = Rc::downgrade(self);
         motion.connect_motion(move |_, x, y| {
             let Some(e) = weak.upgrade() else { return };
-            let over = e.target_at(x, y).is_some();
-            e.view.set_cursor_from_name(Some(if over { "pointer" } else { "text" }));
+            if e.dragging.get().is_some() {
+                return;
+            }
+            // A grip shows beside the line pointed at, when it's a block that can move.
+            let (_, by) = e.view.window_to_buffer_coords(gtk::TextWindowType::Widget, x as i32, y as i32);
+            let (it, _) = e.view.line_at_y(by);
+            let block = e.can_edit().then(|| e.block_at(it.line())).flatten();
+            e.view.set_grip(block.map(|(first, _)| e.buffer.iter_at_line(first).map_or(0, |i| i.offset() as usize)));
+            let on_grip = block.is_some() && (x as i32) < e.view.left_margin() - 8 && (x as i32) > e.view.left_margin() - 40;
+            let over = on_grip || e.target_at(x, y).is_some();
+            e.view.set_cursor_from_name(Some(if on_grip { "grab" } else if over { "pointer" } else { "text" }));
+        });
+        let weak = Rc::downgrade(self);
+        motion.connect_leave(move |_| {
+            if let Some(e) = weak.upgrade()
+                && e.dragging.get().is_none()
+            {
+                e.view.set_grip(None);
+            }
         });
         self.view.add_controller(motion);
+
+        // Dragging the grip moves its block: a line, a list item with those under it, or a whole code
+        // block, table or board.
+        let drag = gtk::GestureDrag::new();
+        let weak = Rc::downgrade(self);
+        drag.connect_drag_begin(move |g, x, y| {
+            let Some(e) = weak.upgrade() else { return };
+            let on_grip = (x as i32) < e.view.left_margin() - 8 && (x as i32) > e.view.left_margin() - 40;
+            let (_, by) = e.view.window_to_buffer_coords(gtk::TextWindowType::Widget, x as i32, y as i32);
+            let (it, _) = e.view.line_at_y(by);
+            match e.can_edit().then(|| e.block_at(it.line())).flatten() {
+                Some(block) if on_grip => {
+                    e.dragging.set(Some(block));
+                    g.set_state(gtk::EventSequenceState::Claimed);
+                }
+                _ => {
+                    g.set_state(gtk::EventSequenceState::Denied);
+                }
+            }
+        });
+        let weak = Rc::downgrade(self);
+        drag.connect_drag_update(move |g, dx, dy| {
+            let Some(e) = weak.upgrade() else { return };
+            let Some((sx, sy)) = g.start_point() else { return };
+            let _ = dx;
+            let target = e.drop_line(sx, sy + dy);
+            e.view.set_drop(target.and_then(|l| e.line_start(l)));
+        });
+        let weak = Rc::downgrade(self);
+        drag.connect_drag_end(move |g, _, dy| {
+            let Some(e) = weak.upgrade() else { return };
+            let Some((first, last)) = e.dragging.take() else { return };
+            e.view.set_drop(None);
+            let Some((sx, sy)) = g.start_point() else { return };
+            if let Some(before) = e.drop_line(sx, sy + dy) {
+                e.move_block(first, last, before);
+            }
+        });
+        self.view.add_controller(drag);
 
         // Pasted or dropped pictures become photos in the note.
         let weak = Rc::downgrade(self);
@@ -1989,6 +2048,92 @@ impl Editor {
         });
     }
 
+    /// The block line `n` belongs to, as (first, last) lines; like blockAt in web/src/lib/dragHandles.ts.
+    /// The title line has none: it stays first.
+    pub fn block_at(&self, n: i32) -> Option<(i32, i32)> {
+        if n <= 0 {
+            return None;
+        }
+        let text = self.shown_text();
+        let lines: Vec<&str> = text.split('\n').collect();
+        let line = *lines.get(n as usize)?;
+        let start = self.buffer.iter_at_line(n)?.offset() as usize;
+        // Code blocks, tables and boards move whole.
+        let styled = self.styled.borrow();
+        let fenced = styled
+            .code_blocks
+            .iter()
+            .map(|b| (b.fence, b.end))
+            .chain(styled.tables.iter().copied())
+            .find(|&(s, e)| s <= start && start <= e);
+        if let Some((s, e)) = fenced {
+            let (first, last) = (self.buffer.iter_at_offset(s as i32).line(), self.buffer.iter_at_offset(e as i32).line());
+            return (first > 0).then_some((first, last));
+        }
+        if line.trim().is_empty() {
+            return None;
+        }
+        let prefix = markdown::line_prefix(line).trim_start();
+        let listed = prefix.starts_with(['-', '*', '+']) || prefix.starts_with(|c: char| c.is_ascii_digit());
+        if !listed {
+            return Some((n, n));
+        }
+        // A list item carries the items nested under it.
+        let indent = |l: &str| l.len() - l.trim_start().len();
+        let mut last = n as usize;
+        while let Some(next) = lines.get(last + 1) {
+            if next.trim().is_empty() || indent(next) <= indent(line) {
+                break;
+            }
+            last += 1;
+        }
+        Some((n, last as i32))
+    }
+
+    fn line_start(&self, n: i32) -> Option<usize> {
+        if n >= self.buffer.line_count() {
+            return Some(self.buffer.end_iter().offset() as usize);
+        }
+        self.buffer.iter_at_line(n).map(|i| i.offset() as usize)
+    }
+
+    /// Where a dragged block would go for a point: before the block or blank line under it, or the end.
+    fn drop_line(&self, x: f64, y: f64) -> Option<i32> {
+        let (first, last) = self.dragging.get()?;
+        let (_, by) = self.view.window_to_buffer_coords(gtk::TextWindowType::Widget, x as i32, y as i32);
+        let (it, top) = self.view.line_at_y(by);
+        let (_, h) = self.view.line_yrange(&it);
+        let mut n = it.line();
+        // The lower half of a line drops after it.
+        if by > top + h / 2 {
+            n = self.block_at(n).map_or(n, |(_, l)| l) + 1;
+        } else if let Some((f, _)) = self.block_at(n) {
+            n = f;
+        }
+        let n = n.max(1);
+        (n < first || n > last + 1).then_some(n)
+    }
+
+    /// Moves lines `first..=last` to before line `before` (the line count for the end), as one change.
+    pub fn move_block(&self, first: i32, last: i32, before: i32) {
+        if before >= first && before <= last + 1 {
+            return;
+        }
+        let old = self.shown_text();
+        let mut lines: Vec<&str> = old.split('\n').collect();
+        let (f, l, b) = (first as usize, last as usize, (before as usize).min(lines.len()));
+        if l >= lines.len() {
+            return;
+        }
+        let moving: Vec<&str> = lines.drain(f..=l).collect();
+        let at = if b > l { b - moving.len() } else { b };
+        for (i, line) in moving.into_iter().enumerate() {
+            lines.insert(at + i, line);
+        }
+        let new = lines.join("\n");
+        self.rewrite_block(0, &old, &new);
+    }
+
     /// Others can edit this note, so lines they wrote are marked.
     fn shared(&self) -> bool {
         self.store.note(&self.id).is_some_and(|n| n.shared || n.role != Role::Owner)
@@ -2137,6 +2282,12 @@ impl Editor {
     /// Table or board `n`'s widget, as drawn now.
     pub fn block_widget_at(&self, n: usize) -> Option<gtk::Widget> {
         self.blocks.borrow().get(n).map(|b| b.widget.clone())
+    }
+
+    /// Shows the grip beside line `n` and a drop line before line `drop`, as during a drag. For screenshots.
+    pub fn show_grip(&self, n: i32, drop: i32) {
+        self.view.set_grip(self.line_start(n));
+        self.view.set_drop(self.line_start(drop));
     }
 
     /// The "/" menu or emoji list is showing.

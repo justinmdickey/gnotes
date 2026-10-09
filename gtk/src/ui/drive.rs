@@ -24,6 +24,7 @@
 //! code-lang <n>|<lang>     as picking the nth code block's language
 //! block-entry <n>|<k>|<text>     types into the kth field of table or board n (cells row by row)
 //! block-click <n>|<label>|<k>    clicks the kth button labeled <label> in table or board n
+//! move-line <line>|<before>      as dragging line's block (from 0) to before line <before>
 //! tick <n>                  clicks the nth checkbox, from 0
 //! format <style>            title, heading, subheading, body, check, bullet, number, quote, bold, italic
 //! new-note
@@ -109,7 +110,7 @@ pub fn open_screen(main: &Rc<Main>, target: &str) {
         }
         "new-notebook" => dialogs::new_notebook(main, None),
         // With AI services: the note's Summary, Tidy Up's preview, Edit with AI asking.
-        "summary" | "tidy" | "editai" | "record" | "slash" | "emoji" => {
+        "summary" | "tidy" | "editai" | "record" | "slash" | "emoji" | "grip" => {
             if let Some(n) = note(arg) {
                 main.open_note(&n.id, false);
                 let (m, kind) = (main.clone(), kind.to_owned());
@@ -121,6 +122,7 @@ pub fn open_screen(main: &Rc<Main>, target: &str) {
                         "tidy" => super::ai::rewrite_dialog(&m, &e, super::ai::Rewrite::Tidy),
                         "record" => e.start_recording(),
                         "slash" => e.type_text("\n/"),
+                        "grip" => e.show_grip(6, 9),
                         "emoji" => e.type_text("\n:sm"),
                         _ => super::ai::rewrite_dialog(&m, &e, super::ai::Rewrite::Edit),
                     }
@@ -310,6 +312,14 @@ async fn run(main: &Rc<Main>, cmd: &str, arg: &str) {
                     Some(btn) => btn.emit_clicked(),
                     None => eprintln!("drive: no button {a}"),
                 }
+            }
+        }
+        "move-line" => {
+            let (a, b) = arg.split_once('|').unwrap_or((arg, "0"));
+            if let Some(e) = editor()
+                && let Some((first, last)) = e.block_at(a.parse().unwrap_or(0))
+            {
+                e.move_block(first, last, b.parse().unwrap_or(0));
             }
         }
         "tick" => {
