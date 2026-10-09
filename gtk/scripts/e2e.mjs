@@ -279,6 +279,7 @@ check("the photo shows in the note", existsSync(f("photo.json")) && dump("photo.
       "type \\n:smil",
       "wait-menu",
       "pick :smile:",
+      "code-lang 0|python",
       "type \\n/table",
       "wait-menu",
       "pick Table",
@@ -292,6 +293,7 @@ const slashed = await demo.read(ann, ids.snippets);
 check("the / menu sets a line's style", slashed.includes("- [ ] Buy coffee"), slashed.slice(-200));
 check("typing :taco: makes the emoji", slashed.includes("Lunch was 🌮"));
 check("the emoji list puts in the one picked", slashed.includes("😄"));
+check("a code block's language can be picked", slashed.includes("```python\nkubectl"), slashed);
 check("the / menu adds a table", slashed.includes("| Column 1 | Column 2 | Column 3 |"));
 
 // Settings: your name, API keys, invites, AI services and import.

@@ -5,6 +5,7 @@ use adw::prelude::*;
 use gtk::gdk;
 
 use super::{
+    code,
     markdown::{self, Styled},
     noteview::{Decor, NoteView}
 };
@@ -38,7 +39,8 @@ pub fn color_tags(view: &NoteView) {
         set("italic", &[("style", &gtk::pango::Style::Italic)]);
         set("strike", &[("strikethrough", &true)]);
         set("code", &[("family", &"monospace"), ("background-rgba", &code_bg)]);
-        set("codeblock", &[("family", &"monospace"), ("paragraph-background-rgba", &code_bg)]);
+        // Its panel is drawn behind it (noteview.rs), within the text column.
+        set("codeblock", &[("family", &"monospace")]);
         set("table", &[("family", &"monospace")]);
         set("quote", &[("foreground-rgba", &dim)]);
         set("mark", &[("foreground-rgba", &dim)]);
@@ -70,6 +72,16 @@ pub fn apply(view: &NoteView, text: &str, active: Option<(i32, i32)>) -> Styled 
     for name in markdown::TAGS {
         buffer.remove_tag_by_name(name, &start, &end);
     }
+    let table = buffer.tag_table();
+    let mut colors = Vec::new();
+    table.foreach(|t| {
+        if t.name().is_some_and(|n| n.starts_with("syn-")) {
+            colors.push(t.clone());
+        }
+    });
+    for t in colors {
+        buffer.remove_tag(&t, &start, &end);
+    }
     let at = |o: usize| buffer.iter_at_offset(o as i32);
     // Like Apple Notes, the first line is the title even without a "#".
     if !styled.titled && !text.is_empty() {
@@ -82,15 +94,47 @@ pub fn apply(view: &NoteView, text: &str, active: Option<(i32, i32)>) -> Styled 
     for s in &styled.spans {
         buffer.apply_tag_by_name(s.tag, &at(s.start), &at(s.end));
     }
-    for &(s, e) in &styled.hidden {
-        let line = at(s).line();
-        if active.is_none_or(|(a, b)| line < a || line > b) {
-            buffer.apply_tag_by_name("hidden", &at(s), &at(e));
+    for (ranges, tag) in [(&styled.hidden, "hidden"), (&styled.ghosted, "ghost")] {
+        for &(s, e) in ranges {
+            let line = at(s).line();
+            if active.is_none_or(|(a, b)| line < a || line > b) {
+                buffer.apply_tag_by_name(tag, &at(s), &at(e));
+            }
         }
     }
     let fg = view.color();
     let dark = fg.red() + fg.green() + fg.blue() > 1.5;
+    // Code by language; a block with none gets a guess, for colors only.
+    let chars: Vec<char> = text.chars().collect();
+    let mut labels = Vec::new();
+    for b in &styled.code_blocks {
+        let code: String = chars[b.content.0..b.content.1].iter().collect();
+        let named = b.info.split_whitespace().next().unwrap_or_default().to_lowercase();
+        let (lang, label) = if named == code::PLAIN {
+            (None, "Plain text".to_owned())
+        } else if !named.is_empty() {
+            (Some(named.clone()), code::name_of(&named))
+        } else {
+            match code::guess_language(&code) {
+                Some(g) => (Some(g.to_owned()), format!("{} (guess)", code::name_of(g))),
+                None => (None, "Plain text".to_owned()),
+            }
+        };
+        labels.push((b.fence, label));
+        let Some(lang) = lang else { continue };
+        for (s, e, (r, g, bl)) in code::highlight(&code, &lang, dark) {
+            let name = format!("syn-{r:02x}{g:02x}{bl:02x}");
+            let tag = table.lookup(&name).unwrap_or_else(|| {
+                let t = buffer.create_tag(Some(&name), &[("foreground-rgba", &gdk::RGBA::new(r as f32 / 255.0, g as f32 / 255.0, bl as f32 / 255.0, 1.0))]).expect("tag");
+                t.set_priority(table.size() - 1);
+                t
+            });
+            buffer.apply_tag(&tag, &at(b.content.0 + s), &at(b.content.0 + e));
+        }
+    }
     view.set_decor(Decor {
+        code_labels: labels,
+        code_areas: styled.code_blocks.iter().map(|b| (b.fence, b.end)).collect(),
         checks: styled.tasks.clone(),
         bullets: styled.bullets.clone(),
         quotes: styled.quotes.clone(),

@@ -6,6 +6,7 @@
 mod ai;
 mod complete;
 mod ask;
+mod code;
 mod dialogs;
 mod drive;
 mod editor;

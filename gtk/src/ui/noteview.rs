@@ -41,6 +41,10 @@ pub struct Decor {
     /// The note is empty: "Title" shows where the title goes.
     pub placeholder: bool,
     pub accent: Option<gtk::gdk::RGBA>,
+    /// Each code block's language, on its opening fence's line (where that starts).
+    pub code_labels: Vec<(usize, String)>,
+    /// Code blocks, from their first line to their last, drawn as a panel behind the text.
+    pub code_areas: Vec<(usize, usize)>,
 }
 
 /// A recording's play button.
@@ -58,6 +62,8 @@ mod imp {
         pub cursors: RefCell<Vec<RemoteCursor>>,
         pub pictures: RefCell<Vec<Picture>>,
         pub decor: RefCell<Decor>,
+        /// Where each code block's language label was drawn, to click.
+        pub label_rects: RefCell<Vec<graphene::Rect>>,
         /// Lines others wrote, by where they start, in their writer's color.
         pub bars: RefCell<Vec<(usize, (f32, f32, f32))>>,
     }
@@ -104,6 +110,18 @@ mod imp {
             let view = self.obj();
             let buffer = view.buffer();
             if layer == gtk::TextViewLayer::BelowText {
+                let fg = view.color();
+                let dark = fg.red() + fg.green() + fg.blue() > 1.5;
+                let panel = gtk::gdk::RGBA::new(fg.red(), fg.green(), fg.blue(), if dark { 0.07 } else { 0.05 });
+                for &(s, e) in &self.decor.borrow().code_areas {
+                    let (y0, _) = view.line_yrange(&buffer.iter_at_offset(s as i32));
+                    let (y1, h1) = view.line_yrange(&buffer.iter_at_offset(e as i32));
+                    let x = view.left_margin() as f32 - 12.0;
+                    let rect = graphene::Rect::new(x, y0 as f32, view.column_width() as f32 + 24.0, (y1 + h1 - y0) as f32);
+                    snapshot.push_rounded_clip(&gsk::RoundedRect::from_rect(rect, 10.0));
+                    snapshot.append_color(&panel, &rect);
+                    snapshot.pop();
+                }
                 for c in self.cursors.borrow().iter() {
                     if c.anchor == c.head {
                         continue;
@@ -289,6 +307,27 @@ impl NoteView {
             snapshot.append_color(&tone(0.25), &rect);
             snapshot.pop();
         }
+        let mut rects = Vec::new();
+        for (o, label) in &d.code_labels {
+            let it = buffer.iter_at_offset(*o as i32);
+            let loc = self.iter_location(&it);
+            let layout = self.create_pango_layout(Some(&format!("{label}  ▾")));
+            let mut font = self.pango_context().font_description().unwrap_or_default();
+            font.set_size(font.size() * 85 / 100);
+            layout.set_font_description(Some(&font));
+            let (w, h) = layout.pixel_size();
+            let right = (self.left_margin() + self.column_width()) as f32;
+            let rect = graphene::Rect::new(right - w as f32 - 16.0, loc.y() as f32 + 2.0, w as f32 + 12.0, h as f32 + 4.0);
+            snapshot.push_rounded_clip(&gsk::RoundedRect::from_rect(rect, 6.0));
+            snapshot.append_color(&tone(0.08), &rect);
+            snapshot.pop();
+            snapshot.save();
+            snapshot.translate(&graphene::Point::new(rect.x() + 6.0, rect.y() + 2.0));
+            snapshot.append_layout(&layout, &tone(0.6));
+            snapshot.restore();
+            rects.push(rect);
+        }
+        self.imp().label_rects.replace(rects);
         if d.placeholder {
             let layout = self.create_pango_layout(Some("Title"));
             let mut font = self.pango_context().font_description().unwrap_or_default();
@@ -301,6 +340,11 @@ impl NoteView {
             snapshot.append_layout(&layout, &tone(0.35));
             snapshot.restore();
         }
+    }
+
+    /// Which code block's language label is at a point in buffer coordinates.
+    pub fn code_label_at(&self, x: f32, y: f32) -> Option<usize> {
+        self.imp().label_rects.borrow().iter().position(|r| r.contains_point(&graphene::Point::new(x, y)))
     }
 
     pub fn pictures(&self) -> Vec<Picture> {

@@ -17,8 +17,23 @@ pub struct Link {
     pub url: String,
 }
 
+/// A fenced code block, in characters.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CodeBlock {
+    /// Where its opening fence's line starts.
+    pub fence: usize,
+    /// What's written after the fence, e.g. "rust", and where (an empty range just after the fence when nothing is).
+    pub info: String,
+    pub info_range: (usize, usize),
+    /// The code between the fences.
+    pub content: (usize, usize),
+    /// Where the block ends, closing fence and all.
+    pub end: usize,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Styled {
+    pub code_blocks: Vec<CodeBlock>,
     pub spans: Vec<Span>,
     /// Where each checkbox's `[` is, and whether it's ticked.
     pub tasks: Vec<(usize, bool)>,
@@ -27,6 +42,8 @@ pub struct Styled {
     pub images: Vec<Link>,
     /// Marks that hide in live preview, except on the line being edited.
     pub hidden: Vec<(usize, usize)>,
+    /// Marks that go see-through instead, keeping their line's height: code fences.
+    pub ghosted: Vec<(usize, usize)>,
     /// Bullet list markers (`-`, `*`, `+`), drawn as dots.
     pub bullets: Vec<usize>,
     /// Each quoted line's `>`, which gets a bar beside it.
@@ -121,17 +138,36 @@ pub fn analyze(text: &str) -> Styled {
             }
             Event::Start(Tag::CodeBlock(kind)) => {
                 span(&mut out, r.start, r.end, "codeblock");
-                if let CodeBlockKind::Fenced(_) = kind {
+                if let CodeBlockKind::Fenced(info) = kind {
                     let slice = &text[r.start..r.end];
                     let first = slice.find('\n').map_or(r.end, |i| r.start + i);
+                    // The fences go see-through, keeping their lines; the block's label shows its language.
                     span(&mut out, r.start, first, "mark");
+                    out.ghosted.push((ci[r.start], ci[first]));
                     let body = slice.trim_end_matches('\n');
+                    let mut content_end = r.end;
                     if let Some(i) = body.rfind('\n') {
                         let last = &body[i + 1..];
                         if last.trim_start().starts_with("```") || last.trim_start().starts_with("~~~") {
                             span(&mut out, r.start + i + 1, r.start + body.len(), "mark");
+                            out.ghosted.push((ci[r.start + i + 1], ci[r.start + body.len()]));
+                            content_end = r.start + i + 1;
                         }
                     }
+                    // The info string: after the fence's backticks (or tildes) on its first line.
+                    let open = &text[r.start..first];
+                    let indent = open.len() - open.trim_start().len();
+                    let marks = open[indent..].chars().take_while(|c| *c == '`' || *c == '~').count();
+                    let rest = &open[indent + marks..];
+                    let info_start = r.start + indent + marks + (rest.len() - rest.trim_start().len());
+                    let content_start = (first + 1).min(r.end).min(content_end.max(first));
+                    out.code_blocks.push(CodeBlock {
+                        fence: ci[r.start],
+                        info: info.trim().to_owned(),
+                        info_range: (ci[info_start], ci[info_start + rest.trim().len()]),
+                        content: (ci[content_start], ci[content_end.max(content_start)]),
+                        end: ci[r.start + body.len()],
+                    });
                 }
             }
             Event::Start(Tag::BlockQuote(_)) => {
@@ -323,6 +359,20 @@ mod tests {
         assert_eq!(s.tasks.len(), 1);
         assert_eq!(s.quotes.len(), 1);
         assert!(analyze("# Title").titled);
+    }
+
+    #[test]
+    fn finds_code_blocks() {
+        let text = "x\n```rust\nfn a() {}\n```\n```\nplain\n```";
+        let s = analyze(text);
+        let chars: Vec<char> = text.chars().collect();
+        let take = |(a, b): (usize, usize)| chars[a..b].iter().collect::<String>();
+        assert_eq!(s.code_blocks.len(), 2);
+        assert_eq!(s.code_blocks[0].info, "rust");
+        assert_eq!(take(s.code_blocks[0].info_range), "rust");
+        assert_eq!(take(s.code_blocks[0].content), "fn a() {}\n");
+        assert_eq!(s.code_blocks[1].info_range.0, s.code_blocks[1].info_range.1);
+        assert_eq!(take(s.code_blocks[1].content), "plain\n");
     }
 
     #[test]

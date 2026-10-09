@@ -1211,10 +1211,58 @@ impl Editor {
         });
     }
 
+    /// The language picker of code block `n`, from its label.
+    fn pick_language(self: &Rc<Self>, n: usize, x: f64, y: f64) {
+        let Some(block) = self.styled.borrow().code_blocks.get(n).cloned() else { return };
+        let menu = gio::Menu::new();
+        menu.append(Some("Guess"), Some("code.lang::"));
+        menu.append(Some("Plain text"), Some(&format!("code.lang::{}", super::code::PLAIN)));
+        let langs = gio::Menu::new();
+        for (id, name) in super::code::COMMON {
+            langs.append(Some(name), Some(&format!("code.lang::{id}")));
+        }
+        menu.append_section(None, &langs);
+        let group = gio::SimpleActionGroup::new();
+        let action = gio::SimpleAction::new_stateful("lang", Some(glib::VariantTy::STRING), &block.info.to_variant());
+        let weak = self.me.clone();
+        action.connect_activate(move |_, v| {
+            let (Some(e), Some(lang)) = (weak.upgrade(), v.and_then(|v| v.get::<String>())) else { return };
+            e.set_code_language(n, &lang);
+        });
+        group.add_action(&action);
+        let popover = gtk::PopoverMenu::from_model(Some(&menu));
+        popover.insert_action_group("code", Some(&group));
+        popover.set_parent(&self.view);
+        popover.set_has_arrow(false);
+        popover.set_pointing_to(Some(&gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+        popover.connect_closed(|p| {
+            let p = p.clone();
+            glib::idle_add_local_once(move || p.unparent());
+        });
+        popover.popup();
+    }
+
+    /// Writes a code block's language after its opening fence ("" to let it be guessed).
+    pub fn set_code_language(&self, n: usize, lang: &str) {
+        let Some(block) = self.styled.borrow().code_blocks.get(n).cloned() else { return };
+        let (s, e) = (block.info_range.0 as i32, block.info_range.1 as i32);
+        self.edit(|b| {
+            b.delete(&mut b.iter_at_offset(s), &mut b.iter_at_offset(e));
+            b.insert(&mut b.iter_at_offset(s), lang);
+        });
+    }
+
     /// A click on a checkbox ticks it; on a link, opens it. True when it did something.
     fn click(self: &Rc<Self>, x: f64, y: f64) -> bool {
         if self.buffer.has_selection() {
             return false;
+        }
+        let (bx, by) = self.view.window_to_buffer_coords(gtk::TextWindowType::Widget, x as i32, y as i32);
+        if self.can_edit()
+            && let Some(n) = self.view.code_label_at(bx as f32, by as f32)
+        {
+            self.pick_language(n, x, y);
+            return true;
         }
         match self.target_at(x, y) {
             Some(Target::Task(start, done)) => {

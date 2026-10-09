@@ -22,6 +22,10 @@ gst = { package = "gstreamer", version = "0.25" }
 gst-app = { package = "gstreamer-app", version = "0.25" }
 gtk = { package = "gtk4", version = "0.11", features = ["v4_16"] }
 loro = "1.16"
+# Guesses the language of unlabeled code blocks.
+regex = "1"
+# Colors code blocks by language.
+syntect = { version = "5.3", default-features = false, features = ["default-fancy"] }
 # Finds the Markdown structure the editor styles.
 pulldown-cmark = { version = "0.13", default-features = false }
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "multipart", "rustls"] }

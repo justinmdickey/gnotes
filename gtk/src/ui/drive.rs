@@ -21,6 +21,7 @@
 //! wait-hidden <text>        some of <text> is hidden by live preview
 //! wait-menu                the "/" menu or emoji list shows (type "/che" or ":ta" to open it)
 //! pick <label>             picks from it
+//! code-lang <n>|<lang>     as picking the nth code block's language
 //! tick <n>                  clicks the nth checkbox, from 0
 //! format <style>            title, heading, subheading, body, check, bullet, number, quote, bold, italic
 //! new-note
@@ -260,6 +261,12 @@ async fn run(main: &Rc<Main>, cmd: &str, arg: &str) {
         "pick" => {
             if !editor().is_some_and(|e| e.pick_from_menu(arg)) {
                 eprintln!("drive: no {arg} in the menu");
+            }
+        }
+        "code-lang" => {
+            let (n, lang) = arg.split_once('|').unwrap_or((arg, ""));
+            if let Some(e) = editor() {
+                e.set_code_language(n.parse().unwrap_or(0), lang);
             }
         }
         "tick" => {
