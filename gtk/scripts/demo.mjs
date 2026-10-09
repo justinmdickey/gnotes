@@ -3,6 +3,7 @@
 // photo) and Garage, Personal, and Snippets at the top; Sam shares his Family notebook (Weekly sync)
 // with Ann, and Ann shares Groceries with Sam.
 import { spawn, spawnSync } from "node:child_process";
+import { createServer } from "node:http";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -23,11 +24,91 @@ const frame = (kind, id, payload) => {
   return buf;
 };
 
-export async function startDemo() {
+/**
+ * Stand-in AI services on `port`, OpenAI-compatible, like web/scripts/shot.mjs's: embeddings that
+ * know a few topics, a chat model for summaries, Tidy Up, Edit with AI, the AI Prompt and Ask, a
+ * vision model that reads "RICE" off any photo, and speech-to-text that hears "Call the plumber".
+ */
+function standInAI(port) {
+  const topics = [
+    ["milk", "dairy", "eggs", "cheese", "bread", "groceries", "breakfast", "buy", "spinach", "lemons"],
+    ["rice", "beans", "flour", "pantry", "staples", "dry", "cook"],
+    ["kubectl", "flux", "code", "command", "commands", "homelab", "cargo"],
+  ];
+  const embedding = (text) => {
+    const v = new Array(3 + 64).fill(0);
+    for (const w of text.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean)) {
+      const t = topics.findIndex((words) => words.includes(w));
+      if (t >= 0) v[t] += 3;
+      else v[3 + ([...w].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % 64)] += 1;
+    }
+    return v;
+  };
+  const reply = (res, content) => res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content } }] }));
+  return createServer((req, res) => {
+    const chunks = [];
+    req.on("data", (c) => chunks.push(c));
+    req.on("end", () => {
+      res.setHeader("content-type", "application/json");
+      if (req.url.endsWith("/audio/transcriptions")) return res.end(JSON.stringify({ text: "Call the plumber about the sink." }));
+      const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString() || "{}") : {};
+      if (req.url.endsWith("/models")) return res.end(JSON.stringify({ data: [{ id: "stand-in" }] }));
+      if (req.url.endsWith("/embeddings")) {
+        return res.end(JSON.stringify({ data: body.input.map((t, index) => ({ index, embedding: embedding(t) })) }));
+      }
+      if (!req.url.endsWith("/chat/completions")) return res.end(JSON.stringify({ data: [] }));
+      const [first] = body.messages;
+      const last = body.messages.at(-1).content;
+      if (Array.isArray(last)) return reply(res, "RICE 2 KG");
+      if (first.role === "system") {
+        // Ask: a sentence for each note it knows, cited by its number, streamed.
+        const lines = { Groceries: "You still need spinach, lemons and milk", Pantry: "Rice, beans and flour are in the pantry" };
+        const said = [...first.content.matchAll(/^\[(\d+)\] (\w+)$/gm)].filter((m) => lines[m[2]]).map((m) => `${lines[m[2]]} [${m[1]}].`);
+        res.setHeader("content-type", "text/event-stream");
+        for (const text of (said.join(" ") || "NO_ANSWER").match(/.{1,8}/g)) {
+          res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\n`);
+        }
+        return res.end("data: [DONE]\n\n");
+      }
+      const edit = last.match(/^The instruction: (.*)\n\nThe note:\n\n([\s\S]*)$/m);
+      if (edit) {
+        const [title, ...rest] = edit[2].split("\n");
+        const items = rest.filter((l) => l.trim()).map((l) => `- ${l.replace(/^\s*([-*]|\d+\.)\s+(\[[ x]\]\s+)?/, "")}`);
+        return reply(res, [title, "", ...items, "", "## Action items", "", "- [ ] Go shopping on Saturday"].join("\n"));
+      }
+      if (last.includes("<<WRITE HERE>>")) return reply(res, "- Olive oil\n- Coffee beans");
+      const [, note] = last.split("The note:\n\n");
+      if (note !== undefined) {
+        const [title, ...rest] = note.split("\n");
+        const items = rest.map((l) => (!l.trim() || /^\s*([-*>#]|\d+\.|```)/.test(l) ? l : `- ${l}`));
+        return reply(res, [title.startsWith("#") ? title : `# ${title}`, "", "## To buy", "", ...items].join("\n"));
+      }
+      const followUp = last.split("\nLast message: ");
+      if (followUp.length === 2) return reply(res, `${followUp[0].split("\n").find((l) => l.startsWith("User: "))?.slice(6) ?? ""} ${followUp[1]}`);
+      return reply(res, "A shopping list for the weekend.\n\n## Key points\n- Spinach, lemons and milk\n\n## Action items\n- [ ] Check the pantry");
+    });
+  }).listen(port, "127.0.0.1");
+}
+
+/** `ai`: stand-in AI services, all switched on. */
+export async function startDemo({ ai = false } = {}) {
   const data = mkdtempSync(join(tmpdir(), "gnotes-gtk-"));
   const port = 19000 + Math.floor(Math.random() * 1000);
   const base = `http://127.0.0.1:${port}`;
   const env = { ...process.env, GNOTES_DATA_DIR: join(data, "server"), GNOTES_BIND: `127.0.0.1:${port}` };
+  if (ai) {
+    standInAI(port + 2000);
+    const url = `http://127.0.0.1:${port + 2000}/v1`;
+    Object.assign(env, {
+      GNOTES_EMBED_URL: url,
+      GNOTES_EMBED_MODEL: "stand-in-embed",
+      GNOTES_SUMMARY_URL: url,
+      GNOTES_SUMMARY_MODEL: "stand-in-chat",
+      GNOTES_VISION_URL: url,
+      GNOTES_VISION_MODEL: "stand-in-vision",
+      GNOTES_WHISPER_URL: url,
+    });
+  }
   const children = new Set();
   const track = (c) => {
     children.add(c);

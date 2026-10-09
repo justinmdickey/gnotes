@@ -3,6 +3,7 @@
 // Boxed callbacks are how GTK code hands actions around.
 #![allow(clippy::type_complexity)]
 
+mod ai;
 mod dialogs;
 mod drive;
 mod editor;
@@ -14,6 +15,7 @@ mod settings;
 mod shot;
 mod sidebar;
 mod store;
+mod styling;
 mod window;
 
 use adw::prelude::*;

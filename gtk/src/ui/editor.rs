@@ -18,6 +18,7 @@ use super::{
     markdown::{self, Styled},
     noteview::{self, NoteView, Picture, RemoteCursor},
     sidebar::{self, Item, title_of},
+    styling,
     store::{NoteHandler, Store},
     window::Main,
 };
@@ -159,9 +160,7 @@ impl Editor {
         view.set_editable(false);
         let buffer = view.buffer();
         buffer.set_enable_undo(false);
-        for name in markdown::TAGS {
-            buffer.create_tag(Some(name), &[]);
-        }
+        styling::make_tags(&buffer);
 
         let scroll = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
@@ -326,6 +325,15 @@ impl Editor {
             });
         }
         {
+            // The AI tools come and go with the server's services.
+            let weak = Rc::downgrade(&editor);
+            store.on_features(move || match weak.upgrade() {
+                Some(e) if !e.closed.get() => {
+                    e.refresh_editable();
+                    true
+                }
+                _ => false,
+            });
             let weak = Rc::downgrade(&editor);
             store.on_tree(move || match weak.upgrade() {
                 Some(e) if !e.closed.get() => {
@@ -400,7 +408,11 @@ impl Editor {
     fn menu(&self, role: Option<Role>) -> gio::Menu {
         let menu = gio::Menu::new();
         let group = gio::SimpleActionGroup::new();
-        let add = |label: &str, name: &str, f: Box<dyn Fn(&Rc<Main>, &str)>| {
+        let ai = gio::Menu::new();
+        let rest = gio::Menu::new();
+        menu.append_section(None, &ai);
+        menu.append_section(None, &rest);
+        let action = |section: &gio::Menu, label: &str, name: &str, f: Box<dyn Fn(&Rc<Main>, &str)>| {
             let a = gio::SimpleAction::new(name, None);
             let (weak, id) = (self.main.clone(), self.id.clone());
             a.connect_activate(move |_, _| {
@@ -409,8 +421,25 @@ impl Editor {
                 }
             });
             group.add_action(&a);
-            menu.append(Some(label), Some(&format!("note.{name}")));
+            section.append(Some(label), Some(&format!("note.{name}")));
         };
+        // The AI tools, with AI Summaries set up, on the note open now.
+        let open = |f: fn(&Rc<Main>, &Rc<Editor>)| -> Box<dyn Fn(&Rc<Main>, &str)> {
+            Box::new(move |m, id| {
+                if let Some(e) = m.editor().filter(|e| e.id == id) {
+                    f(m, &e);
+                }
+            })
+        };
+        if self.store.features.borrow().summaries && self.doc.borrow().has_data && !self.lost.get() {
+            action(&ai, "Summary", "summary", open(super::ai::summary_dialog));
+            if self.can_edit() {
+                action(&ai, "Edit with AI…", "edit-ai", open(|m, e| super::ai::rewrite_dialog(m, e, super::ai::Rewrite::Edit)));
+                action(&ai, "Tidy Up", "tidy", open(|m, e| super::ai::rewrite_dialog(m, e, super::ai::Rewrite::Tidy)));
+                action(&ai, "Write with AI Here…", "ai-prompt", open(super::ai::prompt_popover));
+            }
+        }
+        let add = |label: &str, name: &str, f: Box<dyn Fn(&Rc<Main>, &str)>| action(&rest, label, name, f);
         if role.is_some_and(Role::can_edit) {
             add("Move to…", "move", Box::new(|m, id| {
                 if let Some(n) = m.store.note(id) {
@@ -1098,42 +1127,14 @@ impl Editor {
     fn restyle(&self) {
         let (start, end) = self.buffer.bounds();
         let text = self.buffer.text(&start, &end, true);
-        let styled = markdown::analyze(&text);
-        for name in markdown::TAGS {
-            self.buffer.remove_tag_by_name(name, &start, &end);
-        }
         for tag in self.photo_tags.borrow().values() {
             self.buffer.remove_tag(tag, &start, &end);
-        }
-        let at = |o: usize| self.buffer.iter_at_offset(o as i32);
-        // Like Apple Notes, the first line is the title even without a "#".
-        if !styled.titled && !text.is_empty() {
-            let mut eol = self.buffer.start_iter();
-            if !eol.ends_line() {
-                eol.forward_to_line_end();
-            }
-            self.buffer.apply_tag_by_name("h1", &start, &eol);
-        }
-        for s in &styled.spans {
-            self.buffer.apply_tag_by_name(s.tag, &at(s.start), &at(s.end));
         }
         // Live preview: marks hide except on the lines being edited.
         let active = self.active_lines();
         self.active.set(active);
-        for &(s, e) in &styled.hidden {
-            let line = at(s).line();
-            if active.is_none_or(|(a, b)| line < a || line > b) {
-                self.buffer.apply_tag_by_name("hidden", &at(s), &at(e));
-            }
-        }
-        let dark = { let c = self.view.color(); c.red() + c.green() + c.blue() > 1.5 };
-        self.view.set_decor(noteview::Decor {
-            checks: styled.tasks.clone(),
-            bullets: styled.bullets.clone(),
-            quotes: styled.quotes.clone(),
-            placeholder: text.is_empty() && self.view.is_editable(),
-            accent: Some(adw::StyleManager::default().accent_color().to_standalone_rgba(dark)),
-        });
+        let styled = styling::apply(&self.view, &text, active);
+        let at = |o: usize| self.buffer.iter_at_offset(o as i32);
         let mut pictures = Vec::new();
         let column = self.view.column_width() as f32;
         for img in &styled.images {
@@ -1206,48 +1207,67 @@ impl Editor {
 
     /// Colors for the Markdown tags, for the light or dark style.
     fn color_tags(&self) {
-        // The text's own color, so tags follow the style in use rather than a guess at it.
-        let fg = self.view.color();
-        let dark = fg.red() + fg.green() + fg.blue() > 1.5;
-        let dim = gdk::RGBA::new(fg.red(), fg.green(), fg.blue(), 0.45);
-        let accent = adw::StyleManager::default().accent_color().to_standalone_rgba(dark);
-        let code_bg = gdk::RGBA::new(fg.red(), fg.green(), fg.blue(), if dark { 0.08 } else { 0.06 });
-        let table = self.buffer.tag_table();
-        let tag = |name: &str| table.lookup(name).expect("tag");
-        let set = |name: &str, props: &[(&str, &dyn ToValue)]| {
-            let t = tag(name);
-            for (k, v) in props {
-                t.set_property_from_value(k, &v.to_value());
-            }
-        };
-        set("h1", &[("scale", &1.75f64), ("weight", &800i32), ("pixels-above-lines", &10i32), ("pixels-below-lines", &6i32)]);
-        set("h2", &[("scale", &1.4f64), ("weight", &700i32), ("pixels-above-lines", &14i32), ("pixels-below-lines", &4i32)]);
-        set("h3", &[("scale", &1.18f64), ("weight", &700i32), ("pixels-above-lines", &10i32), ("pixels-below-lines", &2i32)]);
-        set("bold", &[("weight", &700i32)]);
-        set("italic", &[("style", &gtk::pango::Style::Italic)]);
-        set("strike", &[("strikethrough", &true)]);
-        set("code", &[("family", &"monospace"), ("background-rgba", &code_bg)]);
-        set("codeblock", &[("family", &"monospace"), ("paragraph-background-rgba", &code_bg)]);
-        set("table", &[("family", &"monospace")]);
-        set("quote", &[("foreground-rgba", &dim)]);
-        set("mark", &[("foreground-rgba", &dim)]);
-        set("bullet", &[("foreground-rgba", &dim), ("weight", &700i32)]);
-        set("link", &[("foreground-rgba", &accent), ("underline", &gtk::pango::Underline::Single)]);
-        // A checkbox's `[ ]`: monospace, so the box drawn over it has room.
-        set("task", &[("family", &"monospace")]);
-        set("done", &[("foreground-rgba", &dim), ("strikethrough", &true)]);
-        // Live preview: marks hidden off the edited line; bullets and boxes drawn over clear text.
-        // Pango takes an alpha of 0 as no alpha at all, so this is the least above it.
-        let clear = gdk::RGBA::new(0.0, 0.0, 0.0, 1.0 / 65535.0);
-        // Hidden marks stay in the text, shrunk to nothing, rather than `invisible`: GTK places things
-        // after invisible text as if it were there, which would put cursors and boxes in the wrong spot.
-        set("hidden", &[("scale", &0.01f64), ("foreground-rgba", &clear)]);
-        set("ghost", &[("foreground-rgba", &clear)]);
-        // Higher tags win: marks stay dim inside headings and links.
-        for name in ["link", "mark", "task", "ghost", "hidden"] {
-            let t = tag(name);
-            t.set_priority(table.size() - 1);
+        styling::color_tags(&self.view);
+    }
+
+    /// Applies `changes` (from ai::changes_between) as one undo step, if the text is still
+    /// `original`. False when it changed meanwhile.
+    pub fn replace_text(&self, original: &str, changes: &[super::ai::Change]) -> bool {
+        if !self.can_edit() || self.shown_text() != original {
+            return false;
         }
+        // Back to front, so earlier positions stay put.
+        self.edit(|b| {
+            for c in changes.iter().rev() {
+                let (from, to) = (c.from as i32, c.to as i32);
+                if to > from {
+                    b.delete(&mut b.iter_at_offset(from), &mut b.iter_at_offset(to));
+                }
+                if !c.insert.is_empty() {
+                    b.insert(&mut b.iter_at_offset(from), &c.insert);
+                }
+            }
+        });
+        true
+    }
+
+    /// Where the cursor is, in characters.
+    pub fn cursor_offset(&self) -> usize {
+        self.buffer.iter_at_mark(&self.buffer.get_insert()).offset() as usize
+    }
+
+    /// The text view and the cursor's rectangle in it, for a popover to point at.
+    pub fn cursor_rect(&self) -> Option<(gtk::Widget, gdk::Rectangle)> {
+        if !self.can_edit() {
+            return None;
+        }
+        let it = self.buffer.iter_at_mark(&self.buffer.get_insert());
+        let loc = self.view.iter_location(&it);
+        let (x, y) = self.view.buffer_to_window_coords(gtk::TextWindowType::Widget, loc.x(), loc.y());
+        Some((self.view.clone().upcast(), gdk::Rectangle::new(x, y, 1, loc.height())))
+    }
+
+    /// Writes `text` at line of `at`: in place of a blank line, or one with just a list marker or
+    /// checkbox; otherwise on new lines under it. As one undo step.
+    pub fn write_at_line(&self, at: usize, text: &str) {
+        let it = self.buffer.iter_at_offset(at as i32);
+        let mut start = it;
+        start.set_line_offset(0);
+        let mut end = it;
+        if !end.ends_line() {
+            end.forward_to_line_end();
+        }
+        let line = self.buffer.text(&start, &end, true).to_string();
+        let empty = line.trim().is_empty() || line.len() == markdown::line_prefix(&line).len();
+        let (s, e) = (start.offset(), end.offset());
+        self.edit(|b| {
+            if empty {
+                b.delete(&mut b.iter_at_offset(s), &mut b.iter_at_offset(e));
+                b.insert(&mut b.iter_at_offset(s), text);
+            } else {
+                b.insert(&mut b.iter_at_offset(e), &format!("\n{text}"));
+            }
+        });
     }
 
     // What gtk/scripts/e2e.mjs does and looks at, through ui/drive.rs.

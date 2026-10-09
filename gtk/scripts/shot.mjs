@@ -7,6 +7,7 @@
 //            share:<title> move:<title> new-notebook   (default: home note:Groceries)
 //   --narrow | --wide     window size (default: both)
 //   --dark | --light      style (default: both)
+//   --ai                  stand-in AI services, for summary:<title> tidy:<title> editai:<title>
 //   --out <dir>           where PNGs go (default: /tmp/gnotes-shots)
 // Needs web/node_modules (loro-crdt, to write the demo notes) and sway.
 import { mkdirSync, rmSync } from "node:fs";
@@ -22,7 +23,7 @@ const targets = screens.length ? screens : ["home", "note:Groceries"];
 const sizes = [...(flag("--narrow") ? [] : [["wide", "1280x800"]]), ...(flag("--wide") ? [] : [["narrow", "400x820"]])];
 const styles = [...(flag("--light") ? [] : ["dark"]), ...(flag("--dark") ? [] : ["light"])];
 
-const demo = await startDemo();
+const demo = await startDemo({ ai: flag("--ai") });
 // Sam keeps Groceries open with the cursor in it, so the app has someone to show.
 const sam = await demo.stay(demo.sam, demo.ids.groceries, "Spinach");
 

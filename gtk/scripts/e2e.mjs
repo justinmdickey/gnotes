@@ -303,6 +303,42 @@ const empty = await demo.startEmptyServer();
 const setupDump = existsSync(f("setup.json")) ? dump("setup.json") : {};
 check("a new server's first account is made from sign-in", code === 0 && setupDump.user === "Admin", { code, stderr, setupDump });
 
+// The AI tools, against stand-in services on a server of their own.
+{
+  const aiDemo = await startDemo({ ai: true });
+  const aiAnn = aiDemo.ann;
+  // Sam's open note in the main demo is irrelevant here; this one starts clean.
+  ({ code, stderr } = await aiDemo.runApp({
+    env: {
+      GNOTES_DRIVE: [
+        "wait-tree",
+        "open note:Groceries",
+        "wait-loaded",
+        "summary",
+        "wait-dialog Key points",
+        `dump ${f("summary.json")}`,
+        "tidy",
+        "wait-text ## To buy",
+        "open note:Pantry",
+        "wait-loaded",
+        "edit-ai Make it all bullets",
+        "wait-text ## Action items",
+        "cursor 0",
+        "ai-write Add two more staples",
+        "wait-text Olive oil",
+        "quit",
+      ].join("\n"),
+    },
+  }));
+  check("the AI tools ran", code === 0, { code, stderr });
+  check("Summary shows the note's summary", existsSync(f("summary.json")) && /Spinach, lemons and milk/.test(dump("summary.json").dialog_text));
+  const tidied = await aiDemo.read(aiAnn, aiDemo.ids.groceries);
+  check("Tidy Up applies the tidied note", tidied.includes("## To buy") && tidied.includes("- [x] Apples"), tidied);
+  const edited = await aiDemo.read(aiAnn, aiDemo.ids.pantry);
+  check("Edit with AI applies the change", edited.includes("## Action items"), edited);
+  check("the AI Prompt writes at the cursor", /# Pantry\n- Olive oil\n- Coffee beans/.test(edited), edited.slice(0, 80));
+}
+
 // Signing in through the form, then starting again signed in, then starting with no server.
 ({ code, stderr } = await demo.runApp({
   signedIn: false,

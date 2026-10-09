@@ -36,6 +36,10 @@
 //! invite <file>             a new account's invite link goes in <file>
 //! save-service <kind>|<url>|<model>         kind: whisper, vision, summary or embed
 //! import <path>             as Settings › Import
+//! summary                  opens the open note's Summary
+//! wait-dialog <text>       the dialog showing has <text> in it
+//! tidy | edit-ai <instruction>   Tidy Up or Edit with AI, applied
+//! ai-write <prompt>        the AI Prompt at the cursor
 //! dump <file.json>          the open note's text, title and peers, the sidebar's rows, the status
 //! shot <file.png>
 //! quit
@@ -85,6 +89,22 @@ pub fn open_screen(main: &Rc<Main>, target: &str) {
             }
         }
         "new-notebook" => dialogs::new_notebook(main, None),
+        // With AI services: the note's Summary, Tidy Up's preview, Edit with AI asking.
+        "summary" | "tidy" | "editai" => {
+            if let Some(n) = note(arg) {
+                main.open_note(&n.id, false);
+                let (m, kind) = (main.clone(), kind.to_owned());
+                // Once the note has loaded.
+                glib::timeout_add_local_once(Duration::from_millis(800), move || {
+                    let Some(e) = m.editor() else { return };
+                    match kind.as_str() {
+                        "summary" => super::ai::summary_dialog(&m, &e),
+                        "tidy" => super::ai::rewrite_dialog(&m, &e, super::ai::Rewrite::Tidy),
+                        _ => super::ai::rewrite_dialog(&m, &e, super::ai::Rewrite::Edit),
+                    }
+                });
+            }
+        }
         "settings" => super::settings::open_at(main, if arg.is_empty() { "account" } else { arg }),
         "home" | "login" => {}
         _ => eprintln!("unknown screen {target}"),
@@ -101,6 +121,31 @@ pub fn start(main: &Rc<Main>) {
             run(&main, cmd, &arg).await;
         }
     });
+}
+
+/// The text in the dialog showing: its labels and text views.
+fn dialog_text(main: &Main) -> String {
+    fn walk(w: &gtk::Widget, out: &mut String) {
+        if let Some(l) = w.downcast_ref::<gtk::Label>() {
+            out.push_str(&l.label());
+            out.push('\n');
+        }
+        if let Some(t) = w.downcast_ref::<gtk::TextView>() {
+            let b = t.buffer();
+            out.push_str(&b.text(&b.start_iter(), &b.end_iter(), true));
+            out.push('\n');
+        }
+        let mut child = w.first_child();
+        while let Some(c) = child {
+            walk(&c, out);
+            child = c.next_sibling();
+        }
+    }
+    let mut out = String::new();
+    if let Some(d) = main.window.visible_dialog() {
+        walk(d.upcast_ref(), &mut out);
+    }
+    out
 }
 
 /// The titles of the rows the content pane lists.
@@ -290,6 +335,28 @@ async fn run(main: &Rc<Main>, cmd: &str, arg: &str) {
             }
         }
         "import" => super::settings::import(main, vec![gtk::gio::File::for_path(arg)]).await,
+        "summary" => {
+            if let Some(e) = editor() {
+                super::ai::summary_dialog(main, &e);
+            }
+        }
+        "wait-dialog" => until(&format!("a dialog with {arg:?}"), || dialog_text(main).contains(arg)).await,
+        "tidy" | "edit-ai" => {
+            let kind = if cmd == "tidy" { super::ai::Rewrite::Tidy } else { super::ai::Rewrite::Edit };
+            if let Some(e) = editor() {
+                match super::ai::rewrite(main, &e, kind, arg).await {
+                    Ok((original, text)) => {
+                        super::ai::apply(main, &e, kind, &original, &text);
+                    }
+                    Err(err) => eprintln!("drive: {cmd}: {err}"),
+                }
+            }
+        }
+        "ai-write" => {
+            if let Some(e) = editor() {
+                super::ai::write_here(main, &e, arg).await;
+            }
+        }
         "dump" => {
             let e = editor();
             let v = json!({
@@ -302,6 +369,7 @@ async fn run(main: &Rc<Main>, cmd: &str, arg: &str) {
                 "note": main.open_id(),
                 "sidebar": main.sidebar().labels(),
                 "list": list_rows(main),
+                "dialog_text": dialog_text(main),
                 "status": status(main.store.status.get()),
                 "user": main.store.user().display_name,
                 "dialog": main.window.visible_dialog().map(|d| d.title().to_string()),
