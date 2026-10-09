@@ -47,6 +47,10 @@ pub fn run() -> gtk::glib::ExitCode {
     // Start the runtime before any window, so the first request doesn't wait for it.
     let _ = crate::runtime();
     let app = adw::Application::builder().application_id(APP_ID).build();
+    // A run with its own folder (tests, screenshots) is its own instance, not a second window of yours.
+    if std::env::var_os("GNOTES_GTK_DIR").is_some() {
+        app.set_flags(gtk::gio::ApplicationFlags::NON_UNIQUE);
+    }
     app.connect_startup(|_| {
         install_icon();
         shot::force_style();

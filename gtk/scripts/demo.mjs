@@ -300,7 +300,7 @@ export async function startDemo() {
       // GTK's own warnings about Broadway aren't ours.
       stderr += s
         .split("\n")
-        .filter((l) => l.trim() && !/WARNING \*\*|^\(gnotes:\d+\)/.test(l))
+        .filter((l) => l.trim() && !/-WARNING \*\*/.test(l))
         .map((l) => l + "\n")
         .join("");
     });

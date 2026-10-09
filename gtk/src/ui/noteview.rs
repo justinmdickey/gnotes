@@ -29,6 +29,20 @@ pub struct Picture {
     pub height: f32,
 }
 
+/// What live preview draws in place of Markdown marks, in characters.
+#[derive(Clone, Debug, Default)]
+pub struct Decor {
+    /// Each checkbox's `[`, and whether it's ticked.
+    pub checks: Vec<(usize, bool)>,
+    /// Bullet list markers.
+    pub bullets: Vec<usize>,
+    /// Each quoted line's `>`.
+    pub quotes: Vec<usize>,
+    /// The note is empty: "Title" shows where the title goes.
+    pub placeholder: bool,
+    pub accent: Option<gtk::gdk::RGBA>,
+}
+
 /// A recording's play button.
 pub const BUTTON: (f32, f32) = (190.0, 36.0);
 
@@ -43,6 +57,7 @@ mod imp {
     pub struct NoteView {
         pub cursors: RefCell<Vec<RemoteCursor>>,
         pub pictures: RefCell<Vec<Picture>>,
+        pub decor: RefCell<Decor>,
     }
 
     #[glib::object_subclass]
@@ -100,6 +115,7 @@ mod imp {
                 }
                 return;
             }
+            view.draw_decor(&self.decor.borrow(), &snapshot);
             for p in self.pictures.borrow().iter() {
                 let rect = view.picture_rect(p);
                 let radius = if p.texture.is_some() { 8.0 } else { rect.height() / 2.0 };
@@ -190,6 +206,73 @@ impl NoteView {
     pub fn picture_at(&self, x: f32, y: f32) -> Option<Picture> {
         let pictures = self.imp().pictures.borrow();
         pictures.iter().find(|p| self.picture_rect(p).contains_point(&graphene::Point::new(x, y))).cloned()
+    }
+
+    pub fn set_decor(&self, decor: Decor) {
+        self.imp().decor.replace(decor);
+        self.queue_draw();
+    }
+
+    /// Checkboxes, bullets, quote bars and the empty title, over the text.
+    fn draw_decor(&self, d: &Decor, snapshot: &gtk::Snapshot) {
+        let buffer = self.buffer();
+        let fg = self.color();
+        let tone = |a: f32| gtk::gdk::RGBA::new(fg.red(), fg.green(), fg.blue(), a);
+        let accent = d.accent.unwrap_or(gtk::gdk::RGBA::new(0.21, 0.52, 0.89, 1.0));
+        let at = |o: usize| self.iter_location(&buffer.iter_at_offset(o as i32));
+        for &(o, done) in &d.checks {
+            let (s, e) = (at(o), at(o + 3));
+            let size = (s.height() as f32 * 0.78).min(19.0);
+            let (cx, cy) = ((s.x() + e.x()) as f32 / 2.0, s.y() as f32 + s.height() as f32 / 2.0);
+            let rect = graphene::Rect::new(cx - size / 2.0, cy - size / 2.0, size, size);
+            let round = gsk::RoundedRect::from_rect(rect, size / 2.0);
+            if done {
+                snapshot.push_rounded_clip(&round);
+                snapshot.append_color(&accent, &rect);
+                snapshot.pop();
+                let tick = gsk::PathBuilder::new();
+                tick.move_to(cx - size * 0.24, cy + size * 0.02);
+                tick.line_to(cx - size * 0.06, cy + size * 0.2);
+                tick.line_to(cx + size * 0.25, cy - size * 0.18);
+                let stroke = gsk::Stroke::new(1.8);
+                stroke.set_line_cap(gsk::LineCap::Round);
+                stroke.set_line_join(gsk::LineJoin::Round);
+                snapshot.append_stroke(&tick.to_path(), &stroke, &gtk::gdk::RGBA::WHITE);
+            } else {
+                let w = 1.5;
+                snapshot.append_border(&round, &[w; 4], &[tone(0.5); 4]);
+            }
+        }
+        for &o in &d.bullets {
+            let s = at(o);
+            let r = 3.0;
+            let (cx, cy) = (s.x() as f32 + s.width().max(6) as f32 / 2.0, s.y() as f32 + s.height() as f32 / 2.0);
+            let rect = graphene::Rect::new(cx - r, cy - r, r * 2.0, r * 2.0);
+            snapshot.push_rounded_clip(&gsk::RoundedRect::from_rect(rect, r));
+            snapshot.append_color(&tone(0.55), &rect);
+            snapshot.pop();
+        }
+        for &o in &d.quotes {
+            let it = buffer.iter_at_offset(o as i32);
+            let (y, h) = self.line_yrange(&it);
+            let x = self.iter_location(&it).x() as f32 - 12.0;
+            let rect = graphene::Rect::new(x, y as f32 + 2.0, 3.0, h as f32 - 4.0);
+            snapshot.push_rounded_clip(&gsk::RoundedRect::from_rect(rect, 1.5));
+            snapshot.append_color(&tone(0.25), &rect);
+            snapshot.pop();
+        }
+        if d.placeholder {
+            let layout = self.create_pango_layout(Some("Title"));
+            let mut font = self.pango_context().font_description().unwrap_or_default();
+            font.set_size((font.size() as f64 * 1.75) as i32);
+            font.set_weight(gtk::pango::Weight::Heavy);
+            layout.set_font_description(Some(&font));
+            let s = at(0);
+            snapshot.save();
+            snapshot.translate(&graphene::Point::new(s.x() as f32, s.y() as f32 + self.pixels_above_lines() as f32 + 10.0));
+            snapshot.append_layout(&layout, &tone(0.35));
+            snapshot.restore();
+        }
     }
 
     pub fn pictures(&self) -> Vec<Picture> {

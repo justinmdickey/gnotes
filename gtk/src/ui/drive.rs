@@ -16,6 +16,9 @@
 //! sleep <ms>
 //! type <text>               typed at the end of the open note (\n presses Enter)
 //! enter | undo | redo
+//! cursor <n>                the cursor at the end of line n (from 0)
+//! wait-shown <text>         <text> shows whole, no marks hidden in it
+//! wait-hidden <text>        some of <text> is hidden by live preview
 //! tick <n>                  clicks the nth checkbox, from 0
 //! format <style>            title, heading, subheading, body, check, bullet, number, quote, bold, italic
 //! new-note
@@ -162,6 +165,13 @@ async fn run(main: &Rc<Main>, cmd: &str, arg: &str) {
                 e.type_text(arg);
             }
         }
+        "cursor" => {
+            if let Some(e) = editor() {
+                e.cursor_to_line(arg.parse().unwrap_or(0));
+            }
+        }
+        "wait-shown" => until(&format!("{arg:?} shown"), || editor().is_some_and(|e| e.shows(arg))).await,
+        "wait-hidden" => until(&format!("marks hidden in {arg:?}"), || editor().is_some_and(|e| !e.shows(arg))).await,
         "enter" => {
             if let Some(e) = editor() {
                 e.press_enter();

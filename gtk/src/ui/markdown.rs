@@ -25,11 +25,19 @@ pub struct Styled {
     pub links: Vec<Link>,
     /// Photos: the whole `![alt](url)` and its url.
     pub images: Vec<Link>,
+    /// Marks that hide in live preview, except on the line being edited.
+    pub hidden: Vec<(usize, usize)>,
+    /// Bullet list markers (`-`, `*`, `+`), drawn as dots.
+    pub bullets: Vec<usize>,
+    /// Each quoted line's `>`, which gets a bar beside it.
+    pub quotes: Vec<usize>,
+    /// The first line is a heading of its own; otherwise it's styled as the title anyway.
+    pub titled: bool,
 }
 
 /// Every tag `analyze` uses, for the editor's tag table.
 pub const TAGS: &[&str] =
-    &["h1", "h2", "h3", "bold", "italic", "strike", "code", "codeblock", "quote", "mark", "link", "task", "done", "bullet", "table"];
+    &["h1", "h2", "h3", "bold", "italic", "strike", "code", "codeblock", "quote", "mark", "link", "task", "done", "bullet", "table", "ghost", "hidden"];
 
 /// Byte offset to character offset, for every byte position in `text`.
 fn char_index(text: &str) -> Vec<usize> {
@@ -53,6 +61,13 @@ pub fn analyze(text: &str) -> Styled {
             out.spans.push(Span { start: ci[s], end: ci[e], tag });
         }
     };
+    // A mark that dims, and hides in live preview.
+    let hide = |out: &mut Styled, s: usize, e: usize| {
+        if e > s {
+            out.spans.push(Span { start: ci[s], end: ci[e], tag: "mark" });
+            out.hidden.push((ci[s], ci[e]));
+        }
+    };
     let bytes = text.as_bytes();
     // Open links: where they start, their url, and where their text ends so far.
     let mut links: Vec<(usize, String, usize)> = Vec::new();
@@ -72,25 +87,28 @@ pub fn analyze(text: &str) -> Styled {
                 span(&mut out, r.start, end, tag);
                 let hashes = bytes[r.start..r.end].iter().take_while(|b| **b == b'#').count();
                 if hashes > 0 {
-                    let mark_end = (r.start + hashes + 1).min(r.end);
-                    span(&mut out, r.start, mark_end, "mark");
+                    let mark_end = (r.start + hashes + 1).min(end);
+                    hide(&mut out, r.start, mark_end);
+                }
+                if r.start == 0 {
+                    out.titled = true;
                 }
             }
             Event::Start(Tag::Strong) => {
                 span(&mut out, r.start, r.end, "bold");
-                span(&mut out, r.start, r.start + 2, "mark");
-                span(&mut out, r.end.saturating_sub(2), r.end, "mark");
+                hide(&mut out, r.start, r.start + 2);
+                hide(&mut out, r.end.saturating_sub(2), r.end);
             }
             Event::Start(Tag::Emphasis) => {
                 span(&mut out, r.start, r.end, "italic");
-                span(&mut out, r.start, r.start + 1, "mark");
-                span(&mut out, r.end - 1, r.end, "mark");
+                hide(&mut out, r.start, r.start + 1);
+                hide(&mut out, r.end - 1, r.end);
             }
             Event::Start(Tag::Strikethrough) => {
                 let n = bytes[r.start..r.end].iter().take_while(|b| **b == b'~').count().max(1);
                 span(&mut out, r.start, r.end, "strike");
-                span(&mut out, r.start, r.start + n, "mark");
-                span(&mut out, r.end - n, r.end, "mark");
+                hide(&mut out, r.start, r.start + n);
+                hide(&mut out, r.end - n, r.end);
             }
             Event::Code(_) => {
                 if let Some(l) = links.last_mut() {
@@ -98,8 +116,8 @@ pub fn analyze(text: &str) -> Styled {
                 }
                 let n = bytes[r.start..r.end].iter().take_while(|b| **b == b'`').count();
                 span(&mut out, r.start, r.end, "code");
-                span(&mut out, r.start, r.start + n, "mark");
-                span(&mut out, r.end - n, r.end, "mark");
+                hide(&mut out, r.start, r.start + n);
+                hide(&mut out, r.end - n, r.end);
             }
             Event::Start(Tag::CodeBlock(kind)) => {
                 span(&mut out, r.start, r.end, "codeblock");
@@ -122,7 +140,9 @@ pub fn analyze(text: &str) -> Styled {
                 for line in text[r.start..r.end].split_inclusive('\n') {
                     let indent = line.len() - line.trim_start().len();
                     if line.trim_start().starts_with('>') {
-                        span(&mut out, at + indent, at + indent + 1, "mark");
+                        let space = usize::from(line.trim_start()[1..].starts_with(' '));
+                        hide(&mut out, at + indent, at + indent + 1 + space);
+                        out.quotes.push(ci[at + indent]);
                     }
                     at += line.len();
                 }
@@ -131,7 +151,16 @@ pub fn analyze(text: &str) -> Styled {
                 items.push(r.clone());
                 let line = &text[r.start..r.end];
                 let n = line.find([' ', '\n']).unwrap_or(line.len());
-                span(&mut out, r.start, r.start + n, "bullet");
+                let task = ["[ ]", "[x]", "[X]"].iter().any(|t| line[n..].trim_start_matches(' ').starts_with(t));
+                if task {
+                    // The checkbox stands in for the bullet.
+                    hide(&mut out, r.start, (r.start + n + 1).min(r.end));
+                } else if n == 1 && matches!(bytes[r.start], b'-' | b'*' | b'+') {
+                    span(&mut out, r.start, r.start + 1, "ghost");
+                    out.bullets.push(ci[r.start]);
+                } else {
+                    span(&mut out, r.start, r.start + n, "bullet");
+                }
             }
             Event::End(TagEnd::Item) => {
                 items.pop();
@@ -139,6 +168,7 @@ pub fn analyze(text: &str) -> Styled {
             Event::TaskListMarker(checked) => {
                 out.tasks.push((ci[r.start], checked));
                 span(&mut out, r.start, r.end, "task");
+                span(&mut out, r.start, r.end, "ghost");
                 if checked && let Some(item) = items.last() {
                     let start = r.end + (text[r.end..].len() - text[r.end..].trim_start_matches(' ').len());
                     let end = text[start..item.end].find('\n').map_or(item.end, |i| start + i);
@@ -155,15 +185,18 @@ pub fn analyze(text: &str) -> Styled {
                 if let Some((start, url, text_end)) = links.pop() {
                     // `<https://…>` autolinks have no brackets to dim.
                     if bytes[start] == b'[' {
-                        span(&mut out, start, start + 1, "mark");
-                        span(&mut out, text_end, r.end, "mark");
+                        hide(&mut out, start, start + 1);
+                        hide(&mut out, text_end, r.end);
+                    } else if bytes[start] == b'<' {
+                        hide(&mut out, start, start + 1);
+                        hide(&mut out, r.end - 1, r.end);
                     }
                     span(&mut out, start, r.end, "link");
                     out.links.push(Link { start: ci[start], end: ci[r.end], url });
                 }
             }
             Event::Start(Tag::Image { dest_url, .. }) => {
-                span(&mut out, r.start, r.end, "mark");
+                hide(&mut out, r.start, r.end);
                 out.images.push(Link { start: ci[r.start], end: ci[r.end], url: dest_url.to_string() });
             }
             Event::Start(Tag::Table(_)) => span(&mut out, r.start, r.end, "table"),
@@ -198,9 +231,9 @@ pub fn analyze(text: &str) -> Styled {
             from = open + 2;
             continue;
         }
-        out.spans.push(Span { start: ci[open], end: ci[open + 2], tag: "mark" });
+        hide(&mut out, open, open + 2);
         out.spans.push(Span { start: ci[open + 2], end: ci[close], tag: "link" });
-        out.spans.push(Span { start: ci[close], end: ci[close + 2], tag: "mark" });
+        hide(&mut out, close, close + 2);
         out.links.push(Link { start: ci[open], end: ci[close + 2], url: format!("wiki:{title}") });
         from = close + 2;
     }
@@ -276,6 +309,20 @@ mod tests {
         assert_eq!(urls, vec!["https://example.com", "https://gnome.org", "wiki:Pantry"]);
         assert_eq!(s.images[0].url, "att:123");
         assert!(tags(text).contains(&("milk".into(), "done")));
+    }
+
+    #[test]
+    fn marks_hide_and_lists_draw() {
+        let text = "Plain title\n\n- one\n- [ ] two\n> quoted **bold**";
+        let s = analyze(text);
+        assert!(!s.titled);
+        let chars: Vec<char> = text.chars().collect();
+        let hidden: Vec<String> = s.hidden.iter().map(|(a, b)| chars[*a..*b].iter().collect()).collect();
+        assert_eq!(hidden, vec!["- ", "> ", "**", "**"]);
+        assert_eq!(s.bullets, vec![13]);
+        assert_eq!(s.tasks.len(), 1);
+        assert_eq!(s.quotes.len(), 1);
+        assert!(analyze("# Title").titled);
     }
 
     #[test]

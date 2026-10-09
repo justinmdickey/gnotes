@@ -49,6 +49,8 @@ pub struct Editor {
     closed: Cell<bool>,
     save_timer: RefCell<Option<glib::SourceId>>,
     style_queued: Cell<bool>,
+    /// The lines whose Markdown marks show, around the cursor while the text has focus.
+    active: Cell<Option<(i32, i32)>>,
     styled: RefCell<Styled>,
     timers: RefCell<Vec<glib::SourceId>>,
     title: adw::WindowTitle,
@@ -269,6 +271,7 @@ impl Editor {
             closed: Cell::new(false),
             save_timer: RefCell::new(None),
             style_queued: Cell::new(false),
+            active: Cell::new(None),
             styled: RefCell::new(Styled::default()),
             timers: RefCell::new(Vec::new()),
             title,
@@ -628,8 +631,23 @@ impl Editor {
         self.changed();
     }
 
+    /// The lines the cursor and selection are on while the text has focus: their marks show.
+    fn active_lines(&self) -> Option<(i32, i32)> {
+        if !self.view.is_focus() || !self.view.is_editable() {
+            return None;
+        }
+        let a = self.buffer.iter_at_mark(&self.buffer.get_insert()).line();
+        let b = self.buffer.iter_at_mark(&self.buffer.selection_bound()).line();
+        Some((a.min(b), a.max(b)))
+    }
+
     /// Tells the others where the cursor is, while the text has focus.
     fn announce_cursor(&self) {
+        // Live preview: marks show on the line being edited.
+        let active = self.active_lines();
+        if self.active.replace(active) != active {
+            self.queue_restyle();
+        }
         let doc = self.doc.borrow();
         if !doc.has_data {
             return;
@@ -1077,9 +1095,34 @@ impl Editor {
             self.buffer.remove_tag(tag, &start, &end);
         }
         let at = |o: usize| self.buffer.iter_at_offset(o as i32);
+        // Like Apple Notes, the first line is the title even without a "#".
+        if !styled.titled && !text.is_empty() {
+            let mut eol = self.buffer.start_iter();
+            if !eol.ends_line() {
+                eol.forward_to_line_end();
+            }
+            self.buffer.apply_tag_by_name("h1", &start, &eol);
+        }
         for s in &styled.spans {
             self.buffer.apply_tag_by_name(s.tag, &at(s.start), &at(s.end));
         }
+        // Live preview: marks hide except on the lines being edited.
+        let active = self.active_lines();
+        self.active.set(active);
+        for &(s, e) in &styled.hidden {
+            let line = at(s).line();
+            if active.is_none_or(|(a, b)| line < a || line > b) {
+                self.buffer.apply_tag_by_name("hidden", &at(s), &at(e));
+            }
+        }
+        let dark = { let c = self.view.color(); c.red() + c.green() + c.blue() > 1.5 };
+        self.view.set_decor(noteview::Decor {
+            checks: styled.tasks.clone(),
+            bullets: styled.bullets.clone(),
+            quotes: styled.quotes.clone(),
+            placeholder: text.is_empty() && self.view.is_editable(),
+            accent: Some(adw::StyleManager::default().accent_color().to_standalone_rgba(dark)),
+        });
         let mut pictures = Vec::new();
         let column = self.view.column_width() as f32;
         for img in &styled.images {
@@ -1179,10 +1222,18 @@ impl Editor {
         set("mark", &[("foreground-rgba", &dim)]);
         set("bullet", &[("foreground-rgba", &dim), ("weight", &700i32)]);
         set("link", &[("foreground-rgba", &accent), ("underline", &gtk::pango::Underline::Single)]);
-        set("task", &[("foreground-rgba", &accent), ("family", &"monospace"), ("weight", &700i32)]);
+        // A checkbox's `[ ]`: monospace, so the box drawn over it has room.
+        set("task", &[("family", &"monospace")]);
         set("done", &[("foreground-rgba", &dim), ("strikethrough", &true)]);
+        // Live preview: marks hidden off the edited line; bullets and boxes drawn over clear text.
+        // Pango takes an alpha of 0 as no alpha at all, so this is the least above it.
+        let clear = gdk::RGBA::new(0.0, 0.0, 0.0, 1.0 / 65535.0);
+        // Hidden marks stay in the text, shrunk to nothing, rather than `invisible`: GTK places things
+        // after invisible text as if it were there, which would put cursors and boxes in the wrong spot.
+        set("hidden", &[("scale", &0.01f64), ("foreground-rgba", &clear)]);
+        set("ghost", &[("foreground-rgba", &clear)]);
         // Higher tags win: marks stay dim inside headings and links.
-        for name in ["link", "mark", "task"] {
+        for name in ["link", "mark", "task", "ghost", "hidden"] {
             let t = tag(name);
             t.set_priority(table.size() - 1);
         }
@@ -1215,6 +1266,26 @@ impl Editor {
             }
             self.buffer.insert_interactive_at_cursor(line, self.view.is_editable());
         }
+    }
+
+    /// Puts the cursor at the end of line `n` (from 0), with the text focused.
+    pub fn cursor_to_line(&self, n: i32) {
+        self.view.grab_focus();
+        if let Some(mut it) = self.buffer.iter_at_line(n) {
+            if !it.ends_line() {
+                it.forward_to_line_end();
+            }
+            self.buffer.place_cursor(&it);
+        }
+    }
+
+    /// Whether `text` shows whole on screen: none of it hidden by live preview.
+    pub fn shows(&self, text: &str) -> bool {
+        let all = self.shown_text();
+        let Some(byte) = all.find(text) else { return false };
+        let start = all[..byte].chars().count() as i32;
+        let hidden = self.buffer.tag_table().lookup("hidden").expect("tag");
+        (start..start + text.chars().count() as i32).all(|o| !self.buffer.iter_at_offset(o).has_tag(&hidden))
     }
 
     /// Enter, with list items carried on.

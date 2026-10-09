@@ -59,6 +59,10 @@ dump ${f("tree.json")}
 open note:Groceries
 wait-loaded
 wait-text Spinach
+wait-hidden **Saturday**
+cursor 2
+wait-shown **Saturday**
+signal ${f("preview")}
 wait-peer Sam
 dump ${f("open.json")}
 type \\n- [ ] Coffee\\nTea
@@ -106,6 +110,8 @@ quit
 const run = demo.runApp({ env: { GNOTES_DRIVE: script }, timeout: 120_000 });
 
 try {
+  await waitFile("preview");
+  check("live preview hides marks, and shows them on the line being edited", true);
   await waitFile("typed");
   let d = dump("tree.json");
   check("signs in from a saved session and lists the tree", ["Home", "Personal", "Snippets", "Family"].every((r) => d.sidebar.includes(r)), d.sidebar);
