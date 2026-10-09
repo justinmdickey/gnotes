@@ -144,6 +144,15 @@ impl Main {
         window.add_breakpoint(bp);
 
         main.add_actions();
+        // Markdown files or zips dropped anywhere but a note are imported into the current notebook.
+        let target = gtk::DropTarget::new(gtk::gdk::FileList::static_type(), gtk::gdk::DragAction::COPY);
+        let weak = Rc::downgrade(&main);
+        target.connect_drop(move |_, value, _, _| {
+            let (Some(main), Ok(files)) = (weak.upgrade(), value.get::<gtk::gdk::FileList>()) else { return false };
+            glib::spawn_future_local(async move { super::settings::import(&main, files.files()).await });
+            true
+        });
+        split.add_controller(target);
         toasts.set_child(Some(&split));
         window.set_content(Some(&toasts));
 
@@ -182,7 +191,13 @@ impl Main {
             if done.replace(true) {
                 return false;
             }
-            super::drive::open_screen(&main, &target);
+            // Dialogs need a window on screen to show over.
+            if main.window.is_mapped() {
+                super::drive::open_screen(&main, &target);
+            } else {
+                let (m, t) = (main.clone(), target.clone());
+                main.window.connect_map(move |_| super::drive::open_screen(&m, &t));
+            }
             false
         });
     }
@@ -219,11 +234,13 @@ impl Main {
         action("recent", Box::new(|m| m.show_place(Place::Recent)));
         action("logout", Box::new(|m| m.sign_out(true)));
         action("about", Box::new(|m| m.about()));
+        action("settings", Box::new(super::settings::open));
         action("signed-out-toast", Box::new(|m| m.toast("Signed out. Sign in again to keep syncing.")));
         if let Some(app) = self.window.application() {
             app.set_accels_for_action("win.new-note", &["<Control>n"]);
             app.set_accels_for_action("win.new-notebook", &["<Control><Shift>n"]);
             app.set_accels_for_action("win.search", &["<Control>f", "<Control>k"]);
+            app.set_accels_for_action("win.settings", &["<Control>comma"]);
         }
     }
 

@@ -1,5 +1,5 @@
 // Screenshots of the GTK client, headless: a throwaway server with demo data (demo.mjs), the app
-// signed in on a Broadway display (no window on your screen), one PNG per screen. The app renders
+// signed in on a headless Sway (no window on your screen), one PNG per screen. The app renders
 // each PNG itself (GNOTES_SHOT, gtk/src/ui/shot.rs), so it shows exactly what GTK drew.
 //
 // Usage: cargo build -p gnotes-server -p gnotes-gtk && node gtk/scripts/shot.mjs [options] [screen...]
@@ -8,7 +8,7 @@
 //   --narrow | --wide     window size (default: both)
 //   --dark | --light      style (default: both)
 //   --out <dir>           where PNGs go (default: /tmp/gnotes-shots)
-// Needs web/node_modules (loro-crdt, to write the demo notes) and gtk4-broadwayd.
+// Needs web/node_modules (loro-crdt, to write the demo notes) and sway.
 import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { startDemo } from "./demo.mjs";

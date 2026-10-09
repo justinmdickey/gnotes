@@ -1,4 +1,4 @@
-// End-to-end checks of the GTK client against a real server: the app runs headless (Broadway) and is
+// End-to-end checks of the GTK client against a real server: the app runs headless (Sway) and is
 // driven by a script (GNOTES_DRIVE, gtk/src/ui/drive.rs), while this side changes things on the
 // server as other people would and checks what landed. Prints `ok - …` per check and ends with
 // `all checks passed`.
@@ -252,6 +252,56 @@ check("a recording shows a play button", existsSync(f("memo.json")) && dump("mem
 const snippetsText = await serverText(ids.snippets, (t) => t.includes("att:"));
 check("Add Photo uploads it and links it in the note", /!\[icon-192\]\(att:[0-9a-f-]+\)/.test(snippetsText), snippetsText.slice(-80));
 check("the photo shows in the note", existsSync(f("photo.json")) && dump("photo.json").media.includes("photo"), existsSync(f("photo.json")) && dump("photo.json").media);
+
+// Settings: your name, API keys, invites, AI services and import.
+writeFileSync(f("Imported.md"), "# Imported note\n\nFrom a Markdown file.");
+({ code, stderr } = await demo.runApp({
+  env: {
+    GNOTES_DRIVE: [
+      "wait-tree",
+      "set-name Annie",
+      `make-key Agent|read|${f("key.txt")}`,
+      "make-key Spare|write|/dev/null",
+      "revoke-key Spare",
+      `invite ${f("invite.txt")}`,
+      "save-service summary|http://127.0.0.1:9/v1|stand-in",
+      "sleep 500",
+      `import ${f("Imported.md")}`,
+      "wait-row Imported note",
+      `dump ${f("settings.json")}`,
+      "quit",
+    ].join("\n"),
+  },
+}));
+check("settings ran", code === 0, { code, stderr });
+const settingsDump = existsSync(f("settings.json")) ? dump("settings.json") : {};
+check("a new name shows in the app and on the server", settingsDump.user === "Annie" && (await ann.call("GET", "/me")).display_name === "Annie", settingsDump.user);
+const keyToken = existsSync(f("key.txt")) ? readFileSync(f("key.txt"), "utf8") : "";
+const keyRes = await fetch(`${demo.base}/api/v1/me`, { headers: { authorization: `Bearer ${keyToken}` } });
+check("an API key made in Settings works", keyRes.ok, keyRes.status);
+const keys = await ann.call("GET", "/me/keys");
+check("revoking a key removes it", keys.length === 1 && keys[0].name === "Agent", keys.map((k) => k.name));
+check("saving AI Summaries turns summaries on", settingsDump.features?.summaries === true, settingsDump.features);
+check("Import brings in Markdown files", (await ann.tree()).notes.some((n) => n.title === "Imported note"));
+await ann.call("PUT", "/admin/settings/summary", { url: "", model: "" });
+
+// Joining with that invite link.
+const link = existsSync(f("invite.txt")) ? readFileSync(f("invite.txt"), "utf8").trim() : "";
+check("an invite link is made", link.startsWith(`${demo.base}/join/`), link);
+({ code, stderr } = await demo.runApp({
+  signedIn: false,
+  env: { GNOTES_JOIN: `${link} carol Carol password123`, GNOTES_DRIVE: `wait-status online\ndump ${f("joined.json")}\nquit` },
+}));
+check("joining with an invite link makes the account and signs in", code === 0 && existsSync(f("joined.json")) && dump("joined.json").user === "Carol", { code, stderr });
+
+// A brand-new server: the first account is made from the app.
+const empty = await demo.startEmptyServer();
+({ code, stderr } = await demo.runApp({
+  signedIn: false,
+  env: { GNOTES_SETUP: `${empty} admin Admin password123`, GNOTES_DRIVE: `wait-status online\ndump ${f("setup.json")}\nquit` },
+}));
+const setupDump = existsSync(f("setup.json")) ? dump("setup.json") : {};
+check("a new server's first account is made from sign-in", code === 0 && setupDump.user === "Admin", { code, stderr, setupDump });
 
 // Signing in through the form, then starting again signed in, then starting with no server.
 ({ code, stderr } = await demo.runApp({

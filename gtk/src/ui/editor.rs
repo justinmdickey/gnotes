@@ -253,7 +253,8 @@ impl Editor {
         let page = adw::NavigationPage::builder().title(sidebar::UNTITLED).tag(format!("note:{id}")).child(&toolbar).build();
 
         let mut doc = NoteDoc::new();
-        doc.set_user(&store.user.display_name, color_for(&store.user.id));
+        let me = store.user();
+        doc.set_user(&me.display_name, color_for(&me.id));
         let editor = Rc::new_cyclic(|me| Editor {
             me: me.clone(),
             id: id.to_owned(),
@@ -763,7 +764,17 @@ impl Editor {
             if let Some(it) = e.view.iter_at_location(bx, by) {
                 e.buffer.place_cursor(&it);
             }
-            for file in files.files() {
+            // Markdown and zips are notes to import; anything else goes in this note.
+            let (notes, attach): (Vec<gio::File>, Vec<gio::File>) = files
+                .files()
+                .into_iter()
+                .partition(|f| f.basename().is_some_and(|n| super::settings::importable(&n.to_string_lossy())));
+            if !notes.is_empty()
+                && let Some(main) = e.main.upgrade()
+            {
+                glib::spawn_future_local(async move { super::settings::import(&main, notes).await });
+            }
+            for file in attach {
                 let e = e.clone();
                 glib::spawn_future_local(async move { e.upload_file(&file).await });
             }

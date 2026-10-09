@@ -39,6 +39,7 @@ pub struct Sidebar {
     open: RefCell<HashSet<String>>,
     status: gtk::Label,
     dot: gtk::Box,
+    account: gtk::MenuButton,
     /// Set while rows are rebuilt or selected from code, so that isn't taken as a click.
     quiet: std::cell::Cell<bool>,
 }
@@ -141,18 +142,7 @@ impl Sidebar {
             .build();
         header.pack_start(&new_notebook);
 
-        let menu = gio::Menu::new();
-        let account = gio::Menu::new();
-        account.append(Some("About Gnotes"), Some("win.about"));
-        account.append(Some("Log Out"), Some("win.logout"));
-        menu.append_section(Some(&main.store.user.display_name), &account);
-        let avatar = super::person(&main.store.user.display_name, crate::note::color_for(&main.store.user.id), 26);
-        let account_button = gtk::MenuButton::builder()
-            .child(&avatar)
-            .menu_model(&menu)
-            .tooltip_text("Account")
-            .css_classes(["flat", "circular", "account"])
-            .build();
+        let account_button = gtk::MenuButton::builder().tooltip_text("Account").css_classes(["flat", "circular", "account"]).build();
         header.pack_end(&account_button);
 
         let dot = gtk::Box::builder().css_classes(["status-dot"]).valign(gtk::Align::Center).build();
@@ -174,6 +164,7 @@ impl Sidebar {
             open: Default::default(),
             status,
             dot,
+            account: account_button,
             quiet: Default::default(),
         });
 
@@ -191,6 +182,20 @@ impl Sidebar {
         sidebar.rebuild();
         sidebar.show_status();
         sidebar
+    }
+
+    /// Your avatar and its menu, which follow a name change.
+    fn show_account(&self) {
+        let Some(main) = self.main.upgrade() else { return };
+        let me = main.store.user();
+        let menu = gio::Menu::new();
+        let items = gio::Menu::new();
+        items.append(Some("Settings"), Some("win.settings"));
+        items.append(Some("About Gnotes"), Some("win.about"));
+        items.append(Some("Log Out"), Some("win.logout"));
+        menu.append_section(Some(&me.display_name), &items);
+        self.account.set_menu_model(Some(&menu));
+        self.account.set_child(Some(&super::person(&me.display_name, crate::note::color_for(&me.id), 26)));
     }
 
     fn show_status(&self) {
@@ -334,6 +339,7 @@ impl Sidebar {
 
     fn rebuild(self: &Rc<Self>) {
         let Some(main) = self.main.upgrade() else { return };
+        self.show_account();
         self.quiet.set(true);
         self.list.remove_all();
         self.rows.borrow_mut().clear();

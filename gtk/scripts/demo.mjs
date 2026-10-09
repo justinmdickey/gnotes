@@ -3,7 +3,7 @@
 // photo) and Garage, Personal, and Snippets at the top; Sam shares his Family notebook (Weekly sync)
 // with Ann, and Ann shares Groceries with Sam.
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -262,10 +262,24 @@ export async function startDemo() {
     return { ...n, stop: () => (clearInterval(timer), n.close()) };
   }
 
-  const broadwayPort = 18000 + Math.floor(Math.random() * 1000);
-  const display = `:${broadwayPort - 8080}`;
-  track(spawn("gtk4-broadwayd", ["--port", String(broadwayPort), display], { stdio: "ignore" }));
-  await sleep(500);
+  // The app's own display: a headless Sway, so nothing shows on your screen. Its windows float, so
+  // they keep the size the app asks for.
+  const runtime = join(data, "run");
+  mkdirSync(runtime, { mode: 0o700 });
+  writeFileSync(
+    join(runtime, "sway.conf"),
+    'output HEADLESS-1 resolution 1600x1000\nfor_window [app_id="com.erisdor.Gnotes"] floating enable\ndefault_border none\n',
+  );
+  const swayEnv = { ...process.env, XDG_RUNTIME_DIR: runtime, WLR_BACKENDS: "headless", WLR_LIBINPUT_NO_DEVICES: "1", WLR_RENDERER: "pixman" };
+  for (const v of ["WAYLAND_DISPLAY", "DISPLAY", "SWAYSOCK", "I3SOCK"]) delete swayEnv[v];
+  const sway = track(spawn("sway", ["-c", join(runtime, "sway.conf")], { env: swayEnv, stdio: "ignore" }));
+  sway.once("exit", (code, signal) => console.error(`sway ended: ${code ?? signal}`));
+  let wayland;
+  for (let i = 0; i < 100 && !wayland; i++) {
+    await sleep(100);
+    wayland = readdirSync(runtime).find((f) => /^wayland-\d+$/.test(f));
+  }
+  if (!wayland) throw new Error("headless sway didn't start");
   const gtkDir = join(data, "gtk");
 
   /**
@@ -282,8 +296,11 @@ export async function startDemo() {
       spawn(join(root, "target/debug/gnotes"), [], {
         env: {
           ...process.env,
-          GDK_BACKEND: "broadway",
-          BROADWAY_DISPLAY: display,
+          GDK_BACKEND: "wayland",
+          WAYLAND_DISPLAY: wayland,
+          XDG_RUNTIME_DIR: runtime,
+          // No GPU in a headless compositor.
+          GSK_RENDERER: "cairo",
           GNOTES_GTK_DIR: gtkDir,
           GNOTES_SIZE: size,
           GNOTES_STYLE: style,
@@ -297,10 +314,10 @@ export async function startDemo() {
     let stderr = "";
     app.stderr.on("data", (d) => {
       const s = d.toString();
-      // GTK's own warnings about Broadway aren't ours.
+      // GTK warnings about the headless display aren't ours.
       stderr += s
         .split("\n")
-        .filter((l) => l.trim() && !/-WARNING \*\*/.test(l))
+        .filter((l) => l.trim() && (!/-WARNING \*\*/.test(l) || /display/i.test(l)))
         .map((l) => l + "\n")
         .join("");
     });
@@ -313,8 +330,25 @@ export async function startDemo() {
     );
   }
 
+  /** Another server, with no accounts yet, for first-run setup. Resolves with its address. */
+  async function startEmptyServer() {
+    const port2 = port + 1000;
+    const env2 = { ...env, GNOTES_DATA_DIR: join(data, "empty"), GNOTES_BIND: `127.0.0.1:${port2}` };
+    track(spawn(join(root, "target/debug/gnotes-server"), [], { env: env2, stdio: "ignore" }));
+    const base2 = `http://127.0.0.1:${port2}`;
+    for (let i = 0; i < 100; i++) {
+      try {
+        if ((await fetch(`${base2}/api/health`)).ok) return base2;
+      } catch {}
+      await sleep(100);
+    }
+    throw new Error("the empty server didn't start");
+  }
+
   return {
     root,
+    startEmptyServer,
+    login,
     base,
     data,
     ann,

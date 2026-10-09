@@ -34,7 +34,7 @@ Run the narrowest one that exercises it, and paste its result:
 - `cd web && npm run check` for types.
 - `cd web && npm run build && cargo build -p gnotes-server && npm run e2e` for UI behavior. The e2e runs against `web/dist` and `target/debug`, so a stale build tests stale code. It prints `ok - …` per check and ends with `all checks passed`.
 
-- `cargo test -p gnotes-gtk` and `cargo build -p gnotes-server -p gnotes-gtk && node gtk/scripts/e2e.mjs` for the GTK client. The e2e runs the app headless on Broadway, drives it with `GNOTES_DRIVE` (commands in `gtk/src/ui/drive.rs`) and checks the server; same `ok - …` and `all checks passed`. Plain `cargo test` covers only the server.
+- `cargo test -p gnotes-gtk` and `cargo build -p gnotes-server -p gnotes-gtk && node gtk/scripts/e2e.mjs` for the GTK client. The e2e runs the app on a headless Sway (nothing on your screen), drives it with `GNOTES_DRIVE` (commands in `gtk/src/ui/drive.rs`) and checks the server; same `ok - …` and `all checks passed`. Plain `cargo test` covers only the server.
 
 Add an e2e check for each new UI behavior, in the flow where it naturally happens.
 
@@ -46,7 +46,7 @@ Tests prove behavior, not looks. After a visual change, take screenshots and loo
 - `SHOTS=/some/dir npm run e2e` also saves screenshots from inside the e2e flow (phone editing, keyboard bar, dialogs).
 - `magick a.png b.png +append side.png` puts shots side by side, to compare before/after or neighboring screens.
 - `node web/scripts/icon-sheet.mjs` renders every icon over its grid; check a new icon against its neighbors there.
-- `node gtk/scripts/shot.mjs [--wide|--narrow] [--dark|--light] [screen...]` does the same for the GTK client (screens: `login home note:<title> notebook:<name> recent search:<query> shared trash share:<title> move:<title> new-notebook`), on Broadway with stock Adwaita, not your own `gtk.css`. The GTK client follows GNOME's design: Adwaita widgets and symbolic icons, colors from the theme or `gtk/src/ui/style.css`.
+- `node gtk/scripts/shot.mjs [--wide|--narrow] [--dark|--light] [screen...]` does the same for the GTK client (screens: `login home note:<title> notebook:<name> recent search:<query> shared trash share:<title> move:<title> new-notebook`, `settings[:people|ai]`), on a headless Sway with stock Adwaita, not your own `gtk.css`. The GTK client follows GNOME's design: Adwaita widgets and symbolic icons, colors from the theme or `gtk/src/ui/style.css`.
 
 Judge the phone shot first; most use is on a phone. Compare each element against its neighbors: same icon size and weight, same color role, aligned edges, no text clipped or wrapped, both themes readable.
 

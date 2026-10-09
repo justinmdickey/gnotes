@@ -11,7 +11,7 @@ use gtk::glib;
 use loro::VersionVector;
 
 use crate::{
-    api::{Api, Role, Tree, TreeNote, User},
+    api::{Api, Features, Role, Tree, TreeNote, User},
     bg,
     cache::{Cache, Queued, Session},
     note::NoteDoc,
@@ -46,7 +46,10 @@ fn notify(watchers: &RefCell<Vec<Watcher>>) {
 
 pub struct Store {
     pub api: Api,
-    pub user: User,
+    user: RefCell<User>,
+    /// Which optional services the server has on; refreshed when they may have changed.
+    pub features: RefCell<Features>,
+    features_watchers: RefCell<Vec<Watcher>>,
     pub cache: Cache,
     pub sync: SyncClient,
     pub tree: RefCell<Tree>,
@@ -76,7 +79,9 @@ impl Store {
         add_queued(&mut tree, &cache.queued());
         let store = Rc::new(Store {
             api,
-            user: session.user.clone(),
+            user: RefCell::new(session.user.clone()),
+            features: Default::default(),
+            features_watchers: Default::default(),
             cache,
             sync,
             tree: RefCell::new(tree),
@@ -90,6 +95,7 @@ impl Store {
             refresh_again: Cell::new(false),
             fresh: Default::default(),
         });
+        store.refresh_features();
         let weak = Rc::downgrade(&store);
         glib::spawn_future_local(async move {
             while let Ok(ev) = events.recv().await {
@@ -98,6 +104,34 @@ impl Store {
             }
         });
         store
+    }
+
+    pub fn user(&self) -> User {
+        self.user.borrow().clone()
+    }
+
+    /// After a name change: kept for next time too.
+    pub fn set_user(&self, user: User) {
+        let session = Session { server: self.api.base.clone(), token: self.api.token.clone(), user: user.clone() };
+        let _ = session.save();
+        *self.user.borrow_mut() = user;
+        self.tree_changed();
+    }
+
+    /// Calls `f` when the server's optional services change, until it returns false.
+    pub fn on_features(&self, f: impl Fn() -> bool + 'static) {
+        self.features_watchers.borrow_mut().push(Rc::new(f));
+    }
+
+    pub fn refresh_features(self: &Rc<Self>) {
+        let store = self.clone();
+        glib::spawn_future_local(async move {
+            let api = store.api.clone();
+            if let Ok(f) = bg(async move { api.features().await }).await {
+                *store.features.borrow_mut() = f;
+                notify(&store.features_watchers);
+            }
+        });
     }
 
     pub fn toast(&self, msg: &str) {
@@ -130,6 +164,7 @@ impl Store {
                 self.status.set(s);
                 notify(&self.status_watchers);
                 if s == Status::Online {
+                    self.refresh_features();
                     let store = self.clone();
                     glib::spawn_future_local(async move { store.back_online().await });
                 }
@@ -308,7 +343,7 @@ impl Store {
             }
         }
         self.fresh.borrow_mut().insert(id.clone());
-        let note = placeholder(&id, notebook_id, &self.user);
+        let note = placeholder(&id, notebook_id, &self.user());
         self.tree.borrow_mut().notes.push(note);
         self.tree_changed();
         Some(id)

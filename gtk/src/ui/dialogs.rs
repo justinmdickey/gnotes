@@ -326,7 +326,7 @@ pub fn share(main: &Rc<Main>, item: &Item) {
                 while let Some(c) = list.first_child() {
                     list.remove(&c);
                 }
-                let me = &main.store.user;
+                let me = &main.store.user();
                 let owner = adw::ActionRow::builder().title(glib::markup_escape_text(&me.display_name)).subtitle("Owner").build();
                 owner.add_prefix(&super::person(&me.display_name, crate::note::color_for(&me.id), 32));
                 list.append(&owner);

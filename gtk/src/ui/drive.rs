@@ -30,6 +30,12 @@
 //! trash-note <title>
 //! restore <name>            from the trash
 //! share-note <title>|<username>|<editor or viewer>
+//! set-name <name>
+//! make-key <name>|<read or write>|<file>   the key's token goes in <file>
+//! revoke-key <name>
+//! invite <file>             a new account's invite link goes in <file>
+//! save-service <kind>|<url>|<model>         kind: whisper, vision, summary or embed
+//! import <path>             as Settings › Import
 //! dump <file.json>          the open note's text, title and peers, the sidebar's rows, the status
 //! shot <file.png>
 //! quit
@@ -79,6 +85,7 @@ pub fn open_screen(main: &Rc<Main>, target: &str) {
             }
         }
         "new-notebook" => dialogs::new_notebook(main, None),
+        "settings" => super::settings::open_at(main, if arg.is_empty() { "account" } else { arg }),
         "home" | "login" => {}
         _ => eprintln!("unknown screen {target}"),
     }
@@ -249,6 +256,40 @@ async fn run(main: &Rc<Main>, cmd: &str, arg: &str) {
                 _ => eprintln!("drive: share-note <title>|<username>|<role>"),
             }
         }
+        "set-name" => {
+            super::settings::set_name(main, arg).await;
+        }
+        "make-key" => {
+            let parts: Vec<&str> = arg.split('|').collect();
+            if let [name, scope, file] = parts[..]
+                && let Some(token) = super::settings::make_key(main, name, scope).await
+            {
+                let _ = std::fs::write(file, token);
+            }
+        }
+        "revoke-key" => {
+            let api = main.store.api.clone();
+            let keys = crate::bg(async move { api.api_keys().await }).await.unwrap_or_default();
+            match keys.iter().find(|k| k.name == arg) {
+                Some(k) => {
+                    super::settings::revoke_key(main, &k.id).await;
+                }
+                None => eprintln!("drive: no key {arg}"),
+            }
+        }
+        "invite" => {
+            if let Some(link) = super::settings::make_invite(main).await {
+                let _ = std::fs::write(arg, link);
+            }
+        }
+        "save-service" => {
+            let parts: Vec<&str> = arg.split('|').collect();
+            if let [kind, url, model] = parts[..] {
+                let body = crate::api::ServiceInput { url: url.into(), model: model.into(), key: None, realtime_url: None, enabled: true };
+                super::settings::save_service(main, kind, body).await;
+            }
+        }
+        "import" => super::settings::import(main, vec![gtk::gio::File::for_path(arg)]).await,
         "dump" => {
             let e = editor();
             let v = json!({
@@ -262,6 +303,13 @@ async fn run(main: &Rc<Main>, cmd: &str, arg: &str) {
                 "sidebar": main.sidebar().labels(),
                 "list": list_rows(main),
                 "status": status(main.store.status.get()),
+                "user": main.store.user().display_name,
+                "dialog": main.window.visible_dialog().map(|d| d.title().to_string()),
+                "features": {
+                    "summaries": main.store.features.borrow().summaries,
+                    "transcription": main.store.features.borrow().transcription,
+                    "ask": main.store.features.borrow().ask,
+                },
                 "dirty": main.store.cache.dirty(),
                 "queued": main.store.cache.queued().iter().map(|q| q.id.clone()).collect::<Vec<_>>(),
             });

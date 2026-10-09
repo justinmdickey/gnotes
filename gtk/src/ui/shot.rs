@@ -7,6 +7,12 @@ use gtk::{glib, graphene, gsk};
 
 /// `GNOTES_STYLE=dark|light` forces a style, whatever the desktop prefers.
 pub fn force_style() {
+    // Headless runs (screenshots, e2e) barely advance animations: show things in their end state.
+    if (std::env::var_os("GNOTES_SHOT").is_some() || std::env::var_os("GNOTES_DRIVE").is_some())
+        && let Some(s) = gtk::Settings::default()
+    {
+        s.set_gtk_enable_animations(false);
+    }
     let scheme = match std::env::var("GNOTES_STYLE").as_deref() {
         Ok("dark") => adw::ColorScheme::ForceDark,
         Ok("light") => adw::ColorScheme::ForceLight,

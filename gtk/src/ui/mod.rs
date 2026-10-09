@@ -10,6 +10,7 @@ mod lists;
 mod login;
 mod markdown;
 mod noteview;
+mod settings;
 mod shot;
 mod sidebar;
 mod store;
