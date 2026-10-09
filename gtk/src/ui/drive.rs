@@ -315,6 +315,16 @@ async fn run(main: &Rc<Main>, cmd: &str, arg: &str) {
                 e.set_code_language(n.parse().unwrap_or(0), lang);
             }
         }
+        "block-focus" => {
+            let (n, a) = arg.split_once('|').unwrap_or((arg, "0"));
+            let entry = editor().and_then(|e| e.block_widget_at(n.parse().unwrap_or(0))).and_then(|w| widgets::<gtk::Entry>(&w).into_iter().nth(a.parse().unwrap_or(0)));
+            match entry {
+                Some(entry) => {
+                    entry.grab_focus();
+                }
+                None => eprintln!("drive: no field {arg}"),
+            }
+        }
         "block-entry" | "block-click" => {
             let parts: Vec<&str> = arg.splitn(3, '|').collect();
             let (Some(e), &[n, a, b]) = (editor(), &parts[..]) else { return };

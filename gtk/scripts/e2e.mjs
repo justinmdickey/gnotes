@@ -321,6 +321,11 @@ check("the / menu adds a table", slashed.includes("| Column 1 | Column 2 | Colum
       "sleep 500",
       "block-entry 0|4|Olive",
       "sleep 500",
+      "block-focus 1|1",
+      "block-entry 1|1|Buy primer",
+      "block-focus 1|2",
+      "block-entry 1|2|Move the sofa",
+      "sleep 300",
       "block-click 1|Add Card|1",
       "sleep 500",
       `dump ${f("blocks.json")}`,
@@ -334,6 +339,7 @@ check("the / menu adds a table", slashed.includes("| Column 1 | Column 2 | Colum
 check("tables and boards ran", code === 0, { code, stderr });
 const plans = await demo.read(ann, ids.plans);
 check("typing in a table cell changes just that cell", plans.includes("| Kitchen | Olive | May |"), plans);
+check("editing one card after another keeps both", plans.includes("- [ ] Buy primer\n- Move the sofa"), plans);
 check("Add Card on a board adds a card to its column", /## Doing\n- Patch the wall\n- New card/.test(plans), plans);
 const blocks = dump("blocks.json").blocks;
 check("redrawn tables and boards leave nothing behind", blocks[0] === 2 && blocks[1] === 2, blocks);

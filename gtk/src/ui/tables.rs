@@ -98,6 +98,14 @@ impl RichEntry {
         focus.connect_enter(move |_| {
             r.editing.set(true);
             r.swap(&r.raw.borrow().clone(), None);
+            // Focus selects all of an entry's text; a card or cell is for typing in, so the cursor
+            // goes to the end instead, unless a click has put it somewhere.
+            let e = r.entry.clone();
+            gtk::glib::idle_add_local_once(move || {
+                if e.selection_bounds().is_some_and(|(a, b)| a == 0 && b == e.text_length() as i32) {
+                    e.set_position(-1);
+                }
+            });
         });
         let r = rich.clone();
         focus.connect_leave(move |_| {
@@ -435,13 +443,19 @@ pub fn table_widget(table: &Table, editable: bool, on_change: OnChange) -> gtk::
 
 /// The board: columns of cards, which can be edited, ticked, added and dragged between columns.
 pub fn board_widget(columns: &[Column], editable: bool, on_change: OnChange) -> gtk::Widget {
-    let cols = Rc::new(columns.to_vec());
+    // The board as it is now: a card typed in stays as typed while the next one is edited, so
+    // each change is made to the last one, not to the board as it was drawn.
+    let cols = Rc::new(RefCell::new(columns.to_vec()));
     let rewrite = {
         let on = on_change.clone();
         let cols = cols.clone();
         Rc::new(move |f: &dyn Fn(&mut Vec<Column>)| {
-            let mut next = (*cols).clone();
+            let mut next = cols.borrow().clone();
             f(&mut next);
+            if next == *cols.borrow() {
+                return;
+            }
+            cols.replace(next.clone());
             on(Change::Rewrite(board_markdown(&next)));
         })
     };
@@ -457,12 +471,9 @@ pub fn board_widget(columns: &[Column], editable: bool, on_change: OnChange) -> 
         let rw = rewrite.clone();
         let focus = gtk::EventControllerFocus::new();
         let t2 = title.clone();
-        let original = col.title.clone();
         focus.connect_leave(move |_| {
             let t = t2.text().to_string();
-            if t != original {
-                rw(&|c| c[ci].title = t.clone());
-            }
+            rw(&|c| c[ci].title = t.clone());
         });
         title.add_controller(focus);
         lane.append(&title);
@@ -487,12 +498,9 @@ pub fn board_widget(columns: &[Column], editable: bool, on_change: OnChange) -> 
             });
             let rw = rewrite.clone();
             let focus = gtk::EventControllerFocus::new();
-            let original = card.text.clone();
             focus.connect_leave(move |_| {
                 let t = rich.text();
-                if t != original {
-                    rw(&|cols| cols[ci].cards[k].text = t.clone());
-                }
+                rw(&|cols| cols[ci].cards[k].text = t.clone());
             });
             entry.add_controller(focus);
             line.append(&entry);

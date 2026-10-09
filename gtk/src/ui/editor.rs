@@ -1240,6 +1240,10 @@ impl Editor {
         let ctrl = mods.contains(gdk::ModifierType::CONTROL_MASK);
         let shift = mods.contains(gdk::ModifierType::SHIFT_MASK);
         let stop = glib::Propagation::Stop;
+        // Keys typed in a table's or board's fields are theirs, not the note's.
+        if !self.view.has_focus() {
+            return glib::Propagation::Proceed;
+        }
         let lower = key.to_lower();
         if self.completer.is_open() {
             match key {
