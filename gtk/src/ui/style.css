@@ -159,3 +159,9 @@
   min-height: 24px;
   opacity: 0.5;
 }
+
+/* The paragraph styles, each shown in its own look, laid out like menu items. */
+.style-item {
+  font-weight: normal;
+  padding: 4px 12px;
+}

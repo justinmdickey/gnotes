@@ -237,10 +237,11 @@ impl Editor {
         history.append(&gtk::Separator::new(gtk::Orientation::Vertical));
         bar.append(&history);
         // The paragraph style, named for the line the cursor is on.
+        // Each named in its own look, as a preview: the note's sizes and weights for headings.
         let styles = gio::Menu::new();
-        for (label, prefix) in PARAGRAPH_STYLES {
-            let item = gio::MenuItem::new(Some(label), None);
-            item.set_action_and_target_value(Some("format.style"), Some(&prefix.to_variant()));
+        for (label, _) in PARAGRAPH_STYLES {
+            let item = gio::MenuItem::new(None, None);
+            item.set_attribute_value("custom", Some(&label.to_variant()));
             styles.append_item(&item);
         }
         let style_button = gtk::MenuButton::builder()
@@ -249,6 +250,26 @@ impl Editor {
             .menu_model(&styles)
             .css_classes(["flat", "paragraph-style"])
             .build();
+        if let Some(popover) = style_button.popover().and_downcast::<gtk::PopoverMenu>() {
+            for (label, prefix) in PARAGRAPH_STYLES {
+                let look = match prefix {
+                    "# " => "<span size='175%' weight='800'>{}</span>",
+                    "## " => "<span size='140%' weight='bold'>{}</span>",
+                    "### " => "<span size='118%' weight='bold'>{}</span>",
+                    _ => "{}",
+                };
+                let text = gtk::Label::builder().label(look.replace("{}", label)).use_markup(true).xalign(0.0).build();
+                let button = gtk::Button::builder()
+                    .child(&text)
+                    .action_name("format.style")
+                    .action_target(&prefix.to_variant())
+                    .css_classes(["flat", "style-item"])
+                    .build();
+                let p = popover.clone();
+                button.connect_clicked(move |_| p.popdown());
+                popover.add_child(&button, label);
+            }
+        }
         bar.append(&style_button);
         bar.append(&gtk::Separator::new(gtk::Orientation::Vertical));
         let bold = icon_button("format-text-bold-symbolic", "Bold (Ctrl+B)");
@@ -314,8 +335,9 @@ impl Editor {
         let banner = adw::Banner::new("");
         let toolbar = adw::ToolbarView::new();
         toolbar.add_top_bar(&header);
-        toolbar.add_top_bar(&bar_scroll);
         toolbar.add_top_bar(&banner);
+        // Under the note, like the web app's.
+        toolbar.add_bottom_bar(&bar_scroll);
         // The recording bar floats over the note, so a live transcript can be read as it's written.
         let rec_time = gtk::Label::builder().label("0:00").css_classes(["numeric"]).build();
         let rec_status = gtk::Label::builder().css_classes(["dim-label"]).build();
