@@ -397,7 +397,7 @@ try {
   if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-wikilink.png") });
   // Web links: [text](url) reads as its text, a bare address as itself, and a click opens a new tab.
   check(
-    await alice.evaluate(() => {
+    await alice.waitForFunction(() => {
       const line = [...document.querySelectorAll(".cm-line")].find((l) => l.textContent.includes("cookbook"));
       const links = [...line.querySelectorAll(".cm-link")].map((l) => [l.textContent, l.dataset.href]);
       return (
@@ -405,7 +405,7 @@ try {
         links.some(([t, h]) => t === "the cookbook" && h === "https://example.com/cook") &&
         links.some(([t, h]) => t === "https://example.org/plain" && h === "https://example.org/plain")
       );
-    }),
+    }, { timeout: 5000 }).then(() => true, () => false),
     "a [text](url) link reads as its text and a bare address as itself, both in the link color",
   );
   await alice.evaluate(() => {
@@ -1288,7 +1288,7 @@ try {
   await new Promise((r) => setTimeout(r, 300));
   check(!(await alice.$(".cm-slash")), "a slash inside code is just a slash");
   for (let i = 0; i < 2; i++) await alice.keyboard.press("Backspace");
-  for (const [word, widget] of [["table", ".cm-table-widget"], ["board", ".cm-kanban-widget"]]) {
+  for (const [word, label, widget] of [["table", "table", ".cm-table-widget"], ["kanban", "kanban board", ".cm-kanban-widget"]]) {
     // Back into the note's text from wherever the last insert left the cursor.
     await alice.evaluate(() => document.activeElement?.blur());
     await (await alice.evaluateHandle(() => [...document.querySelectorAll(".cm-line")].find((l) => l.textContent === "end"))).click();
@@ -1296,7 +1296,7 @@ try {
     await alice.keyboard.press("End");
     await alice.keyboard.up("Control");
     await alice.keyboard.type(`\n/${word}`);
-    await alice.waitForFunction((w) => document.querySelector(".cm-slash li[aria-selected]")?.textContent.toLowerCase() === w, {}, word);
+    await alice.waitForFunction((w) => document.querySelector(".cm-slash li[aria-selected]")?.textContent.toLowerCase() === w, {}, label);
     await new Promise((r) => setTimeout(r, 150));
     await alice.keyboard.press("Enter");
     await alice.waitForSelector(widget, { timeout: 5000 });
