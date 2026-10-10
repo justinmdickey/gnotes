@@ -1407,7 +1407,10 @@ impl Editor {
         }
         drop(styled);
         let p = self.view.picture_at(bx as f32, by as f32)?;
-        p.texture.is_none().then_some(Target::Recording(p.id))
+        Some(match p.texture {
+            Some(t) => Target::Photo(t),
+            None => Target::Recording(p.id),
+        })
     }
 
     /// Ticks or unticks the checkbox whose `[` is at `start`.
@@ -1482,8 +1485,29 @@ impl Editor {
                 self.play(id);
                 true
             }
+            Some(Target::Photo(texture)) => {
+                self.show_photo(&texture);
+                true
+            }
             None => false,
         }
+    }
+
+    /// A photo at full size, like the web app's lightbox.
+    fn show_photo(&self, texture: &gdk::Texture) {
+        let Some(main) = self.main.upgrade() else { return };
+        let picture = gtk::Picture::builder().paintable(texture).content_fit(gtk::ContentFit::Contain).vexpand(true).hexpand(true).build();
+        let page = adw::ToolbarView::new();
+        page.add_top_bar(&adw::HeaderBar::new());
+        page.set_content(Some(&picture));
+        let window = main.window.width().max(400);
+        let dialog = adw::Dialog::builder()
+            .title("Photo")
+            .content_width((texture.width()).clamp(300, window * 9 / 10))
+            .content_height((texture.height() + 48).clamp(240, main.window.height().max(300) * 9 / 10))
+            .child(&page)
+            .build();
+        dialog.present(Some(&main.window));
     }
 
     /// Opens a link: a [[wiki link]]'s note here, a web or mail link outside.
@@ -2813,4 +2837,5 @@ enum Target {
     Task(usize, bool),
     Link(String),
     Recording(String),
+    Photo(gdk::Texture),
 }
