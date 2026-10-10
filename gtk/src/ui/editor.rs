@@ -90,6 +90,9 @@ pub struct Editor {
     dragging: Cell<Option<(i32, i32)>>,
     block_check: Cell<bool>,
     placing_blocks: Cell<bool>,
+    /// A block whose widget changed its shape (a card added, removed or moved): drawn again even
+    /// while something in it has focus.
+    redraw_block: Cell<Option<u64>>,
     spare_slots: RefCell<Vec<gtk::Box>>,
     /// The start of the table or board being edited as its Markdown (Edit as Text), if one is.
     text_block: RefCell<Option<gtk::TextMark>>,
@@ -378,6 +381,7 @@ impl Editor {
             dragging: Cell::new(None),
             block_check: Cell::new(false),
             placing_blocks: Cell::new(false),
+            redraw_block: Cell::new(None),
             spare_slots: Default::default(),
             text_block: Default::default(),
             last_cursor: Cell::new(0),
@@ -2096,7 +2100,7 @@ impl Editor {
                 (id, slot)
             };
             let (id, slot) = match prev.and_then(|p| old[p].take()) {
-                Some(b) if b.text == block_text || typing_in(b.slot.upcast_ref()) => (b.id, b.slot),
+                Some(b) if b.text == block_text || (typing_in(b.slot.upcast_ref()) && self.redraw_block.get() != Some(b.id)) => (b.id, b.slot),
                 Some(b) => fresh(b.slot),
                 None => fresh(self.free_slot()),
             };
@@ -2185,6 +2189,7 @@ impl Editor {
         let Some((start, end)) = self.blocks.borrow().iter().find(|b| b.id == id).map(|b| (b.start, b.end)) else { return };
         let all: Vec<char> = self.shown_text().chars().collect();
         let Some(old) = all.get(start..end.min(all.len())).map(|c| c.iter().collect::<String>()) else { return };
+        let reshape = matches!(change, Change::Reshape(_));
         match change {
             Change::Cell { row, col, text } => {
                 let Some(t) = super::tables::parse_table(&old) else { return };
@@ -2217,8 +2222,11 @@ impl Editor {
                     self.rewrite_block(start, &old, &new);
                 }
             }
-            Change::Rewrite(change) => {
+            Change::Rewrite(change) | Change::Reshape(change) => {
                 if let Some(new) = change(&old).filter(|new| *new != old) {
+                    if reshape {
+                        self.redraw_block.set(Some(id));
+                    }
                     self.rewrite_block(start, &old, &new);
                 }
             }

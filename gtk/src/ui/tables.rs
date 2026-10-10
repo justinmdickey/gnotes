@@ -338,6 +338,9 @@ pub enum Change {
     /// A change to the block as its Markdown is now, which may differ from what the widget was
     /// drawn from: an earlier edit in it, or someone else's. None leaves it as it is.
     Rewrite(Box<dyn Fn(&str) -> Option<String>>),
+    /// The same, for a change to its shape (a row, column or card added, removed or moved): the
+    /// widget is drawn again, even with focus in it.
+    Reshape(Box<dyn Fn(&str) -> Option<String>>),
     /// Show the Markdown itself, cursor at the block's start.
     EditText,
 }
@@ -393,7 +396,7 @@ pub fn table_widget(table: &Table, editable: bool, on_change: OnChange) -> gtk::
             if action == "text" {
                 return on(Change::EditText);
             }
-            on(Change::Rewrite(Box::new(move |old| {
+            on(Change::Reshape(Box::new(move |old| {
                 let t = parse_table(old)?;
                 let mut header: Vec<String> = t.header.iter().map(|c| c.text.clone()).collect();
                 let mut rows: Vec<Vec<String>> = t.rows.iter().map(|r| r.iter().map(|c| c.text.clone()).collect()).collect();
@@ -457,13 +460,14 @@ pub fn board_widget(columns: &[Column], editable: bool, on_change: OnChange) -> 
     // card's edit, or someone else's, stays.
     let rewrite = {
         let on = on_change.clone();
-        Rc::new(move |f: Box<dyn Fn(&mut Vec<Column>)>| {
-            on(Change::Rewrite(Box::new(move |old| {
+        Rc::new(move |reshape: bool, f: Box<dyn Fn(&mut Vec<Column>)>| {
+            let edit: Box<dyn Fn(&str) -> Option<String>> = Box::new(move |old| {
                 let mut cols = parse_board(old);
                 let before = cols.clone();
                 f(&mut cols);
                 (cols != before).then(|| board_markdown(&cols))
-            })))
+            });
+            on(if reshape { Change::Reshape(edit) } else { Change::Rewrite(edit) })
         })
     };
     let row = gtk::Box::builder().spacing(10).homogeneous(true).css_classes(["note-board"]).build();
@@ -473,7 +477,7 @@ pub fn board_widget(columns: &[Column], editable: bool, on_change: OnChange) -> 
         let rw = rewrite.clone();
         title.connect_activate(move |e| {
             let t = e.text().to_string();
-            rw(Box::new(move |c| {
+            rw(false, Box::new(move |c| {
                 if let Some(col) = c.get_mut(ci) {
                     col.title = t.clone();
                 }
@@ -484,7 +488,7 @@ pub fn board_widget(columns: &[Column], editable: bool, on_change: OnChange) -> 
         let t2 = title.clone();
         focus.connect_leave(move |_| {
             let t = t2.text().to_string();
-            rw(Box::new(move |c| {
+            rw(false, Box::new(move |c| {
                 if let Some(col) = c.get_mut(ci) {
                     col.title = t.clone();
                 }
@@ -499,7 +503,7 @@ pub fn board_widget(columns: &[Column], editable: bool, on_change: OnChange) -> 
                 let rw = rewrite.clone();
                 check.connect_toggled(move |c| {
                     let on = c.is_active();
-                    rw(Box::new(move |cols| {
+                    rw(false, Box::new(move |cols| {
                         if let Some(card) = card_at(cols, ci, k) {
                             card.done = Some(on);
                         }
@@ -513,7 +517,7 @@ pub fn board_widget(columns: &[Column], editable: bool, on_change: OnChange) -> 
             let r = rich.clone();
             entry.connect_activate(move |_| {
                 let t = r.text();
-                rw(Box::new(move |cols| {
+                rw(false, Box::new(move |cols| {
                     if let Some(card) = card_at(cols, ci, k) {
                         card.text = t.clone();
                     }
@@ -521,9 +525,13 @@ pub fn board_widget(columns: &[Column], editable: bool, on_change: OnChange) -> 
             });
             let rw = rewrite.clone();
             let focus = gtk::EventControllerFocus::new();
+            let e2 = entry.clone();
             focus.connect_leave(move |_| {
+                if editable {
+                    e2.set_can_target(false);
+                }
                 let t = rich.text();
-                rw(Box::new(move |cols| {
+                rw(false, Box::new(move |cols| {
                     if let Some(card) = card_at(cols, ci, k) {
                         card.text = t.clone();
                     }
@@ -535,16 +543,31 @@ pub fn board_widget(columns: &[Column], editable: bool, on_change: OnChange) -> 
                 let remove = gtk::Button::builder().icon_name("window-close-symbolic").css_classes(["flat", "circular", "card-remove"]).tooltip_text("Remove Card").build();
                 let rw = rewrite.clone();
                 remove.connect_clicked(move |_| {
-                    rw(Box::new(move |cols| {
+                    rw(true, Box::new(move |cols| {
                         if card_at(cols, ci, k).is_some() {
                             cols[ci].cards.remove(k);
                         }
                     }))
                 });
                 line.append(&remove);
-                // Cards drag between columns.
+                // Like the web app, a card drags as a whole, and a click (not a drag) edits its text:
+                // until then the text doesn't take the pointer, or a drag would select it instead.
+                entry.set_can_target(false);
+                let click = gtk::GestureClick::new();
+                let (e2, l2) = (entry.clone(), line.clone());
+                click.connect_released(move |_, _, x, y| {
+                    let on_text = l2.pick(x, y, gtk::PickFlags::DEFAULT).is_none_or(|w| w == l2 || w == e2 || w.is_ancestor(&e2));
+                    if on_text && !e2.has_focus() {
+                        e2.set_can_target(true);
+                        e2.grab_focus();
+                        e2.set_position(-1);
+                    }
+                });
+                line.add_controller(click);
                 let src = gtk::DragSource::builder().actions(gtk::gdk::DragAction::MOVE).build();
                 src.connect_prepare(move |_, _, _| Some(gtk::gdk::ContentProvider::for_value(&format!("card:{ci}:{k}").to_value())));
+                let l2 = line.clone();
+                src.connect_drag_begin(move |src, _| src.set_icon(Some(&gtk::WidgetPaintable::new(Some(&l2))), 0, 0));
                 line.add_controller(src);
             }
             lane.append(&line);
@@ -553,7 +576,7 @@ pub fn board_widget(columns: &[Column], editable: bool, on_change: OnChange) -> 
             let add = gtk::Button::builder().child(&adw::ButtonContent::builder().icon_name("list-add-symbolic").label("Add Card").build()).css_classes(["flat"]).build();
             let rw = rewrite.clone();
             add.connect_clicked(move |_| {
-                rw(Box::new(move |cols| {
+                rw(true, Box::new(move |cols| {
                     if let Some(col) = cols.get_mut(ci) {
                         col.cards.push(Card { text: "New card".into(), done: None });
                     }
@@ -566,7 +589,7 @@ pub fn board_widget(columns: &[Column], editable: bool, on_change: OnChange) -> 
                 let Ok(v) = value.get::<String>() else { return false };
                 let mut parts = v.strip_prefix("card:").unwrap_or_default().split(':').filter_map(|p| p.parse::<usize>().ok());
                 let (Some(from), Some(k)) = (parts.next(), parts.next()) else { return false };
-                rw(Box::new(move |cols| {
+                rw(true, Box::new(move |cols| {
                     if ci < cols.len() && card_at(cols, from, k).is_some() {
                         let card = cols[from].cards.remove(k);
                         cols[ci].cards.push(card);
@@ -584,7 +607,7 @@ pub fn board_widget(columns: &[Column], editable: bool, on_change: OnChange) -> 
     let group = gtk::gio::SimpleActionGroup::new();
     let a = gtk::gio::SimpleAction::new("col", None);
     let rw = rewrite.clone();
-    a.connect_activate(move |_, _| rw(Box::new(|cols| cols.push(Column { title: "New column".into(), cards: Vec::new() }))));
+    a.connect_activate(move |_, _| rw(true, Box::new(|cols| cols.push(Column { title: "New column".into(), cards: Vec::new() }))));
     group.add_action(&a);
     let a = gtk::gio::SimpleAction::new("text", None);
     let on = on_change.clone();
