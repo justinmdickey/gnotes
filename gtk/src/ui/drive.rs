@@ -315,6 +315,22 @@ async fn run(main: &Rc<Main>, cmd: &str, arg: &str) {
                 e.set_code_language(n.parse().unwrap_or(0), lang);
             }
         }
+        "pick-block" => {
+            // Which widget a click at (x, y) inside table or board n lands on, outermost last.
+            let parts: Vec<i32> = arg.split('|').filter_map(|p| p.parse().ok()).collect();
+            if let (Some(e), &[n, x, y]) = (editor(), &parts[..])
+                && let Some(w) = e.block_widget_at(n as usize)
+                && let Some(p) = w.compute_point(&main.window, &gtk::graphene::Point::new(x as f32, y as f32))
+            {
+                let mut chain = Vec::new();
+                let mut at = main.window.pick(p.x() as f64, p.y() as f64, gtk::PickFlags::DEFAULT);
+                while let Some(w) = at {
+                    chain.push(format!("{}{:?}", w.type_().name(), w.css_classes()));
+                    at = w.parent();
+                }
+                eprintln!("drive: pick {arg} at {p:?}: {}", chain.join(" < "));
+            }
+        }
         "block-focus" => {
             let (n, a) = arg.split_once('|').unwrap_or((arg, "0"));
             let entry = editor().and_then(|e| e.block_widget_at(n.parse().unwrap_or(0))).and_then(|w| widgets::<gtk::Entry>(&w).into_iter().nth(a.parse().unwrap_or(0)));

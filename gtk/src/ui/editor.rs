@@ -2137,6 +2137,14 @@ impl Editor {
             return slot;
         }
         let slot = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        // Clicks on a table or board are its own: once its buttons and fields have had them, they
+        // stop here, or the text view under it would take focus and put its cursor in the Markdown.
+        let clicks = gtk::EventControllerLegacy::new();
+        clicks.connect_event(|_, event| match event.event_type() {
+            gdk::EventType::ButtonPress | gdk::EventType::ButtonRelease => glib::Propagation::Stop,
+            _ => glib::Propagation::Proceed,
+        });
+        slot.add_controller(clicks);
         self.view.add_overlay(&slot, 0, 0);
         slot
     }
