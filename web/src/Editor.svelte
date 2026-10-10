@@ -707,11 +707,6 @@
       {/if}
     </header>
 
-    {#if canEdit && view}
-      <div class="format" style:bottom="{keyboard}px" bind:offsetHeight={formatHeight}>
-        <FormatBar {view} {block} {inline} {history} onundo={steps.undo} onredo={steps.redo} onphoto={pickPhoto} onrecord={startRecording} />
-      </div>
-    {/if}
   </div>
 
   {#if lost}
@@ -746,11 +741,17 @@
         bind:this={parent}></div>
     </div>
   </div>
+  <!-- Under the note, like a GNOME app's bottom toolbar; on phones it rides on the keyboard. -->
+  {#if canEdit && view}
+    <div class="format" style:bottom="{keyboard}px" bind:offsetHeight={formatHeight}>
+      <FormatBar {view} {block} {inline} {history} onundo={steps.undo} onredo={steps.redo} onphoto={pickPhoto} onrecord={startRecording} />
+    </div>
+  {/if}
   {#if recording}
     <!-- Floats over the note, above the phone's format bar and keyboard, so the transcript stays readable. -->
     <Recorder
       live={app.features.live_transcription ? liveHandlers : null}
-      bottom={media.phone ? keyboard + formatHeight + 12 : 24}
+      bottom={keyboard + formatHeight + (media.phone ? 12 : 4)}
       onsave={saveRecording}
       onclose={discardRecording}
     />
@@ -897,12 +898,13 @@
     white-space: nowrap;
   }
 
-  /* Wide: the formatting toolbar is a soft rounded strip under the headerbar. */
+  /* Wide: the formatting toolbar is a soft rounded strip under the note, clear of the ⋮ button
+     in the corner. */
   .format {
     container: format / inline-size;
     display: flex;
     justify-content: center;
-    padding: 0 12px 8px;
+    padding: 8px 76px 12px;
   }
 
   .loading {
