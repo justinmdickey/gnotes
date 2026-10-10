@@ -1160,7 +1160,8 @@ impl Editor {
 
         // Dragging the grip moves its block: a line, a list item with those under it, or a whole code
         // block, table or board.
-        let drag = gtk::GestureDrag::new();
+        // Before the text view's own drag, which would start selecting text there.
+        let drag = gtk::GestureDrag::builder().propagation_phase(gtk::PropagationPhase::Capture).build();
         let weak = Rc::downgrade(self);
         drag.connect_drag_begin(move |g, x, y| {
             let Some(e) = weak.upgrade() else { return };
@@ -1188,11 +1189,8 @@ impl Editor {
         let weak = Rc::downgrade(self);
         drag.connect_drag_end(move |g, _, dy| {
             let Some(e) = weak.upgrade() else { return };
-            let Some((first, last)) = e.dragging.take() else { return };
-            e.view.set_drop(None);
-            let Some((sx, sy)) = g.start_point() else { return };
-            if let Some(before) = e.drop_line(sx, sy + dy) {
-                e.move_block(first, last, before);
+            if let Some((sx, sy)) = g.start_point() {
+                e.end_drag(sx, sy + dy);
             }
         });
         self.view.add_controller(drag);
@@ -2308,6 +2306,29 @@ impl Editor {
     }
 
     /// Where a dragged block would go for a point: before the block or blank line under it, or the end.
+    /// Drops the block being dragged by its grip at (x, y), in widget coordinates.
+    fn end_drag(&self, x: f64, y: f64) {
+        let Some((first, last)) = self.dragging.get() else { return };
+        self.view.set_drop(None);
+        // Where it goes, while drop_line still knows what's being dragged.
+        let before = self.drop_line(x, y);
+        self.dragging.set(None);
+        if let Some(before) = before {
+            self.move_block(first, last, before);
+        }
+    }
+
+    /// Drags line `n`'s block by its grip and drops it on the top half of line `onto`, the way a
+    /// pointer would.
+    pub fn grip_drag(&self, n: i32, onto: i32) {
+        let Some(block) = self.block_at(n) else { return };
+        let Some(it) = self.buffer.iter_at_line(onto) else { return };
+        let (y, _) = self.view.line_yrange(&it);
+        let (_, wy) = self.view.buffer_to_window_coords(gtk::TextWindowType::Widget, 0, y + 1);
+        self.dragging.set(Some(block));
+        self.end_drag(self.view.left_margin() as f64 - 20.0, wy as f64);
+    }
+
     fn drop_line(&self, x: f64, y: f64) -> Option<i32> {
         let (first, last) = self.dragging.get()?;
         let (_, by) = self.view.window_to_buffer_coords(gtk::TextWindowType::Widget, x as i32, y as i32);

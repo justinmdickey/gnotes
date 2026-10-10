@@ -378,10 +378,9 @@ async fn run(main: &Rc<Main>, cmd: &str, arg: &str) {
         }
         "move-line" => {
             let (a, b) = arg.split_once('|').unwrap_or((arg, "0"));
-            if let Some(e) = editor()
-                && let Some((first, last)) = e.block_at(a.parse().unwrap_or(0))
-            {
-                e.move_block(first, last, b.parse().unwrap_or(0));
+            // By its grip, through the same drop as a pointer's drag.
+            if let Some(e) = editor() {
+                e.grip_drag(a.parse().unwrap_or(0), b.parse().unwrap_or(0));
             }
         }
         "tick" => {
