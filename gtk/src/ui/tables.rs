@@ -335,8 +335,9 @@ pub fn board_markdown(columns: &[Column]) -> String {
 pub enum Change {
     /// A table cell's new text: row 0 is the header.
     Cell { row: usize, col: usize, text: String },
-    /// The block's whole new text, put in as the smallest edits.
-    Rewrite(String),
+    /// A change to the block as its Markdown is now, which may differ from what the widget was
+    /// drawn from: an earlier edit in it, or someone else's. None leaves it as it is.
+    Rewrite(Box<dyn Fn(&str) -> Option<String>>),
     /// Show the Markdown itself, cursor at the block's start.
     EditText,
 }
@@ -346,9 +347,7 @@ pub type OnChange = Rc<dyn Fn(Change)>;
 /// The grid for a table, with a cell entry per cell.
 pub fn table_widget(table: &Table, editable: bool, on_change: OnChange) -> gtk::Widget {
     let grid = gtk::Grid::builder().column_homogeneous(true).css_classes(["note-table"]).build();
-    let header: Vec<String> = table.header.iter().map(|c| c.text.clone()).collect();
-    let rows: Vec<Vec<String>> = table.rows.iter().map(|r| r.iter().map(|c| c.text.clone()).collect()).collect();
-    let n = header.len();
+    let n = table.header.len();
     let mut entries: Vec<Vec<gtk::Entry>> = Vec::new();
     for (r, row) in std::iter::once(&table.header).chain(table.rows.iter()).enumerate() {
         let mut line = Vec::new();
@@ -389,32 +388,39 @@ pub fn table_widget(table: &Table, editable: bool, on_change: OnChange) -> gtk::
     let group = gtk::gio::SimpleActionGroup::new();
     for action in ["row", "col", "unrow", "uncol", "text"] {
         let a = gtk::gio::SimpleAction::new(action, None);
-        let (on, header, rows, delim) = (on_change.clone(), header.clone(), rows.clone(), table.delimiter.clone());
+        let on = on_change.clone();
         a.connect_activate(move |_, _| {
-            let (mut header, mut rows, mut delim) = (header.clone(), rows.clone(), delim.clone());
-            match action {
-                "row" => rows.push(vec![String::new(); header.len()]),
-                "col" => {
-                    header.push(format!("Column {}", header.len() + 1));
-                    delim.push("---".into());
-                    for r in &mut rows {
-                        r.resize(header.len(), String::new());
-                    }
-                }
-                "unrow" => {
-                    rows.pop();
-                }
-                "uncol" if header.len() > 1 => {
-                    header.pop();
-                    delim.truncate(header.len());
-                    for r in &mut rows {
-                        r.truncate(header.len());
-                    }
-                }
-                "text" => return on(Change::EditText),
-                _ => return,
+            if action == "text" {
+                return on(Change::EditText);
             }
-            on(Change::Rewrite(table_markdown(&header, &delim, &rows)));
+            on(Change::Rewrite(Box::new(move |old| {
+                let t = parse_table(old)?;
+                let mut header: Vec<String> = t.header.iter().map(|c| c.text.clone()).collect();
+                let mut rows: Vec<Vec<String>> = t.rows.iter().map(|r| r.iter().map(|c| c.text.clone()).collect()).collect();
+                let mut delim = t.delimiter.clone();
+                match action {
+                    "row" => rows.push(vec![String::new(); header.len()]),
+                    "col" => {
+                        header.push(format!("Column {}", header.len() + 1));
+                        delim.push("---".into());
+                        for r in &mut rows {
+                            r.resize(header.len(), String::new());
+                        }
+                    }
+                    "unrow" => {
+                        rows.pop();
+                    }
+                    "uncol" if header.len() > 1 => {
+                        header.pop();
+                        delim.truncate(header.len());
+                        for r in &mut rows {
+                            r.truncate(header.len());
+                        }
+                    }
+                    _ => return None,
+                }
+                Some(table_markdown(&header, &delim, &rows))
+            })));
         });
         group.add_action(&a);
     }
@@ -442,21 +448,22 @@ pub fn table_widget(table: &Table, editable: bool, on_change: OnChange) -> gtk::
 }
 
 /// The board: columns of cards, which can be edited, ticked, added and dragged between columns.
+fn card_at(cols: &mut [Column], col: usize, k: usize) -> Option<&mut Card> {
+    cols.get_mut(col)?.cards.get_mut(k)
+}
+
 pub fn board_widget(columns: &[Column], editable: bool, on_change: OnChange) -> gtk::Widget {
-    // The board as it is now: a card typed in stays as typed while the next one is edited, so
-    // each change is made to the last one, not to the board as it was drawn.
-    let cols = Rc::new(RefCell::new(columns.to_vec()));
+    // Each change is made to the board as it is when it's made, not as it was drawn: an earlier
+    // card's edit, or someone else's, stays.
     let rewrite = {
         let on = on_change.clone();
-        let cols = cols.clone();
-        Rc::new(move |f: &dyn Fn(&mut Vec<Column>)| {
-            let mut next = cols.borrow().clone();
-            f(&mut next);
-            if next == *cols.borrow() {
-                return;
-            }
-            cols.replace(next.clone());
-            on(Change::Rewrite(board_markdown(&next)));
+        Rc::new(move |f: Box<dyn Fn(&mut Vec<Column>)>| {
+            on(Change::Rewrite(Box::new(move |old| {
+                let mut cols = parse_board(old);
+                let before = cols.clone();
+                f(&mut cols);
+                (cols != before).then(|| board_markdown(&cols))
+            })))
         })
     };
     let row = gtk::Box::builder().spacing(10).homogeneous(true).css_classes(["note-board"]).build();
@@ -466,14 +473,22 @@ pub fn board_widget(columns: &[Column], editable: bool, on_change: OnChange) -> 
         let rw = rewrite.clone();
         title.connect_activate(move |e| {
             let t = e.text().to_string();
-            rw(&|c| c[ci].title = t.clone());
+            rw(Box::new(move |c| {
+                if let Some(col) = c.get_mut(ci) {
+                    col.title = t.clone();
+                }
+            }));
         });
         let rw = rewrite.clone();
         let focus = gtk::EventControllerFocus::new();
         let t2 = title.clone();
         focus.connect_leave(move |_| {
             let t = t2.text().to_string();
-            rw(&|c| c[ci].title = t.clone());
+            rw(Box::new(move |c| {
+                if let Some(col) = c.get_mut(ci) {
+                    col.title = t.clone();
+                }
+            }));
         });
         title.add_controller(focus);
         lane.append(&title);
@@ -484,7 +499,11 @@ pub fn board_widget(columns: &[Column], editable: bool, on_change: OnChange) -> 
                 let rw = rewrite.clone();
                 check.connect_toggled(move |c| {
                     let on = c.is_active();
-                    rw(&|cols| cols[ci].cards[k].done = Some(on));
+                    rw(Box::new(move |cols| {
+                        if let Some(card) = card_at(cols, ci, k) {
+                            card.done = Some(on);
+                        }
+                    }));
                 });
                 line.append(&check);
             }
@@ -494,22 +513,34 @@ pub fn board_widget(columns: &[Column], editable: bool, on_change: OnChange) -> 
             let r = rich.clone();
             entry.connect_activate(move |_| {
                 let t = r.text();
-                rw(&|cols| cols[ci].cards[k].text = t.clone());
+                rw(Box::new(move |cols| {
+                    if let Some(card) = card_at(cols, ci, k) {
+                        card.text = t.clone();
+                    }
+                }));
             });
             let rw = rewrite.clone();
             let focus = gtk::EventControllerFocus::new();
             focus.connect_leave(move |_| {
                 let t = rich.text();
-                rw(&|cols| cols[ci].cards[k].text = t.clone());
+                rw(Box::new(move |cols| {
+                    if let Some(card) = card_at(cols, ci, k) {
+                        card.text = t.clone();
+                    }
+                }));
             });
             entry.add_controller(focus);
             line.append(&entry);
             if editable {
                 let remove = gtk::Button::builder().icon_name("window-close-symbolic").css_classes(["flat", "circular", "card-remove"]).tooltip_text("Remove Card").build();
                 let rw = rewrite.clone();
-                remove.connect_clicked(move |_| rw(&|cols| {
-                    cols[ci].cards.remove(k);
-                }));
+                remove.connect_clicked(move |_| {
+                    rw(Box::new(move |cols| {
+                        if card_at(cols, ci, k).is_some() {
+                            cols[ci].cards.remove(k);
+                        }
+                    }))
+                });
                 line.append(&remove);
                 // Cards drag between columns.
                 let src = gtk::DragSource::builder().actions(gtk::gdk::DragAction::MOVE).build();
@@ -521,7 +552,13 @@ pub fn board_widget(columns: &[Column], editable: bool, on_change: OnChange) -> 
         if editable {
             let add = gtk::Button::builder().child(&adw::ButtonContent::builder().icon_name("list-add-symbolic").label("Add Card").build()).css_classes(["flat"]).build();
             let rw = rewrite.clone();
-            add.connect_clicked(move |_| rw(&|cols| cols[ci].cards.push(Card { text: "New card".into(), done: None })));
+            add.connect_clicked(move |_| {
+                rw(Box::new(move |cols| {
+                    if let Some(col) = cols.get_mut(ci) {
+                        col.cards.push(Card { text: "New card".into(), done: None });
+                    }
+                }))
+            });
             lane.append(&add);
             let drop = gtk::DropTarget::new(String::static_type(), gtk::gdk::DragAction::MOVE);
             let rw = rewrite.clone();
@@ -529,12 +566,12 @@ pub fn board_widget(columns: &[Column], editable: bool, on_change: OnChange) -> 
                 let Ok(v) = value.get::<String>() else { return false };
                 let mut parts = v.strip_prefix("card:").unwrap_or_default().split(':').filter_map(|p| p.parse::<usize>().ok());
                 let (Some(from), Some(k)) = (parts.next(), parts.next()) else { return false };
-                rw(&|cols| {
-                    if from < cols.len() && k < cols[from].cards.len() {
+                rw(Box::new(move |cols| {
+                    if ci < cols.len() && card_at(cols, from, k).is_some() {
                         let card = cols[from].cards.remove(k);
                         cols[ci].cards.push(card);
                     }
-                });
+                }));
                 true
             });
             lane.add_controller(drop);
@@ -547,7 +584,7 @@ pub fn board_widget(columns: &[Column], editable: bool, on_change: OnChange) -> 
     let group = gtk::gio::SimpleActionGroup::new();
     let a = gtk::gio::SimpleAction::new("col", None);
     let rw = rewrite.clone();
-    a.connect_activate(move |_, _| rw(&|cols| cols.push(Column { title: "New column".into(), cards: Vec::new() })));
+    a.connect_activate(move |_, _| rw(Box::new(|cols| cols.push(Column { title: "New column".into(), cards: Vec::new() }))));
     group.add_action(&a);
     let a = gtk::gio::SimpleAction::new("text", None);
     let on = on_change.clone();

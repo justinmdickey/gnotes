@@ -331,6 +331,14 @@ async fn run(main: &Rc<Main>, cmd: &str, arg: &str) {
                 eprintln!("drive: pick {arg} at {p:?}: {}", chain.join(" < "));
             }
         }
+        "block-action" => {
+            // An item in a table's or board's ⋮ menu, by action name, like table.row.
+            let (n, action) = arg.split_once('|').unwrap_or((arg, ""));
+            let button = editor().and_then(|e| e.block_widget_at(n.parse().unwrap_or(0))).and_then(|w| widgets::<gtk::MenuButton>(&w).into_iter().next());
+            if button.is_none_or(|b| b.activate_action(action, None).is_err()) {
+                eprintln!("drive: no action {arg}");
+            }
+        }
         "block-focus" => {
             let (n, a) = arg.split_once('|').unwrap_or((arg, "0"));
             let entry = editor().and_then(|e| e.block_widget_at(n.parse().unwrap_or(0))).and_then(|w| widgets::<gtk::Entry>(&w).into_iter().nth(a.parse().unwrap_or(0)));

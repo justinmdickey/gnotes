@@ -319,7 +319,9 @@ check("the / menu adds a table", slashed.includes("| Column 1 | Column 2 | Colum
       "open note:Plans",
       "wait-loaded",
       "sleep 500",
+      "block-focus 0|4",
       "block-entry 0|4|Olive",
+      "block-action 0|table.row",
       "sleep 500",
       "block-focus 1|1",
       "block-entry 1|1|Buy primer",
@@ -339,6 +341,7 @@ check("the / menu adds a table", slashed.includes("| Column 1 | Column 2 | Colum
 check("tables and boards ran", code === 0, { code, stderr });
 const plans = await demo.read(ann, ids.plans);
 check("typing in a table cell changes just that cell", plans.includes("| Kitchen | Olive | May |"), plans);
+check("Add Row after typing in a cell keeps what was typed", /\| Kitchen \| Olive \| May \|\n\| Hall \| White \| June \|\n\|  \|  \|  \|/.test(plans), plans);
 check("editing one card after another keeps both", plans.includes("- [ ] Buy primer\n- Move the sofa"), plans);
 check("Add Card on a board adds a card to its column", /## Doing\n- Patch the wall\n- New card/.test(plans), plans);
 const blocks = dump("blocks.json").blocks;

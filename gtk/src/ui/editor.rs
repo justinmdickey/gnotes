@@ -2212,7 +2212,11 @@ impl Editor {
                     self.rewrite_block(start, &old, &new);
                 }
             }
-            Change::Rewrite(new) => self.rewrite_block(start, &old, &new),
+            Change::Rewrite(change) => {
+                if let Some(new) = change(&old).filter(|new| *new != old) {
+                    self.rewrite_block(start, &old, &new);
+                }
+            }
             Change::EditText => {
                 if let Some(m) = self.text_block.take() {
                     self.buffer.delete_mark(&m);
