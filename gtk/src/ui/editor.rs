@@ -1083,11 +1083,16 @@ impl Editor {
         });
         self.view.add_controller(keys);
 
-        let click = gtk::GestureClick::builder().button(gdk::BUTTON_PRIMARY).build();
+        // A checkbox, link or code label acts on press, like the web app's mousedown, and keeps the
+        // press from the text view: otherwise it moves the cursor there first, which shows the
+        // line's Markdown and shifts the text out from under the pointer.
+        let click = gtk::GestureClick::builder().button(gdk::BUTTON_PRIMARY).propagation_phase(gtk::PropagationPhase::Capture).build();
         let weak = Rc::downgrade(self);
-        click.connect_released(move |g, n, x, y| {
+        click.connect_pressed(move |g, n, x, y| {
             let Some(e) = weak.upgrade() else { return };
-            if n == 1 && e.click(x, y) {
+            // Not a press on a table or board over the text: that's theirs.
+            let on_text = e.view.pick(x, y, gtk::PickFlags::DEFAULT).is_some_and(|w| w == *e.view.upcast_ref::<gtk::Widget>());
+            if n == 1 && on_text && e.click(x, y) {
                 g.set_state(gtk::EventSequenceState::Claimed);
             }
         });
