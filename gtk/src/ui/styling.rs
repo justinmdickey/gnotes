@@ -107,9 +107,20 @@ pub fn apply(view: &NoteView, text: &str, active: Option<(i32, i32)>) -> Styled 
         let mut eol = buffer.start_iter();
         if !eol.ends_line() {
             eol.forward_to_line_end();
+        } else {
+            // A blank first line: the tag on its newline gives the cursor the title's size.
+            eol.forward_char();
         }
         buffer.apply_tag_by_name("h1", &start, &eol);
     }
+    // Nothing to tag in an empty note: the view itself takes the title's look (mod.rs) and space.
+    let placeholder = text.is_empty() && view.is_editable();
+    if placeholder {
+        view.add_css_class("empty-title");
+    } else {
+        view.remove_css_class("empty-title");
+    }
+    view.set_pixels_above_lines(if placeholder { 10 } else { 0 });
     for s in &styled.spans {
         buffer.apply_tag_by_name(s.tag, &at(s.start), &at(s.end));
     }
@@ -157,7 +168,7 @@ pub fn apply(view: &NoteView, text: &str, active: Option<(i32, i32)>) -> Styled 
         checks: styled.tasks.clone(),
         bullets: styled.bullets.clone(),
         quotes: styled.quotes.clone(),
-        placeholder: text.is_empty() && view.is_editable(),
+        placeholder,
         accent: Some(accent()),
     });
     styled

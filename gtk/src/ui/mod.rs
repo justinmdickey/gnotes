@@ -62,11 +62,18 @@ fn follow_document_font() {
         let font = gtk::pango::FontDescription::from_string(&manager.document_font_name());
         let family = font.family().map(|f| f.replace('"', "")).unwrap_or_else(|| "sans-serif".into());
         let mut rule = format!("font-family: \"{family}\";");
+        // An empty note's view is in the title's look (the h1 tag's scale, styling.rs), so the
+        // cursor sits on the "Title" hint at the title's size, with nothing yet to tag.
+        let mut title_size = "175%".to_owned();
         if font.size() > 0 {
             let size = font.size() as f64 / gtk::pango::SCALE as f64;
-            rule.push_str(&format!(" font-size: {size}{};", if font.is_size_absolute() { "px" } else { "pt" }));
+            let unit = if font.is_size_absolute() { "px" } else { "pt" };
+            rule.push_str(&format!(" font-size: {size}{unit};"));
+            title_size = format!("{}{unit}", size * 1.75);
         }
-        css.load_from_string(&format!(".note-text {{ {rule} }}"));
+        css.load_from_string(&format!(
+            ".note-text {{ {rule} }}\n.note-text.empty-title {{ font-size: {title_size}; font-weight: 800; }}"
+        ));
     };
     let manager = adw::StyleManager::default();
     load(&manager);

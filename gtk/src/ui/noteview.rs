@@ -386,14 +386,11 @@ impl NoteView {
         }
         self.imp().label_rects.replace(rects);
         if d.placeholder {
+            // In the view's own font: the title's look while the note is empty (styling.rs).
             let layout = self.create_pango_layout(Some("Title"));
-            let mut font = self.pango_context().font_description().unwrap_or_default();
-            font.set_size((font.size() as f64 * 1.75) as i32);
-            font.set_weight(gtk::pango::Weight::Heavy);
-            layout.set_font_description(Some(&font));
             let s = at(0);
             snapshot.save();
-            snapshot.translate(&graphene::Point::new(s.x() as f32, s.y() as f32 + self.pixels_above_lines() as f32 + 10.0));
+            snapshot.translate(&graphene::Point::new(s.x() as f32, s.y() as f32));
             snapshot.append_layout(&layout, &tone(0.35));
             snapshot.restore();
         }
