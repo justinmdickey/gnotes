@@ -30,7 +30,7 @@
     <control>keyboard</control>
   </supports>
   <releases>
-    <release version="1.5.0" date="2026-10-09">
+    <release version="1.5.0" date="2026-10-12">
       <description>
         <p>The first release of the GNOME app.</p>
       </description>
