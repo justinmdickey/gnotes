@@ -413,7 +413,7 @@ check("a new server's first account is made from sign-in", code === 0 && setupDu
         "open note:Groceries",
         "wait-loaded",
         "summary",
-        "wait-dialog Key points",
+        "wait-summary Key points",
         `dump ${f("summary.json")}`,
         "tidy",
         "wait-text ## To buy",
@@ -457,7 +457,7 @@ check("a new server's first account is made from sign-in", code === 0 && setupDu
     },
   }));
   check("the AI tools ran", code === 0, { code, stderr, seconds: (Date.now() - aiStart) / 1000 });
-  check("Summary shows the note's summary", existsSync(f("summary.json")) && /Spinach, lemons and milk/.test(dump("summary.json").dialog_text));
+  check("the Summary view shows the note's summary", existsSync(f("summary.json")) && /Spinach, lemons and milk/.test(dump("summary.json").summary_text));
   const tidied = await aiDemo.read(aiAnn, aiDemo.ids.groceries);
   check("Tidy Up applies the tidied note", tidied.includes("## To buy") && tidied.includes("- [x] Apples"), tidied);
   const edited = await aiDemo.read(aiAnn, aiDemo.ids.pantry);

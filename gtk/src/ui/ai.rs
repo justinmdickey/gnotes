@@ -260,88 +260,121 @@ pub fn rewrite_dialog(main: &Rc<Main>, editor: &Rc<Editor>, kind: Rewrite) {
     dialog.present(Some(&main.window));
 }
 
-/// A note's summary: the saved one, or a new one the first time it's asked for.
-pub fn summary_dialog(main: &Rc<Main>, editor: &Rc<Editor>) {
-    let dialog = adw::Dialog::builder().title("Summary").content_width(620).content_height(560).build();
-    let stack = gtk::Stack::builder().vexpand(true).build();
-    let busy = adw::StatusPage::builder().title("Summarizing…").child(&adw::Spinner::builder().width_request(32).height_request(32).build()).build();
-    stack.add_named(&busy, Some("busy"));
-    let failed = adw::StatusPage::builder().icon_name("dialog-warning-symbolic").title("Couldn't Summarize").build();
-    stack.add_named(&failed, Some("error"));
-    let scroll = gtk::ScrolledWindow::builder().hscrollbar_policy(gtk::PolicyType::Never).vexpand(true).build();
-    stack.add_named(&scroll, Some("summary"));
-    let note = gtk::Label::builder().xalign(0.0).hexpand(true).css_classes(["dim-label"]).build();
-    let redo = gtk::Button::with_label("Regenerate");
-    let bar = gtk::Box::builder().spacing(12).margin_top(12).margin_bottom(12).margin_start(18).margin_end(12).build();
-    bar.append(&note);
-    bar.append(&redo);
-    let view = adw::ToolbarView::new();
-    view.add_top_bar(&adw::HeaderBar::new());
-    view.set_content(Some(&stack));
-    view.add_bottom_bar(&bar);
-    dialog.set_child(Some(&view));
+/// A note's summary, as the note's Summary view: the saved one, or a new one the first time the
+/// view is opened. `page` goes in the editor's view stack, `bar` under it in place of the format bar.
+pub struct SummaryPane {
+    pub page: gtk::Stack,
+    pub bar: gtk::Box,
+    scroll: gtk::ScrolledWindow,
+    load: Rc<dyn Fn()>,
+}
 
-    let title = editor.page.title().to_string();
-    let show = {
-        let (stack, scroll, note, redo) = (stack.clone(), scroll.clone(), note.clone(), redo.clone());
-        move |s: NoteSummary| {
-            let Some(text) = s.summary else { return false };
-            // Under the note's title, so the summary reads as the note's body.
-            scroll.set_child(Some(&styling::preview(&format!("{title}\n{text}"))));
-            note.set_label(&if s.stale {
-                "The note has changed since this summary.".to_owned()
-            } else {
-                format!("Made {}", super::lists::when(s.created_at.unwrap_or_else(super::store::now_ms)).to_lowercase())
-            });
-            note.set_css_classes(if s.stale { &["warning"] } else { &["dim-label"] });
-            redo.set_label(if s.stale { "Update" } else { "Regenerate" });
-            if s.stale {
-                redo.add_css_class("suggested-action");
+impl SummaryPane {
+    pub fn new(main: &Rc<Main>, id: &str, title: &adw::WindowTitle) -> SummaryPane {
+        let stack = gtk::Stack::builder().vexpand(true).build();
+        let busy = adw::StatusPage::builder().title("Summarizing…").child(&adw::Spinner::builder().width_request(32).height_request(32).build()).build();
+        stack.add_named(&busy, Some("busy"));
+        let failed = adw::StatusPage::builder().icon_name("dialog-warning-symbolic").title("Couldn't Summarize").build();
+        stack.add_named(&failed, Some("error"));
+        let scroll = gtk::ScrolledWindow::builder().hscrollbar_policy(gtk::PolicyType::Never).vexpand(true).build();
+        stack.add_named(&scroll, Some("summary"));
+        let note = gtk::Label::builder().xalign(0.0).hexpand(true).ellipsize(gtk::pango::EllipsizeMode::End).css_classes(["dim-label"]).build();
+        let redo = gtk::Button::with_label("Regenerate");
+        let bar = gtk::Box::builder().spacing(12).margin_top(6).margin_bottom(6).margin_start(18).margin_end(12).css_classes(["toolbar"]).build();
+        bar.append(&note);
+        bar.append(&redo);
+
+        let show = {
+            let (stack, scroll, note, redo, title) = (stack.clone(), scroll.clone(), note.clone(), redo.clone(), title.clone());
+            move |s: NoteSummary| {
+                let Some(text) = s.summary else { return false };
+                // Under the note's title, so the summary reads as the note's body.
+                scroll.set_child(Some(&styling::preview(&format!("{}\n{text}", title.title()))));
+                note.set_label(&if s.stale {
+                    "The note has changed since this summary.".to_owned()
+                } else {
+                    format!("Made {}", super::lists::when(s.created_at.unwrap_or_else(super::store::now_ms)).to_lowercase())
+                });
+                note.set_css_classes(if s.stale { &["warning"] } else { &["dim-label"] });
+                redo.set_label(if s.stale { "Update" } else { "Regenerate" });
+                if s.stale {
+                    redo.add_css_class("suggested-action");
+                } else {
+                    redo.remove_css_class("suggested-action");
+                }
+                stack.set_visible_child_name("summary");
+                true
             }
-            stack.set_visible_child_name("summary");
-            true
-        }
-    };
-    let show = Rc::new(show);
-    let make = {
-        let (main, id, stack, failed, show, redo) = (main.clone(), editor.id.clone(), stack.clone(), failed.clone(), show.clone(), redo.clone());
-        Rc::new(move || {
-            stack.set_visible_child_name("busy");
-            redo.set_sensitive(false);
-            let (main, id, stack, failed, show, redo) = (main.clone(), id.clone(), stack.clone(), failed.clone(), show.clone(), redo.clone());
-            glib::spawn_future_local(async move {
-                let api = main.store.api.clone();
-                let out = bg(async move { api.summarize(&id).await }).await;
-                redo.set_sensitive(true);
-                match out {
-                    Ok(s) => {
-                        if !show(s) {
-                            failed.set_description(Some("The summary service sent back nothing"));
+        };
+        let show = Rc::new(show);
+        let make = {
+            let (main, id, stack, failed, show, redo) = (main.clone(), id.to_owned(), stack.clone(), failed.clone(), show.clone(), redo.clone());
+            Rc::new(move || {
+                stack.set_visible_child_name("busy");
+                redo.set_sensitive(false);
+                let (main, id, stack, failed, show, redo) = (main.clone(), id.clone(), stack.clone(), failed.clone(), show.clone(), redo.clone());
+                glib::spawn_future_local(async move {
+                    let api = main.store.api.clone();
+                    let out = bg(async move { api.summarize(&id).await }).await;
+                    redo.set_sensitive(true);
+                    match out {
+                        Ok(s) => {
+                            if !show(s) {
+                                failed.set_description(Some("The summary service sent back nothing"));
+                                stack.set_visible_child_name("error");
+                            }
+                        }
+                        Err(e) => {
+                            failed.set_description(Some(&glib::markup_escape_text(&e.to_string())));
                             stack.set_visible_child_name("error");
                         }
                     }
-                    Err(e) => {
-                        failed.set_description(Some(&glib::markup_escape_text(&e.to_string())));
-                        stack.set_visible_child_name("error");
-                    }
-                }
-            });
-        })
-    };
-    {
-        let make = make.clone();
-        redo.connect_clicked(move |_| make());
-    }
-    // Opening it is the trigger: the saved summary, or a new one when there's none.
-    let (main2, id) = (main.clone(), editor.id.clone());
-    glib::spawn_future_local(async move {
-        let api = main2.store.api.clone();
-        let saved = bg(async move { api.summary(&id).await }).await;
-        if !saved.is_ok_and(|s| show(s)) {
-            make();
+                });
+            })
+        };
+        {
+            let make = make.clone();
+            redo.connect_clicked(move |_| make());
         }
-    });
-    dialog.present(Some(&main.window));
+        // Opening the view is the trigger: the saved summary, or a new one when there's none.
+        let load = {
+            let (main, id, redo) = (main.clone(), id.to_owned(), redo.clone());
+            Rc::new(move || {
+                if !redo.is_sensitive() {
+                    return;
+                }
+                let (main, id, show, make) = (main.clone(), id.clone(), show.clone(), make.clone());
+                glib::spawn_future_local(async move {
+                    let api = main.store.api.clone();
+                    let saved = bg(async move { api.summary(&id).await }).await;
+                    if !saved.is_ok_and(|s| show(s)) {
+                        make();
+                    }
+                });
+            })
+        };
+        SummaryPane { page: stack, bar, scroll, load }
+    }
+
+    /// Fetches the summary, or makes one, unless one is being made.
+    pub fn load(&self) {
+        (self.load)()
+    }
+
+    /// The summary as shown, for drive.rs.
+    pub fn text(&self) -> String {
+        if self.page.visible_child_name().as_deref() != Some("summary") {
+            return String::new();
+        }
+        self.scroll
+            .child()
+            .and_then(|c| c.downcast::<gtk::TextView>().ok())
+            .map(|v| {
+                let b = v.buffer();
+                b.text(&b.start_iter(), &b.end_iter(), true).to_string()
+            })
+            .unwrap_or_default()
+    }
 }
 
 /// The AI Prompt: a field at the cursor whose answer is written there, with the note as context.

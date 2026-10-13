@@ -43,7 +43,8 @@
 //! invite <file>             a new account's invite link goes in <file>
 //! save-service <kind>|<url>|<model>         kind: whisper, vision, summary or embed
 //! import <path>             as Settings › Import
-//! summary                  opens the open note's Summary
+//! summary                  opens the open note's Summary view
+//! wait-summary <text>      the Summary view shows <text>
 //! wait-dialog <text>       the dialog showing has <text> in it
 //! tidy | edit-ai <instruction>   Tidy Up or Edit with AI, applied
 //! ai-write <prompt>        the AI Prompt at the cursor
@@ -121,7 +122,7 @@ pub fn open_screen(main: &Rc<Main>, target: &str) {
                 glib::timeout_add_local_once(Duration::from_millis(800), move || {
                     let Some(e) = m.editor() else { return };
                     match kind.as_str() {
-                        "summary" => super::ai::summary_dialog(&m, &e),
+                        "summary" => e.show_summary(),
                         "tidy" => super::ai::rewrite_dialog(&m, &e, super::ai::Rewrite::Tidy),
                         "record" => e.start_recording(),
                         "slash" => e.type_text("\n/"),
@@ -506,9 +507,10 @@ async fn run(main: &Rc<Main>, cmd: &str, arg: &str) {
         "import" => super::settings::import(main, vec![gtk::gio::File::for_path(arg)]).await,
         "summary" => {
             if let Some(e) = editor() {
-                super::ai::summary_dialog(main, &e);
+                e.show_summary();
             }
         }
+        "wait-summary" => until(&format!("a summary with {arg:?}"), || editor().is_some_and(|e| e.summary_text().contains(arg))).await,
         "wait-dialog" => until(&format!("a dialog with {arg:?}"), || dialog_text(main).contains(arg)).await,
         "tidy" | "edit-ai" => {
             let kind = if cmd == "tidy" { super::ai::Rewrite::Tidy } else { super::ai::Rewrite::Edit };
@@ -602,6 +604,7 @@ async fn run(main: &Rc<Main>, cmd: &str, arg: &str) {
                 "blocks": e.as_ref().map(|e| e.block_counts()),
                 "list": list_rows(main),
                 "dialog_text": dialog_text(main),
+                "summary_text": e.as_ref().map(|e| e.summary_text()),
                 "ask_answer": main.ask.get().map(|a| a.last_answer()),
                 "status": status(main.store.status.get()),
                 "user": main.store.user().display_name,

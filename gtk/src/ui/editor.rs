@@ -59,6 +59,14 @@ pub struct Editor {
     styled: RefCell<Styled>,
     timers: RefCell<Vec<glib::SourceId>>,
     title: adw::WindowTitle,
+    /// The headerbar's title: the note's name, or the Note / Summary switcher when summaries are on.
+    title_stack: gtk::Stack,
+    /// The note and its Summary view; a narrow window switches them at the bottom instead.
+    views: adw::ViewStack,
+    switcher_bar: adw::ViewSwitcherBar,
+    /// Follows the window's width (the split view's `collapsed`) while the note is open.
+    collapsed_handler: RefCell<Option<glib::SignalHandlerId>>,
+    summary: super::ai::SummaryPane,
     peers_box: gtk::Box,
     banner: adw::Banner,
     undo_button: gtk::Button,
@@ -208,7 +216,14 @@ impl Editor {
             .build();
 
         let title = adw::WindowTitle::new(sidebar::UNTITLED, "");
-        let header = adw::HeaderBar::builder().title_widget(&title).build();
+        // With AI Summaries set up, the note has a Summary view beside it, switched in the headerbar.
+        let views = adw::ViewStack::new();
+        let switcher = adw::ViewSwitcher::builder().stack(&views).policy(adw::ViewSwitcherPolicy::Wide).build();
+        let title_stack = gtk::Stack::builder().hhomogeneous(false).build();
+        title_stack.add_named(&title, Some("title"));
+        title_stack.add_named(&switcher, Some("switcher"));
+        let header = adw::HeaderBar::builder().title_widget(&title_stack).build();
+        let summary = super::ai::SummaryPane::new(main, id, &title);
         let menu_button = gtk::MenuButton::builder().icon_name("view-more-symbolic").tooltip_text("Note Menu").build();
         let share_content = adw::ButtonContent::builder().icon_name("send-to-symbolic").label("Share").build();
         // Narrow windows have room for the icon only.
@@ -359,7 +374,14 @@ impl Editor {
         }
         let overlay = gtk::Overlay::builder().child(&scroll).build();
         overlay.add_overlay(&rec_bar);
-        toolbar.set_content(Some(&overlay));
+        views.add_titled_with_icon(&overlay, Some("note"), "Note", "accessories-text-editor-symbolic");
+        views.add_titled_with_icon(&summary.page, Some("summary"), "Summary", "starred-symbolic");
+        toolbar.set_content(Some(&views));
+        // The Summary view has its own bar under it, in place of the format bar.
+        summary.bar.set_visible(false);
+        toolbar.add_bottom_bar(&summary.bar);
+        let switcher_bar = adw::ViewSwitcherBar::builder().stack(&views).build();
+        toolbar.add_bottom_bar(&switcher_bar);
         toolbar.set_top_bar_style(adw::ToolbarStyle::Raised);
 
         let page = adw::NavigationPage::builder().title(sidebar::UNTITLED).tag(format!("note:{id}")).child(&toolbar).build();
@@ -391,6 +413,11 @@ impl Editor {
             styled: RefCell::new(Styled::default()),
             timers: RefCell::new(Vec::new()),
             title,
+            title_stack,
+            views: views.clone(),
+            switcher_bar,
+            collapsed_handler: RefCell::new(None),
+            summary,
             peers_box,
             banner,
             undo_button: undo_button.clone(),
@@ -500,6 +527,32 @@ impl Editor {
             });
         }
         {
+            // A narrow window has no room for the switcher in the headerbar: it goes to the bottom.
+            let weak = Rc::downgrade(&editor);
+            let id = main.split.connect_collapsed_notify(move |_| {
+                if let Some(e) = weak.upgrade() {
+                    e.place_switcher();
+                }
+            });
+            editor.collapsed_handler.replace(Some(id));
+        }
+        {
+            // Opening the Summary view fetches or makes the summary; its bar takes the format bar's place.
+            let weak = Rc::downgrade(&editor);
+            views.connect_visible_child_name_notify(move |views| {
+                // Taking the page apart after close moves the visible child too.
+                let Some(e) = weak.upgrade().filter(|e| !e.closed.get() && e.has_summary()) else { return };
+                let summary = views.visible_child_name().as_deref() == Some("summary");
+                e.format_bar.set_visible(!summary);
+                e.summary.bar.set_visible(summary);
+                if summary {
+                    e.summary.load();
+                } else if e.can_edit() {
+                    e.view.grab_focus();
+                }
+            });
+        }
+        {
             // The AI tools come and go with the server's services.
             let weak = Rc::downgrade(&editor);
             store.on_features(move || match weak.upgrade() {
@@ -584,7 +637,37 @@ impl Editor {
         let note = self.store.note(&self.id);
         let owner = note.as_ref().is_some_and(|n| n.role == Role::Owner) && !self.store.is_queued(&self.id);
         self.share_button.set_visible(owner && !self.lost.get());
+        self.place_switcher();
         self.menu_button.set_menu_model(Some(&self.menu(note.map(|n| n.role))));
+    }
+
+    /// Shows the Note / Summary switcher where there's room: the headerbar, or the bottom of a
+    /// narrow window. Without a Summary view, the headerbar shows the note's name.
+    fn place_switcher(&self) {
+        let summaries = self.has_summary();
+        let collapsed = self.main.upgrade().is_some_and(|m| m.split.is_collapsed());
+        self.title_stack.set_visible_child_name(if summaries && !collapsed { "switcher" } else { "title" });
+        self.switcher_bar.set_reveal(summaries && collapsed);
+        if !summaries {
+            self.views.set_visible_child_name("note");
+        }
+    }
+
+    /// Whether the note has a Summary view: AI Summaries is set up and the note is here.
+    fn has_summary(&self) -> bool {
+        self.store.features.borrow().summaries && self.doc.borrow().has_data && !self.lost.get()
+    }
+
+    /// Switches to the note's Summary view.
+    pub fn show_summary(&self) {
+        if self.has_summary() {
+            self.views.set_visible_child_name("summary");
+        }
+    }
+
+    /// The summary as shown, if the Summary view is open.
+    pub fn summary_text(&self) -> String {
+        if self.views.visible_child_name().as_deref() == Some("summary") { self.summary.text() } else { String::new() }
     }
 
     fn menu(&self, role: Option<Role>) -> gio::Menu {
@@ -613,8 +696,8 @@ impl Editor {
                 }
             })
         };
-        if self.store.features.borrow().summaries && self.doc.borrow().has_data && !self.lost.get() {
-            action(&ai, "Summary", "summary", open(super::ai::summary_dialog));
+        if self.has_summary() {
+            action(&ai, "Summary", "summary", open(|_, e| e.show_summary()));
             if self.can_edit() {
                 action(&ai, "Edit with AI…", "edit-ai", open(|m, e| super::ai::rewrite_dialog(m, e, super::ai::Rewrite::Edit)));
                 action(&ai, "Tidy Up", "tidy", open(|m, e| super::ai::rewrite_dialog(m, e, super::ai::Rewrite::Tidy)));
@@ -2770,6 +2853,9 @@ impl Editor {
             t.remove();
         }
         self.completer.hide();
+        if let (Some(id), Some(main)) = (self.collapsed_handler.take(), self.main.upgrade()) {
+            main.split.disconnect(id);
+        }
         if let Some((_, media)) = self.player.take() {
             media.pause();
         }
