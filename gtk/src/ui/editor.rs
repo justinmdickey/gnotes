@@ -105,6 +105,8 @@ pub struct Editor {
     player: RefCell<Option<(String, gtk::MediaFile)>>,
     /// Typing focuses a new note once its content has arrived.
     focus_when_ready: Cell<bool>,
+    /// The note was made here just now: it's yours, whatever the tree says while it catches up.
+    fresh: Cell<bool>,
 }
 
 /// Forwards websocket events to the editor without keeping it alive.
@@ -421,6 +423,7 @@ impl Editor {
             photo_tags: Default::default(),
             player: Default::default(),
             focus_when_ready: Cell::new(false),
+            fresh: Cell::new(false),
         });
 
         // Open from this computer's copy first, so the note shows with no network and the join
@@ -429,7 +432,10 @@ impl Editor {
             Some(saved) => doc.import(&saved).unwrap_or_default(),
             None => {
                 // A note made here, now or offline, starts empty; nothing to wait for.
-                if store.take_fresh(id) || store.is_queued(id) {
+                if store.take_fresh(id) {
+                    editor.fresh.set(true);
+                    doc.has_data = true;
+                } else if store.is_queued(id) {
                     doc.has_data = true;
                 }
                 Vec::new()
@@ -2782,8 +2788,9 @@ impl Editor {
         let doc = self.doc.borrow();
         let owner = self.role.get().or_else(|| self.store.note(&self.id).map(|n| n.role)) == Some(Role::Owner);
         let queued = self.store.is_queued(&self.id);
-        // Like Apple Notes, a note left blank doesn't stick around.
-        let blank = doc.has_data && !self.lost.get() && (owner || queued) && doc.text().trim().is_empty();
+        // Like Apple Notes, a note left blank doesn't stick around. A note made here is the user's
+        // own even before the tree lists it: a refresh in flight when it was made can leave it out.
+        let blank = doc.has_data && !self.lost.get() && (owner || queued || self.fresh.get()) && doc.text().trim().is_empty();
         drop(doc);
         if !blank {
             self.save();
