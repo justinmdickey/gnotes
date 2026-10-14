@@ -75,6 +75,14 @@ impl Hub {
         self.conns.lock().unwrap().remove(&id);
     }
 
+    /// Tells every client to refetch /tasks, like `tree_changed`.
+    pub fn tasks_changed(&self) {
+        let msg = control(json!({ "t": "tasks_changed" }));
+        for (_, tx) in self.conns.lock().unwrap().values() {
+            let _ = tx.send(msg.clone());
+        }
+    }
+
     /// Tells every client to refetch /tree. It carries no content, so it goes to everyone.
     pub fn tree_changed(&self) {
         let msg = control(json!({ "t": "tree_changed" }));
@@ -99,6 +107,8 @@ struct RoomState {
     unsnapshotted: usize,
     title: String,
     preview: String,
+    /// The note's tasks as last indexed, so an edit that doesn't touch them doesn't rewrite them.
+    tasks: Vec<crate::tasks::Task>,
     /// Bumped on every join so a pending idle close can tell someone came back.
     generation: u64,
     closed: bool,
@@ -231,6 +241,7 @@ async fn load(db: &sqlx::SqlitePool, id: Uuid) -> anyhow::Result<Room> {
         .fetch_optional(db)
         .await?
         .unwrap_or_default();
+    let tasks = crate::tasks::parse(&doc.get_text("body").to_string());
     Ok(Room {
         id,
         state: Mutex::new(RoomState {
@@ -241,6 +252,7 @@ async fn load(db: &sqlx::SqlitePool, id: Uuid) -> anyhow::Result<Room> {
             unsnapshotted: updates.len(),
             title,
             preview,
+            tasks,
             generation: 0,
             closed: false,
         }),
@@ -340,7 +352,7 @@ impl Room {
     }
 
     /// After `data` was imported into the doc: sends it to every client but `from`, and saves it,
-    /// the note's title, preview and search text, and which sessions (Loro peers) were `user_id`'s.
+    /// the note's title, preview, search text and tasks, and which sessions (Loro peers) were `user_id`'s.
     async fn record(&self, state: &AppState, st: &mut RoomState, from: u64, data: &[u8], user_id: &str, before: &VersionVector) {
         Self::broadcast(st, from, &frame(KIND_UPDATE, &self.id, data));
         // Sessions with new edits in this update are this user's, for showing who wrote what.
@@ -354,6 +366,8 @@ impl Room {
         let body = st.doc.get_text("body").to_string();
         let (title, preview) = summarize(&body);
         let summary_changed = title != st.title || preview != st.preview;
+        let tasks = crate::tasks::parse(&body);
+        let tasks_changed = tasks != st.tasks;
         let persisted = async {
             sqlx::query("INSERT INTO note_updates (note_id, seq, data, user_id, created_at) VALUES (?, ?, ?, ?, ?)")
                 .bind(&key)
@@ -380,6 +394,9 @@ impl Room {
                 .execute(&state.db)
                 .await?;
             crate::search::index(&state.db, &key, &body).await?;
+            if tasks_changed {
+                crate::tasks::index(&state.db, &key, &tasks).await?;
+            }
             anyhow::Ok(())
         }
         .await;
@@ -388,6 +405,10 @@ impl Room {
         }
         state.export.changed();
         state.embedder.changed(&key);
+        if tasks_changed {
+            st.tasks = tasks;
+            state.hub.tasks_changed();
+        }
         if summary_changed {
             st.title = title;
             st.preview = preview;

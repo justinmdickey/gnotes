@@ -33,6 +33,7 @@ A key acts as you: it sees what you see, including notes and notebooks shared wi
 | `POST /notes/{id}/append` | Add `{ "text" }` at the end, after a blank line |
 | `DELETE /notes/{id}` | Move a note you own to the trash (restorable for 30 days) |
 | `GET /search?q=` | Notes that match, best first. Query: `mode` (`words` or `meaning`), `limit` (20, max 50) |
+| `GET /tasks` | Checkbox lines in every note you can see, by due date. Query: `done` (`true` or `false`), `due_before` (`YYYY-MM-DD`) |
 
 Leave out `notebook_id` to work at the top level. On `PATCH`, `"notebook_id": null` moves a note to the top level.
 
@@ -89,6 +90,18 @@ curl -H "Authorization: Bearer $KEY" "$GNOTES/api/v1/search?q=deploy+checklist"
 
 ```json
 [{ "id": "019a…", "title": "Release", "snippet": "…the **deploy** **checklist** before tagging…" }]
+```
+
+## Tasks
+
+A task is any checkbox line in a note: `- [ ] Call the plumber @2026-10-20`, kanban cards included. `GET /tasks` lists them from every note you can see, soonest due first, with the note they're in and the line they're on. `due` comes from an `@YYYY-MM-DD` in the line and is left out of `text`; `column` is the board column for a card. To tick one, change the note's text: read it, change `- [ ]` to `- [x]` on that line, and `PATCH` it with the version you read.
+
+```sh
+curl -H "Authorization: Bearer $KEY" "$GNOTES/api/v1/tasks?done=false&due_before=2026-10-21"
+```
+
+```json
+[{ "note_id": "019a…", "note_title": "Garage", "notebook_id": "019a…", "line": 3, "text": "Call the plumber", "done": false, "due": "2026-10-20", "column": null }]
 ```
 
 ## Errors

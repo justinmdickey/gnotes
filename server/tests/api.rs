@@ -2018,3 +2018,94 @@ async fn agent_writes_merge_with_live_editing() {
     let agent = Agent::new(&alice, "read").await;
     assert_eq!(agent.ok(M::GET, &format!("/notes/{id}"), None).await["text"], "Shopping\nmilk\neggs\n");
 }
+
+async fn tasks(user: &User) -> Vec<Value> {
+    user.get("/tasks").await["tasks"].as_array().unwrap().clone()
+}
+
+#[tokio::test]
+async fn tasks_follow_sharing_and_tick_live() {
+    let dir = TempDir::new().unwrap();
+    let server = start(&dir).await;
+    let alice = user(&server, "alice").await;
+    let bob = user(&server, "bob").await;
+    let agent = Agent::new(&alice, "write").await;
+    use reqwest::Method as M;
+    let home = alice.post("/notebooks", json!({ "name": "Home" })).await["id"].as_str().unwrap().to_owned();
+    let garage = alice.post("/notes", json!({ "notebook_id": home })).await["id"].as_str().unwrap().to_owned();
+    let loose = alice.post("/notes", json!({})).await["id"].as_str().unwrap().to_owned();
+    let mut ws = alice.ws().await;
+    let garage_text = "Garage\n- [ ] Call about the door @2026-10-12\n- [x] Hang hooks\n```kanban\n## Doing\n- [ ] Order tiles\n```";
+    for (note, text) in [(&garage, garage_text), (&loose, "Errands\n- [ ] Return the table")] {
+        ws.join_and_sync(note, None).await;
+        ws.send_frame(0x01, note, &edit(&LoroDoc::new(), 0, text)).await;
+        ws.control("tasks_changed").await;
+    }
+
+    // Alice sees all four, dated first; boards give their column.
+    let all = tasks(&alice).await;
+    let texts: Vec<&str> = all.iter().map(|t| t["text"].as_str().unwrap()).collect();
+    assert_eq!(texts[0], "Call about the door");
+    assert_eq!(all[0]["due"], "2026-10-12");
+    assert_eq!(all[0]["notebook"], home.as_str());
+    assert_eq!(all.len(), 4);
+    let tiles = all.iter().find(|t| t["text"] == "Order tiles").unwrap();
+    assert_eq!(tiles["column"], "Doing");
+    assert_eq!(tiles["line"], 5);
+    assert_eq!(alice.get("/tasks?done=true").await["tasks"].as_array().unwrap().len(), 1);
+
+    // Bob sees nothing until it's shared; a viewer can't tick.
+    assert!(tasks(&bob).await.is_empty());
+    alice.post("/shares", json!({ "resource_type": "notebook", "resource_id": home, "username": "bob", "role": "viewer" })).await;
+    assert_eq!(tasks(&bob).await.len(), 3);
+    let tick = |note: &str, line: i64, text: &str, done: bool| json!({ "note": note, "line": line, "text": text, "done": done });
+    let res = bob.send(M::POST, "/tasks/toggle", tick(&garage, 1, "Call about the door", true)).await;
+    assert_eq!(res.status(), 403);
+    let res = bob.send(M::POST, "/tasks/toggle", tick(&loose, 1, "Return the table", true)).await;
+    assert_eq!(res.status(), 404, "not shared with bob");
+
+    // An editor ticks from the list; alice's open editor gets it live.
+    alice.post("/shares", json!({ "resource_type": "note", "resource_id": loose, "username": "bob", "role": "editor" })).await;
+    bob.post("/tasks/toggle", tick(&loose, 1, "Return the table", true)).await;
+    let doc = LoroDoc::new();
+    doc.import(&ws.frame(0x01).await).unwrap();
+    assert_eq!(agent.ok(M::GET, &format!("/notes/{loose}"), None).await["text"], "Errands\n- [x] Return the table");
+    assert!(tasks(&bob).await.iter().any(|t| t["text"] == "Return the table" && t["done"] == true));
+
+    // A line that changed since the list loaded is a conflict, and the note is left alone.
+    let res = alice.send(M::POST, "/tasks/toggle", tick(&garage, 2, "Call about the door", true)).await;
+    assert_eq!(res.status(), 409);
+    let res = alice.send(M::POST, "/tasks/toggle", tick(&garage, 1, "Call about the gate", true)).await;
+    assert_eq!(res.status(), 409);
+    assert_eq!(agent.ok(M::GET, &format!("/notes/{garage}"), None).await["text"], garage_text);
+    // Unticking a board card keeps the rest of its line.
+    alice.post("/tasks/toggle", tick(&garage, 1, "Call about the door", true)).await;
+    alice.post("/tasks/toggle", tick(&garage, 1, "Call about the door", false)).await;
+    alice.post("/tasks/toggle", tick(&garage, 5, "Order tiles", true)).await;
+    assert_eq!(
+        agent.ok(M::GET, &format!("/notes/{garage}"), None).await["text"],
+        garage_text.replace("- [ ] Order tiles", "- [x] Order tiles")
+    );
+
+    // Agents filter by done and due date; trashed notes drop out.
+    let open = agent.ok(M::GET, "/tasks?done=false&due_before=2026-10-13", None).await;
+    assert_eq!(open.as_array().unwrap().len(), 1);
+    assert_eq!(open[0]["note_title"], "Garage");
+    assert_eq!(open[0]["text"], "Call about the door");
+    assert_eq!(agent.call(M::GET, "/tasks?due_before=soon", None).await.0, 400);
+    agent.ok(M::DELETE, &format!("/notes/{garage}"), None).await;
+    let left: Vec<Value> = tasks(&alice).await;
+    assert_eq!(left.len(), 1);
+    assert_eq!(left[0]["note"], loose.as_str());
+
+    // Notes from before the index existed are indexed once at startup.
+    sqlx::query("DELETE FROM note_tasks").execute(&server.state.db).await.unwrap();
+    sqlx::query("DELETE FROM settings WHERE key = 'tasks_backfilled'").execute(&server.state.db).await.unwrap();
+    drop(ws);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    server.task.abort();
+    drop(server);
+    let server = start(&dir).await;
+    let alice = login(&server.base, "alice").await;
+    assert_eq!(tasks(&alice).await.len(), 1);
+}

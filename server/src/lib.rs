@@ -18,6 +18,7 @@ pub mod semantic;
 pub mod settings;
 pub mod shares;
 pub mod summary;
+pub mod tasks;
 pub mod tidy;
 pub mod tree;
 pub mod util;
@@ -216,6 +217,8 @@ pub fn router(state: AppState) -> Router {
         .route("/notes/{id}/write", post(ai_edit::write))
         .route("/notes/{id}/authors", get(authors::list_authors))
         .route("/search", get(search::search))
+        .route("/tasks", get(tasks::list))
+        .route("/tasks/toggle", post(tasks::toggle))
         .route("/search/meaning", get(semantic::search))
         .route("/ask", post(ask::ask))
         .route("/attachments/{id}/text", post(attachments::photo_text))
@@ -267,6 +270,7 @@ pub async fn build(config: Config) -> anyhow::Result<AppState> {
         http: reqwest::Client::builder().timeout(Duration::from_secs(300)).build()?,
     };
     search::backfill(&state).await?;
+    tasks::backfill(&state).await?;
     Ok(state)
 }
 

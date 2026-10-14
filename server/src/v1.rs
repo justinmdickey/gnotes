@@ -23,6 +23,7 @@ use crate::{
     rooms::{read_text, write_text},
     search::{SearchResult, by_words},
     semantic::by_meaning,
+    tasks,
     tree::{add_note, add_notebook, load_tree, move_note, trash_note},
     util::{double_option, new_id, parse_id},
 };
@@ -41,6 +42,7 @@ pub fn router() -> Router<AppState> {
         .route("/notes/{id}", get(get_note).patch(update_note).delete(delete_note))
         .route("/notes/{id}/append", post(append))
         .route("/search", get(search))
+        .route("/tasks", get(list_tasks))
         .fallback(|| async { AppError::BadRequest("No such endpoint; see docs/API.md".into()) })
 }
 
@@ -408,4 +410,52 @@ async fn search(State(state): State<AppState>, key: KeyUser, Query(q): Query<Sea
         })
         .collect();
     Ok(Json(hits))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TasksQuery {
+    done: Option<bool>,
+    due_before: Option<String>,
+}
+
+#[derive(Serialize)]
+struct Task {
+    /// The note it's in.
+    note_id: String,
+    note_title: String,
+    notebook_id: Option<String>,
+    /// 0-based line in the note's text.
+    line: i64,
+    text: String,
+    done: bool,
+    /// `YYYY-MM-DD`, from an `@YYYY-MM-DD` in the line.
+    due: Option<String>,
+    /// The column, for a card on a kanban board.
+    column: Option<String>,
+}
+
+/// `GET /v1/tasks?done=&due_before=`: checkbox lines in every note you can see, by due date.
+async fn list_tasks(State(state): State<AppState>, key: KeyUser, Query(q): Query<TasksQuery>) -> ApiResult<Json<Vec<Task>>> {
+    if let Some(d) = &q.due_before
+        && !tasks::is_date(d)
+    {
+        return Err(AppError::BadRequest("due_before is a date like 2026-10-20".into()));
+    }
+    let found = tasks::visible(&state, &key.user.id, q.done, q.due_before.as_deref()).await?;
+    Ok(Json(
+        found
+            .into_iter()
+            .map(|t| Task {
+                note_id: t.note,
+                note_title: t.title,
+                notebook_id: t.notebook,
+                line: t.line,
+                text: t.text,
+                done: t.done,
+                due: t.due,
+                column: t.column,
+            })
+            .collect(),
+    ))
 }
