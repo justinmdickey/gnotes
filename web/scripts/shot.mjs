@@ -2,7 +2,7 @@
 // Starts a throwaway server with demo data, logs in, and saves one PNG per screen.
 //
 // Usage: npm run build && cargo build -p gnotes-server && node scripts/shot.mjs [options] [screen...]
-//   screens: home recent shared account trash notebook:<name> note:<title> edit:<title> search:<query>
+//   screens: home recent tasks shared account trash notebook:<name> note:<title> edit:<title> search:<query>
 //            ask (the Ask tab, empty; without --ai, the page saying it isn't set up)
 //            find:<query> (typed in Ask's field, not sent, with --ai)
 //            ask:<question>[|<follow-up>...] (with --ai) service:<form> (a Settings service form, e.g. service:embed)
@@ -151,10 +151,10 @@ async function seed(page) {
       fetch(`/api${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then((r) => r.json());
     const home = (await post("/notebooks", { name: "Home", parent_id: null })).id;
     const kitchen = (await post("/notebooks", { name: "Kitchen", parent_id: home })).id;
-    await post("/notebooks", { name: "Garage", parent_id: home });
+    const garage = (await post("/notebooks", { name: "Garage", parent_id: home })).id;
     await post("/notebooks", { name: "Personal", parent_id: null });
     await post("/shares", { resource_type: "notebook", resource_id: home, username: "bob", role: "editor" });
-    return { kitchen };
+    return { kitchen, garage };
   });
   // Note text only exists through the editor, so type it in.
   const write = async (hash, text) => {
@@ -167,6 +167,12 @@ async function seed(page) {
   };
   // Lists continue on Enter, so only the first item gets its marker.
   await write("#/", "# Groceries\nmilk\n- [ ] eggs\nbread");
+  // Tasks with due dates, one late and one today, for the Tasks tab.
+  const day = (n) => {
+    const d = new Date(Date.now() + n * 864e5);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  };
+  await write(`#/nb/${ids.garage}`, `# Garage\nThe door sticks when it's cold.\n- [ ] Call about the door quote @${day(-2)}\nBuy a furnace filter @${day(0)}\nHang the bike hooks @${day(4)}`);
   await write(`#/nb/${ids.kitchen}`, "# Pantry\nrice, beans, flour\nRestock from [the co-op](https://example.com/co-op) or https://example.org/bulk");
   // Code blocks: one labeled, one left for the guesser.
   await write("#/", '# Snippets\nRun this first:\n```bash\nnpm run build\n```\nThen:\n```\n// say hi\nconst greet = (name) => `Hello ${name}`;\nconsole.log(greet("Ada"), 42);\n```\nAnd Lua:\n```\nlocal M = {}\nfunction M.setup(opts)\nfor k, v in pairs(opts) do print(k, v) end\nend\nreturn M\n```\nDone.');
@@ -197,6 +203,7 @@ async function go(page, target) {
   const hash = {
     home: "#/",
     recent: "#/all",
+    tasks: "#/tasks",
     shared: "#/shared",
     account: "#/settings",
     trash: "#/trash",

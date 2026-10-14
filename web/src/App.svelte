@@ -16,6 +16,7 @@
   import NoteList from "./NoteList.svelte";
   import Sidebar from "./Sidebar.svelte";
   import TabBar from "./TabBar.svelte";
+  import Tasks from "./Tasks.svelte";
   import Trash from "./Trash.svelte";
 
   type Pane = "sidebar" | "list" | "editor";
@@ -236,7 +237,7 @@
         {#if p === "sidebar"}
           <Sidebar />
         {:else if p === "list"}
-          {#if app.view.kind === "trash"}<Trash />{:else if app.view.kind === "ask"}<Ask />{:else}<NoteList />{/if}
+          {#if app.view.kind === "trash"}<Trash />{:else if app.view.kind === "ask"}<Ask />{:else if app.view.kind === "tasks"}<Tasks />{:else}<NoteList />{/if}
         {:else if shownNote}
           {#key shownNote}
             <div class="note-swap" in:fadeIn={{ duration: 160 }}>

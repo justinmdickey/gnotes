@@ -2,7 +2,7 @@
 // Loro snapshot, the last /tree, notes with edits the server may not have yet, and notes made
 // while offline. One IndexedDB database per account, deleted on logout. See "PWA → Offline" in docs/DESIGN.md.
 import { LoroDoc, type VersionVector } from "loro-crdt";
-import { api, ApiError, type Tree, type User } from "./api";
+import { api, ApiError, type TaskItem, type Tree, type User } from "./api";
 import { sync, type NoteHandler } from "./sync";
 
 const STORES = ["notes", "dirty", "pending", "kv"] as const;
@@ -87,6 +87,8 @@ export const cache = {
   saveNote: (id: string, doc: LoroDoc) => put("notes", id, doc.export({ mode: "snapshot" })),
   tree: () => get<Tree>("kv", "tree"),
   saveTree: (tree: Tree) => put("kv", "tree", tree),
+  tasks: () => get<TaskItem[]>("kv", "tasks"),
+  saveTasks: (tasks: TaskItem[]) => put("kv", "tasks", tasks),
   /** Marks a note as having edits the server may not have. */
   markDirty: (id: string) => put("dirty", id, true),
   clearDirty: (id: string) => del("dirty", id),

@@ -10,7 +10,7 @@
   const active = $derived.by(() => {
     if (app.settings) return null;
     const v = app.view;
-    if (v.kind === "all") return "recent";
+    if (v.kind === "tasks") return "tasks";
     if (v.kind === "ask") return "ask";
     if (v.kind === "shared-notes") return "shared";
     if (v.kind === "notebook" && app.tree.notebooks.find((n) => n.id === v.id)?.role !== "owner") return "shared";
@@ -20,7 +20,7 @@
   type Tab = { key: string; label: string; icon: IconName; view: View; find?: boolean };
   const left: Tab[] = [
     { key: "notes", label: "Notes", icon: "folder", view: { kind: "root" } },
-    { key: "recent", label: "Recent", icon: "clock", view: { kind: "all" } },
+    { key: "tasks", label: "Tasks", icon: "checklist", view: { kind: "tasks" } },
   ];
   // Until AI search is set up, Ask's place is Search: the Notes list, with the cursor in its search field.
   const right: Tab[] = $derived([

@@ -6,6 +6,7 @@
   import { longPress } from "./lib/longPress";
   import NewNotebookDialog from "./NewNotebookDialog.svelte";
   import RowMenu, { hasActions, type RowPress } from "./RowMenu.svelte";
+  import { tasks } from "./lib/tasks.svelte";
   import { app, canMoveTo, colorFor, composeNote, drag, moveTo, navigate, notesFor, openSettings, type View } from "./lib/store.svelte";
   import { media, scrollEdge } from "./lib/ui.svelte";
 
@@ -15,6 +16,8 @@
     if (view.kind === "root") return notes + ownRoots.length;
     if (view.kind === "shared-notes") return notes + sharedRoots.length;
     if (view.kind === "notebook") return notes + (byParent.get(view.id)?.length ?? 0);
+    // Open tasks, once Tasks has been opened; nothing before then rather than a wrong 0.
+    if (view.kind === "tasks") return tasks.items ? tasks.items.filter((t) => !t.done).length || "" : "";
     return notes;
   }
 
@@ -326,7 +329,7 @@
   </header>
 
   <div class="scroll" use:scrollEdge>
-    <!-- The same places as the phone's tab bar: Ask (Search, into the Notes list, without AI), Recent and Shared, with
+    <!-- The same places as the phone's tab bar: Ask (Search, into the Notes list, without AI), Tasks, Recent and Shared, with
          what's shared with you folding under it. Then your folders under a heading, so the tree starts at the left edge. -->
     <ul class="group">
       <li>
@@ -342,6 +345,7 @@
           </button>
         {/if}
       </li>
+      {@render row({ kind: "tasks" }, "checklist", "Tasks")}
       {@render row({ kind: "all" }, "clock", "Recent")}
       {#if sharedRoots.length || hasSharedNotes || sharedByMe}
         {@render row({ kind: "shared-notes" }, "people", "Shared", "", 0, sharedRoots.length || sharedNotes.length ? SHARED : null)}

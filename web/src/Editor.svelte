@@ -170,6 +170,24 @@
     }
   }
 
+  // Opened from Tasks: scroll to the task's line and light it up for a moment, without bringing up the keyboard.
+  $effect(() => {
+    const jump = app.jump;
+    const v = view;
+    if (!jump || jump.note !== ownId || !loaded || !v) return;
+    untrack(() => {
+      app.jump = null;
+      const line = v.state.doc.line(Math.min(jump.line + 1, v.state.doc.lines));
+      v.dispatch({ effects: EditorView.scrollIntoView(line.from, { y: "center" }) });
+      requestAnimationFrame(() => {
+        const at = v.domAtPos(line.from).node;
+        const el = (at instanceof Element ? at : at.parentElement)?.closest(".cm-line, .cm-kanban");
+        el?.classList.add("cm-jumped");
+        setTimeout(() => el?.classList.remove("cm-jumped"), 1600);
+      });
+    });
+  });
+
   const markdownStyle = HighlightStyle.define([
     { tag: [tags.heading1, tags.heading2, tags.heading3, tags.heading4, tags.heading5, tags.heading6], fontWeight: "inherit" },
     { tag: tags.strong, fontWeight: "700" },
@@ -1573,6 +1591,22 @@
     background: var(--accent-bg)
       url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 8.5l2.5 2.5L12 5.5' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
       center / 80% no-repeat;
+  }
+
+  /* The line a task in Tasks pointed at, lit like a search match for a moment. */
+  .page :global(.cm-jumped) {
+    animation: jumped 1.6s ease-out;
+    border-radius: var(--radius-sm);
+  }
+
+  @keyframes jumped {
+    0%,
+    40% {
+      background: color-mix(in srgb, var(--highlight-bg) 50%, transparent);
+    }
+    100% {
+      background: transparent;
+    }
   }
 
   /* Who wrote each line: a bar in their color in the margin, with room around it to point at or tap. */

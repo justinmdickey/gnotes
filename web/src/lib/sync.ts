@@ -50,6 +50,8 @@ export class SyncClient {
   private status: Status = "connecting";
 
   onTreeChanged = () => {};
+  /** A note's tasks changed somewhere: the Tasks list refetches if it's showing. */
+  onTasksChanged = () => {};
   onStatus = (_: Status) => {};
 
   constructor() {
@@ -167,6 +169,7 @@ export class SyncClient {
     }
     const msg = JSON.parse(data);
     if (msg.t === "tree_changed") return this.onTreeChanged();
+    if (msg.t === "tasks_changed") return this.onTasksChanged();
     const h = msg.note ? this.notes.get(msg.note) : undefined;
     if (!h) return;
     switch (msg.t) {

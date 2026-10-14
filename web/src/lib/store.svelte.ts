@@ -3,6 +3,7 @@ import { sync, type Status } from "./sync";
 import { cache, closeCache, flush, isQueued, loadQueue, openCache, queueNote, unreachable, uuidv7 } from "./offline";
 import { media, toast } from "./ui.svelte";
 import { endChat, startChat } from "./ask.svelte";
+import { forgetTasks, refreshTasks } from "./tasks.svelte";
 
 /** What the note list shows. */
 export type View =
@@ -12,7 +13,9 @@ export type View =
   | { kind: "shared-notes" }
   | { kind: "trash" }
   /** Search and Ask in one screen: Ask once AI search is set up, plain Search before. */
-  | { kind: "ask" };
+  | { kind: "ask" }
+  /** Every open checkbox in every note you can see. */
+  | { kind: "tasks" };
 
 export const app = $state({
   user: null as User | null,
@@ -36,6 +39,8 @@ export const app = $state({
   listReset: 0,
   /** Set by Search (without AI), so the Notes list puts the cursor in its search field. */
   findNotes: false,
+  /** A note to open at one line, from the Tasks list; the editor scrolls there and lets it go. */
+  jump: null as { note: string; line: number } | null,
   /** Why the user was sent back to the login screen, if it wasn't their choice. */
   signedOutReason: "" as string,
 });
@@ -51,12 +56,13 @@ export function viewTitle(view: View, tree: Tree): string {
   if (view.kind === "shared-notes") return "Shared";
   if (view.kind === "trash") return "Trash";
   if (view.kind === "ask") return "Ask";
+  if (view.kind === "tasks") return "Tasks";
   return tree.notebooks.find((n) => n.id === view.id)?.name ?? "Notes";
 }
 
 /** Where new notes from `view` go: Shared, Trash and view-only notebooks can't take them, so the top folder does. */
 export function addableView(view: View): View {
-  if (view.kind === "shared-notes" || view.kind === "trash" || view.kind === "ask") return { kind: "root" };
+  if (view.kind === "shared-notes" || view.kind === "trash" || view.kind === "ask" || view.kind === "tasks") return { kind: "root" };
   if (view.kind === "notebook") {
     const id = view.id;
     if (app.tree.notebooks.find((n) => n.id === id)?.role === "viewer") return { kind: "root" };
@@ -172,6 +178,7 @@ export function startSession(user: User) {
   });
   void loadQueue();
   sync.onTreeChanged = () => void refreshTree();
+  sync.onTasksChanged = () => void refreshTasks();
   sync.onStatus = (s) => {
     app.status = s;
     if (s === "online") {
@@ -203,6 +210,7 @@ export async function endSession() {
   // Nothing of this account stays on the device for the next person.
   await closeCache(true);
   endChat();
+  forgetTasks();
   app.user = null;
   app.tree = { notebooks: [], notes: [], shared: [] };
   app.settings = false;
@@ -215,6 +223,7 @@ export async function endSession() {
 //   #/all  #/shared  #/nb/<id>        Recent, Shared with Me, a notebook
 //   #/trash                           deleted notes and notebooks
 //   #/ask                             Ask: a conversation with your notes
+//   #/tasks                           Tasks: open checkboxes from every note
 //   #/note/<id>  #/nb/<id>/note/<id>  a note, remembering the list it came from
 
 function viewPath(view: View): string {
@@ -222,6 +231,7 @@ function viewPath(view: View): string {
   if (view.kind === "root") return "";
   if (view.kind === "trash") return "trash";
   if (view.kind === "ask") return "ask";
+  if (view.kind === "tasks") return "tasks";
   return view.kind === "shared-notes" ? "shared" : "all";
 }
 
@@ -279,8 +289,8 @@ export function goBack() {
 
 /** The screen above a note list: a notebook's parent notebook or the top folder, or nothing for tabs. */
 export function parentView(view: View): View | null {
-  // Trash sits at the bottom of the top folder.
-  if (view.kind === "trash") return { kind: "root" };
+  // Trash sits at the bottom of the top folder, and on phones Recent does too.
+  if (view.kind === "trash" || (view.kind === "all" && media.phone)) return { kind: "root" };
   if (view.kind !== "notebook") return null;
   const nb = app.tree.notebooks.find((n) => n.id === view.id);
   if (nb?.parent_id && app.tree.notebooks.some((n) => n.id === nb.parent_id)) return { kind: "notebook", id: nb.parent_id };
@@ -333,6 +343,7 @@ export function readHash() {
   else if (base === "all") view = { kind: "all" };
   else if (base === "trash") view = { kind: "trash" };
   else if (base === "ask") view = { kind: "ask" };
+  else if (base === "tasks") view = { kind: "tasks" };
   apply(view, note);
 }
 
@@ -353,6 +364,7 @@ export function notesFor(view: View, tree: Tree): TreeNote[] {
     }
     case "trash":
     case "ask":
+    case "tasks":
       return [];
   }
 }

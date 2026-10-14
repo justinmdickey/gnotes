@@ -429,8 +429,15 @@
     {#if asking && !questionLike && (groups.length || folders.length)}{@render askRow(false)}{/if}
     {/key}
     {#if media.phone && app.view.kind === "root" && !q}
-      <!-- Last, where the desktop sidebar keeps it too. -->
+      <!-- Recent left the tab bar for Tasks, so it sits here with Trash, last, where the desktop sidebar keeps Trash too. -->
       <ul class="boxed-list trash-link">
+        <li>
+          <button class="flat place-row" onclick={() => navigate({ kind: "all" })}>
+            <Icon name="clock" />
+            <span class="name">Recent</span>
+            <span class="dim chev"><Icon name="next" /></span>
+          </button>
+        </li>
         <li>
           <button class="flat place-row" onclick={() => navigate({ kind: "trash" })}>
             <Icon name="trash" />

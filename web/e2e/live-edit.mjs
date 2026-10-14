@@ -1079,7 +1079,7 @@ try {
   const rows = await sidebar();
   const at = (name) => rows.indexOf(name);
   check(at("Vault") < at("Trips") && at("Trips") < at("Camping") && at("Camping") < at("Ideas") && at("Lisbon") === -1, `sidebar shows folders, then notes, with sub-folders folded (${rows})`);
-  check(rows[0] === "Ask" && rows[1] === "Recent" && rows.at(-1) === "Trash", "the sidebar starts with Ask and Recent and ends with Trash, after the folders");
+  check(rows[0] === "Ask" && rows[1] === "Tasks" && rows[2] === "Recent" && rows.at(-1) === "Trash", "the sidebar starts with Ask, Tasks and Recent and ends with Trash, after the folders");
   await alice.click("nav button[aria-label=\"Show what's in Trips\"]");
   await alice.waitForFunction(() => [...document.querySelectorAll("nav .note-row .label")].some((l) => l.textContent === "Lisbon"));
   check(true, "unfolding a notebook shows its notes");
@@ -1211,12 +1211,12 @@ try {
   await dave.waitForFunction(() => document.querySelector(".hero h1")?.textContent === "Club");
   const daveSub = await dave.$eval(".hero-text .dim", (e) => e.textContent);
   check(daveSub === "Shared by Alice · can edit", `a notebook shared with you says who shared it (${daveSub})`);
-  // Shared sits up top with Recent, with its own icon, and what's shared with you folds under it.
+  // Shared sits up top with Tasks and Recent, with its own icon, and what's shared with you folds under it.
   const daveTop = await dave.evaluate(() =>
     [...document.querySelectorAll("nav .scroll > .group:first-child .row")].map((r) => [r.querySelector(".label").textContent, !!r.querySelector("svg")]),
   );
   check(
-    JSON.stringify(daveTop.slice(1).map(([l]) => l)) === '["Recent","Shared","Club"]' && daveTop.every(([, icon]) => icon),
+    JSON.stringify(daveTop.slice(1).map(([l]) => l)) === '["Tasks","Recent","Shared","Club"]' && daveTop.every(([, icon]) => icon),
     `Shared is a top row with an icon, the shared notebook under it (${JSON.stringify(daveTop)})`,
   );
   if (process.env.SHOTS) await dave.screenshot({ path: join(process.env.SHOTS, "desktop-sidebar-shared.png") });
@@ -1967,13 +1967,49 @@ try {
     await alice.keyboard.press("Backspace");
     await alice.tap(".editor header button.done");
     await alice.waitForSelector(".tabbar");
-    // The tab bar is Notes, Recent, +, Ask, Shared; Account is your avatar at the top right of each tab.
+    // The tab bar is Notes, Tasks, +, Ask, Shared; Account is your avatar at the top right of each tab.
     check(
-      await alice.evaluate(() => [...document.querySelectorAll(".tabbar > *")].map((t) => t.textContent.trim() || "+").join(",") === "Notes,Recent,+,Ask,Shared"),
-      "the phone tab bar is Notes, Recent, +, Ask, Shared",
+      await alice.evaluate(() => [...document.querySelectorAll(".tabbar > *")].map((t) => t.textContent.trim() || "+").join(",") === "Notes,Tasks,+,Ask,Shared"),
+      "the phone tab bar is Notes, Tasks, +, Ask, Shared",
     );
-    await alice.evaluate(() => [...document.querySelectorAll(".tabbar button")].find((b) => b.textContent.includes("Recent")).click());
-    await alice.waitForFunction(() => document.querySelector(".pane.list .hero h1")?.textContent === "Recent");
+    // Tasks: a checkbox typed in any note shows on the Tasks tab, by due date, with where it lives.
+    const today = new Date();
+    const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+    await alice.tap(".tabbar .compose");
+    await alice.waitForSelector(".pane.editor .cm-content[contenteditable=true]");
+    await alice.keyboard.type(`Errands\n- [ ] Return the folding table @${todayIso}`);
+    await alice.tap(".editor header button.done");
+    await alice.waitForSelector(".tabbar");
+    await alice.evaluate(() => [...document.querySelectorAll(".tabbar button")].find((b) => b.textContent.includes("Tasks")).click());
+    await alice.waitForFunction(() => location.hash === "#/tasks" && document.querySelector(".pane.list .hero h1")?.textContent === "Tasks");
+    await alice.waitForFunction(() => [...document.querySelectorAll(".pane.list .task .text")].some((t) => t.textContent === "Return the folding table"), { timeout: 5000 });
+    const errand = () =>
+      alice.evaluate(() => {
+        const row = [...document.querySelectorAll(".pane.list .task")].find((t) => t.querySelector(".text").textContent === "Return the folding table");
+        const group = row?.closest("ul")?.previousElementSibling?.textContent;
+        return row && { group, where: row.querySelector(".where").textContent, due: row.querySelector(".due")?.textContent, done: row.querySelector(".box").getAttribute("aria-checked") };
+      });
+    const before = await errand();
+    check(before.group === "Today" && before.due === "Today" && before.where.endsWith("Errands"), `a task due today shows under Today with its note (${JSON.stringify(before)})`);
+    check(await alice.evaluate(() => document.querySelector(".tabbar .tab.on")?.textContent.includes("Tasks")), "the Tasks tab is lit on Tasks");
+    await shot("phone-tasks-dark");
+    // Ticking it from the list changes the note itself; Undo puts it back.
+    const serverDone = () => alice.evaluate(() => fetch("/api/tasks").then((r) => r.json()).then((r) => r.tasks.find((t) => t.text === "Return the folding table")?.done));
+    await alice.tap(".pane.list .task .box");
+    await alice.waitForFunction(async () => (await fetch("/api/tasks").then((r) => r.json())).tasks.some((t) => t.text === "Return the folding table" && t.done), { timeout: 5000, polling: 200 });
+    check((await errand()).done === "true", "ticking a task from Tasks checks it off in its note");
+    await alice.waitForSelector(".toast button");
+    await alice.tap(".toast button");
+    await alice.waitForFunction(async () => (await fetch("/api/tasks").then((r) => r.json())).tasks.some((t) => t.text === "Return the folding table" && !t.done), { timeout: 5000, polling: 200 });
+    check((await serverDone()) === false, "Undo unticks it again");
+    // Tapping its text opens the note at that line, with Tasks to go back to.
+    await alice.waitForFunction(() => !document.querySelector(".toast"), { timeout: 15000 });
+    await alice.evaluate(() => [...document.querySelectorAll(".pane.list .task .what")].find((b) => b.textContent.includes("Return the folding table")).click());
+    await alice.waitForFunction(() => location.hash.startsWith("#/tasks/note/") && !!document.querySelector(".pane.editor .cm-jumped"), { timeout: 5000 });
+    check(await alice.evaluate(() => document.querySelector(".pane.editor .cm-jumped")?.textContent.includes("Return the folding table")), "a task's text opens its note with that line lit");
+    await alice.click(".pane.editor .back-icon");
+    await alice.waitForFunction(() => location.hash === "#/tasks" && document.querySelector(".pane.list .hero h1")?.textContent === "Tasks");
+    check(true, "Back from the note returns to Tasks");
     const avatar = await alice.evaluate(() => {
       const bar = document.querySelector(".pane.list .headerbar").getBoundingClientRect();
       const button = document.querySelector(".pane.list .headerbar .account").getBoundingClientRect();
@@ -2008,7 +2044,7 @@ try {
     check(true, "Account's title moves into the headerbar once it scrolls away");
     await alice.$eval(".tab-page .scroll", (el) => el.scrollTo(0, 0));
     await alice.$eval(".tab-page .back-icon", (b) => b.click());
-    await alice.waitForFunction(() => !document.querySelector(".tab-page") && document.querySelector(".pane.list .hero h1")?.textContent === "Recent");
+    await alice.waitForFunction(() => !document.querySelector(".tab-page") && document.querySelector(".pane.list .hero h1")?.textContent === "Tasks");
     check(true, "Account's back chevron returns to the tab it was opened from");
     await alice.$eval(".pane.list .headerbar .account", (b) => b.click());
     await alice.waitForFunction(() => document.querySelector(".tab-page h1")?.textContent === "Account");
@@ -2018,7 +2054,7 @@ try {
     // Trash is the last row of the Notes tab, as on the desktop sidebar; it keeps Notes lit and Back returns there.
     await alice.evaluate(() => [...document.querySelectorAll(".tabbar button")].find((b) => b.textContent.includes("Notes")).click());
     await alice.waitForFunction(() => document.querySelector(".pane.list .hero h1")?.textContent === "Notes");
-    check(await alice.evaluate(() => document.querySelector(".pane.list .scroll > :last-child")?.textContent.trim() === "Trash"), "Trash is the last row on the phone's Notes screen");
+    check(await alice.evaluate(() => /^\s*Recent\s*Trash\s*$/.test(document.querySelector(".pane.list .scroll > :last-child")?.textContent ?? "")), "Recent and Trash are the last rows on the phone's Notes screen");
     await alice.click(".pane.list .trash-link button");
     await alice.waitForFunction(() => document.querySelector(".pane.list .hero h1")?.textContent === "Trash");
     check(await alice.evaluate(() => document.querySelector(".tabbar .tab.on")?.textContent.includes("Notes")), "Trash opens from the Notes tab and keeps it lit");

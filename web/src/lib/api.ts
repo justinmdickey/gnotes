@@ -135,6 +135,23 @@ export interface SnippetPart {
 }
 
 /** A note that matched a search, best first. Only notes you can see come back. */
+/** A checkbox line in a note, from the server's task index (server/src/tasks.rs). */
+export interface TaskItem {
+  note: string;
+  /** The note's title. */
+  title: string;
+  notebook: string | null;
+  /** 0-based line in the note's text. */
+  line: number;
+  /** The task without its "- [ ]" or due date. */
+  text: string;
+  done: boolean;
+  /** "YYYY-MM-DD", from an "@YYYY-MM-DD" in the line. */
+  due: string | null;
+  /** The column, for a card on a kanban board. */
+  column: string | null;
+}
+
 export interface SearchResult {
   note: string;
   title: string;
@@ -306,6 +323,9 @@ export const api = {
     request("PATCH", `/admin/users/${id}`, patch),
   adminResetPassword: (id: string, password: string) => request("POST", `/admin/users/${id}/password`, { password }),
   tree: () => request<Tree>("GET", "/tree"),
+  tasks: () => request<{ tasks: TaskItem[] }>("GET", "/tasks").then((r) => r.tasks),
+  /** Ticks or unticks a task on the note's latest text; 409 when that line changed since the list loaded. */
+  toggleTask: (t: TaskItem, done: boolean) => request("POST", "/tasks/toggle", { note: t.note, line: t.line, text: t.text, done }),
   search: (q: string) => request<{ results: SearchResult[] }>("GET", `/search?q=${encodeURIComponent(q)}`),
   /** Notes about what `q` means, even without its words. Empty when semantic search is off. */
   searchMeaning: (q: string) => request<{ results: SearchResult[] }>("GET", `/search/meaning?q=${encodeURIComponent(q)}`),
