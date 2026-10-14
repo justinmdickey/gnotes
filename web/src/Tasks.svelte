@@ -23,8 +23,25 @@
   let compact = $state(false);
   let query = $state("");
   const q = $derived(query.trim().toLowerCase());
-  /** Which part of your notes to show: everything, one of your top notebooks, or what's shared with you. */
-  let scope = $state<string>("all");
+  /**
+   * Which part of your notes to show: one of your top notebooks, what's shared with you, your loose
+   * notes ("notes"), or everything ("all"). Remembered on this device; everything to start with.
+   */
+  const SCOPE_KEY = "gnotes.tasks.scope";
+  let scope = $state<string>(readScope());
+  function readScope() {
+    try {
+      return localStorage.getItem(SCOPE_KEY) ?? "all";
+    } catch {
+      return "all";
+    }
+  }
+  function pick(id: string) {
+    scope = id;
+    try {
+      localStorage.setItem(SCOPE_KEY, id);
+    } catch {}
+  }
   let showDone = $state(false);
   let adding = $state(false);
   /** Just ticked: they stay a moment, crossed out, so a tick can be seen (and undone) before the row goes. */
@@ -33,7 +50,7 @@
 
   const today = todayIso();
 
-  /** A note's place: its notebooks, outermost first, and the top one it sits in. */
+  /** A note's place: its notebooks, outermost first. */
   function placeOf(notebookId: string | null) {
     const path = [];
     for (let id = notebookId; id; ) {
@@ -44,18 +61,21 @@
     }
     return path;
   }
-  function scopeOf(t: TaskItem) {
+  const ownedNote = (t: TaskItem) => app.tree.notes.find((n) => n.id === t.note)?.role === "owner";
+  /** The task's notebook as the tree has it now, so a note just moved files its tasks in its new place. */
+  const notebookOf = (t: TaskItem) => {
     const note = app.tree.notes.find((n) => n.id === t.note);
-    const top = placeOf(t.notebook)[0];
+    return note ? note.notebook_id : t.notebook;
+  };
+  function scopeOf(t: TaskItem) {
+    const top = placeOf(notebookOf(t))[0];
     if (top) return top.role === "owner" ? top.id : "shared";
-    return note && note.role !== "owner" ? "shared" : "notes";
+    return ownedNote(t) ? "notes" : "shared";
   }
-  function crumb(t: TaskItem) {
-    const names = placeOf(t.notebook).map((n) => n.name);
-    return [names.join(" › "), [t.title || "New Note", t.column].filter(Boolean).join(" › ")].filter(Boolean).join(" · ");
-  }
+  /** What a row says under the task: its note, and its column on a board. */
+  const noteLine = (t: TaskItem) => [t.title || "New Note", t.column].filter(Boolean).join(" › ");
 
-  /** Chips for the places that have tasks: your top notebooks A–Z, then Shared. Only worth showing for two or more. */
+  /** Chips for the places that have open tasks: your top notebooks A–Z, Shared, Notes, then All. Only worth it for two or more. */
   const scopes = $derived.by(() => {
     const used = new Set((tasks.items ?? []).filter((t) => !t.done).map(scopeOf));
     const out = app.tree.notebooks
@@ -63,28 +83,48 @@
       .toSorted((a, b) => a.name.localeCompare(b.name))
       .map((n) => ({ id: n.id, label: n.name }));
     if (used.has("shared")) out.push({ id: "shared", label: "Shared" });
-    return out.length + (used.has("notes") ? 1 : 0) > 1 ? out : [];
+    if (used.has("notes")) out.push({ id: "notes", label: "Notes" });
+    return out.length > 1 ? [...out, { id: "all", label: "All" }] : [];
   });
-  $effect(() => {
-    if (scope !== "all" && !scopes.some((s) => s.id === scope)) scope = "all";
-  });
+  /** A search looks through everything; otherwise the chosen place, or everything when there's no choice to make. */
+  const showing = $derived(q || !scopes.some((s) => s.id === scope) ? "all" : scope);
+
+  /**
+   * Where a task's section is: the notebooks under the chosen top one ("Kitchen", "Kitchen › Pantry"),
+   * or the top one's own name for notes right in it, which come last. Elsewhere, the whole path.
+   */
+  function sectionOf(t: TaskItem) {
+    const path = placeOf(notebookOf(t));
+    const tops = app.tree.notebooks.filter((n) => n.role === "owner" && !n.parent_id).toSorted((a, b) => a.name.localeCompare(b.name));
+    if (!path.length) return ownedNote(t) ? { key: "notes", label: "Notes", rank: 2e6 } : { key: "shared-notes", label: "Shared with You", rank: 1e6 };
+    const top = path[0];
+    const rank = top.role === "owner" ? tops.findIndex((n) => n.id === top.id) * 2 : 1e6;
+    const below = showing === top.id ? path.slice(1) : path;
+    const own = path.length === 1;
+    return { key: path.at(-1)!.id, label: (below.length ? below : path).map((n) => n.name).join(" › "), rank: rank + (own ? 1 : 0) };
+  }
 
   const shown = $derived(
     (tasks.items ?? []).filter(
-      (t) => (scope === "all" || scopeOf(t) === scope) && (!q || t.text.toLowerCase().includes(q) || t.title.toLowerCase().includes(q)),
+      (t) => (showing === "all" || scopeOf(t) === showing) && (!q || t.text.toLowerCase().includes(q) || t.title.toLowerCase().includes(q)),
     ),
   );
   const open = $derived(shown.filter((t) => !t.done || leaving.has(key(t))));
   const done = $derived(shown.filter((t) => t.done && !leaving.has(key(t))));
-  const byDue = (a: TaskItem, b: TaskItem) => (a.due ?? "").localeCompare(b.due ?? "");
-  const groups = $derived(
-    [
-      { label: "Overdue", late: true, items: open.filter((t) => t.due && t.due < today) },
-      { label: "Today", late: false, items: open.filter((t) => t.due === today) },
-      { label: "Upcoming", late: false, items: open.filter((t) => t.due && t.due > today).toSorted(byDue) },
-      { label: "No Date", late: false, items: open.filter((t) => !t.due) },
-    ].filter((g) => g.items.length),
-  );
+  /** Soonest due first, undated last. */
+  const byDue = (a: TaskItem, b: TaskItem) => (a.due ? (b.due ? a.due.localeCompare(b.due) : -1) : b.due ? 1 : 0);
+  /** One section per notebook: sub-notebooks A–Z, then the top notebook's own; each sorted by due date. */
+  const groups = $derived.by(() => {
+    const out = new Map<string, { label: string; rank: number; items: TaskItem[] }>();
+    for (const t of open) {
+      const s = sectionOf(t);
+      if (!out.has(s.key)) out.set(s.key, { label: s.label, rank: s.rank, items: [] });
+      out.get(s.key)!.items.push(t);
+    }
+    return [...out.entries()]
+      .map(([k, g]) => ({ key: k, ...g, items: g.items.toSorted(byDue) }))
+      .toSorted((a, b) => a.rank - b.rank || a.label.localeCompare(b.label));
+  });
   /** Notes kept out of Tasks, like a grocery list, so it's clear some checkboxes aren't here. */
   const hidden = $derived(app.tree.notes.filter((n) => n.hide_tasks).length);
   const counts = $derived.by(() => {
@@ -150,11 +190,10 @@
       {/if}
     </label>
 
-    {#if scopes.length}
+    {#if scopes.length && !q}
       <div class="chips" role="group" aria-label="Show tasks from">
-        <button class="chip" class:on={scope === "all"} aria-pressed={scope === "all"} onclick={() => (scope = "all")}>All</button>
         {#each scopes as s (s.id)}
-          <button class="chip" class:on={scope === s.id} aria-pressed={scope === s.id} onclick={() => (scope = s.id)}>{s.label}</button>
+          <button class="chip" class:on={showing === s.id} aria-pressed={showing === s.id} onclick={() => pick(s.id)}>{s.label}</button>
         {/each}
       </div>
     {/if}
@@ -174,14 +213,14 @@
         ></button>
         <button class="flat what" onclick={() => jump(t)}>
           <span class="text">{t.text}</span>
-          <span class="where">{crumb(t)}</span>
+          <span class="where">{noteLine(t)}</span>
         </button>
         {#if due}<span class="due {due.tone}">{due.text}</span>{/if}
       </div>
     {/snippet}
 
-    {#each groups as group (group.label)}
-      <h3 class="group-title" class:late={group.late}>{group.label}</h3>
+    {#each groups as group (group.key)}
+      <h3 class="group-title">{group.label}</h3>
       <ul class="boxed-list">
         {#each group.items as t (key(t))}
           <li transition:reveal>{@render row(t)}</li>
@@ -335,10 +374,6 @@
     color: var(--accent-fg);
   }
 
-  .group-title.late {
-    color: var(--destructive);
-  }
-
   .task {
     display: flex;
     align-items: flex-start;
@@ -411,7 +446,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    color: var(--accent);
+    color: var(--dim-fg);
     font-size: var(--text-xs);
   }
 

@@ -152,9 +152,9 @@ async function seed(page) {
     const home = (await post("/notebooks", { name: "Home", parent_id: null })).id;
     const kitchen = (await post("/notebooks", { name: "Kitchen", parent_id: home })).id;
     const garage = (await post("/notebooks", { name: "Garage", parent_id: home })).id;
-    await post("/notebooks", { name: "Personal", parent_id: null });
+    const personal = (await post("/notebooks", { name: "Personal", parent_id: null })).id;
     await post("/shares", { resource_type: "notebook", resource_id: home, username: "bob", role: "editor" });
-    return { kitchen, garage };
+    return { kitchen, garage, personal };
   });
   // Note text only exists through the editor, so type it in.
   const write = async (hash, text) => {
@@ -173,6 +173,8 @@ async function seed(page) {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   };
   await write(`#/nb/${ids.garage}`, `# Garage\nThe door sticks when it's cold.\n- [ ] Call about the door quote @${day(-2)}\nBuy a furnace filter @${day(0)}\nHang the bike hooks @${day(4)}`);
+  await write(`#/nb/${ids.kitchen}`, `# Remodel\n- [ ] Order tile samples @${day(0)}\nPick cabinet hardware @${day(5)}`);
+  await write(`#/nb/${ids.personal}`, `# Errands\n- [ ] Renew the passport @${day(10)}\nReturn the library books`);
   await write(`#/nb/${ids.kitchen}`, "# Pantry\nrice, beans, flour\nRestock from [the co-op](https://example.com/co-op) or https://example.org/bulk");
   // Code blocks: one labeled, one left for the guesser.
   await write("#/", '# Snippets\nRun this first:\n```bash\nnpm run build\n```\nThen:\n```\n// say hi\nconst greet = (name) => `Hello ${name}`;\nconsole.log(greet("Ada"), 42);\n```\nAnd Lua:\n```\nlocal M = {}\nfunction M.setup(opts)\nfor k, v in pairs(opts) do print(k, v) end\nend\nreturn M\n```\nDone.');

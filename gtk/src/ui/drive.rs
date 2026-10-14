@@ -405,6 +405,17 @@ async fn run(main: &Rc<Main>, cmd: &str, arg: &str) {
                 None => eprintln!("drive: no task {arg}"),
             }
         }
+        "task-scope" => {
+            // The Tasks chip by its label: a top notebook's name, Shared, Notes or All.
+            let id = match arg {
+                "Shared" => "shared".to_owned(),
+                "Notes" => "notes".to_owned(),
+                "All" => "all".to_owned(),
+                name => main.store.tree.borrow().notebooks.iter().find(|n| n.name == name && n.parent_id.is_none()).map(|n| n.id.clone()).unwrap_or_default(),
+            };
+            main.tasks_scope.replace(id);
+            main.show_place(Place::Tasks);
+        }
         "wait-jumped" => until(&format!("line {arg:?} lit"), || editor().is_some_and(|e| e.jumped_text().is_some_and(|t| t.contains(arg)))).await,
         "tick" => {
             if let Some(e) = editor()

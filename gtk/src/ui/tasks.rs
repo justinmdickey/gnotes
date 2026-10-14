@@ -48,15 +48,49 @@ pub fn due_label(due: &str) -> (String, &'static str) {
     }
 }
 
-/// Where a task lives: "Home › Kitchen · Remodel › Doing".
-fn crumb(main: &Main, t: &TaskItem) -> String {
-    let path = sidebar::path_of(&main.store.tree.borrow(), t.notebook.clone());
+/// What a row says under the task: its note, and its column on a board.
+fn note_line(t: &TaskItem) -> String {
     let title = if t.title.trim().is_empty() { sidebar::UNTITLED } else { &t.title };
-    let note = match &t.column {
+    match &t.column {
         Some(c) => format!("{title} › {c}"),
         None => title.to_owned(),
+    }
+}
+
+/// A notebook's path, outermost first: (id, name, yours).
+fn place_of(tree: &crate::api::Tree, mut id: Option<String>) -> Vec<(String, String, bool)> {
+    let mut out = Vec::new();
+    while let Some(nb) = id.and_then(|i| tree.notebooks.iter().find(|n| n.id == i)) {
+        out.insert(0, (nb.id.clone(), nb.name.clone(), nb.role == crate::api::Role::Owner));
+        id = nb.parent_id.clone();
+    }
+    out
+}
+
+/// The place a task's chip picks it with: your top notebook's id, "shared", or "notes" for loose notes.
+fn scope_of(tree: &crate::api::Tree, t: &TaskItem) -> String {
+    match place_of(tree, t.notebook.clone()).first() {
+        Some((id, _, true)) => id.clone(),
+        Some(_) => "shared".into(),
+        None if tree.notes.iter().any(|n| n.id == t.note && n.role == crate::api::Role::Owner) => "notes".into(),
+        None => "shared".into(),
+    }
+}
+
+/// A task's section: the notebooks under the chosen top one ("Kitchen › Pantry"), or the top one's
+/// own name for notes right in it, which come after its sub-notebooks. Elsewhere, the whole path.
+/// Returns (key, label, rank) for ordering.
+fn section_of(tree: &crate::api::Tree, t: &TaskItem, showing: &str) -> (String, String, usize) {
+    let path = place_of(tree, t.notebook.clone());
+    let mut tops: Vec<&crate::api::TreeNotebook> = tree.notebooks.iter().filter(|n| n.role == crate::api::Role::Owner && n.parent_id.is_none()).collect();
+    tops.sort_by(|a, b| a.name.cmp(&b.name));
+    let Some((top, _, mine)) = path.first() else {
+        return if scope_of(tree, t) == "notes" { ("notes".into(), "Notes".into(), 2_000_000) } else { ("shared-notes".into(), "Shared with You".into(), 1_000_000) };
     };
-    if path.is_empty() { note } else { format!("{path} · {note}") }
+    let rank = if *mine { tops.iter().position(|n| &n.id == top).unwrap_or(0) * 2 } else { 1_000_000 };
+    let below = if showing == top && path.len() > 1 { &path[1..] } else { &path[..] };
+    let label = below.iter().map(|p| p.1.as_str()).collect::<Vec<_>>().join(" › ");
+    (path.last().map(|p| p.0.clone()).unwrap_or_default(), label, rank + usize::from(path.len() == 1))
 }
 
 struct State {
@@ -161,25 +195,73 @@ fn fill(main: &Rc<Main>, state: &Rc<RefCell<State>>, groups: &gtk::Box, me: &std
         return;
     };
     let q = &s.query;
-    let shown: Vec<&TaskItem> = items.iter().filter(|t| q.is_empty() || t.text.to_lowercase().contains(q) || t.title.to_lowercase().contains(q)).collect();
-    let today = today();
-    let open: Vec<&TaskItem> = shown.iter().copied().filter(|t| !t.done).collect();
-    let mut upcoming: Vec<&TaskItem> = open.iter().copied().filter(|t| t.due.as_deref().is_some_and(|d| d > today.as_str())).collect();
-    upcoming.sort_by(|a, b| a.due.cmp(&b.due));
-    let sets: [(&str, Vec<&TaskItem>); 4] = [
-        ("Overdue", open.iter().copied().filter(|t| t.due.as_deref().is_some_and(|d| d < today.as_str())).collect()),
-        ("Today", open.iter().copied().filter(|t| t.due.as_deref() == Some(today.as_str())).collect()),
-        ("Upcoming", upcoming),
-        ("No Date", open.iter().copied().filter(|t| t.due.is_none()).collect()),
-    ];
-    let done: Vec<&TaskItem> = shown.iter().copied().filter(|t| t.done).collect();
-    let mut any = false;
-    for (label, list) in sets {
-        if list.is_empty() {
-            continue;
+    let tree = main.store.tree.borrow().clone();
+    // Chips for the places with open tasks: your top notebooks A–Z, Shared, Notes, then All.
+    let used: std::collections::HashSet<String> = items.iter().filter(|t| !t.done).map(|t| scope_of(&tree, t)).collect();
+    let mut tops: Vec<&crate::api::TreeNotebook> = tree.notebooks.iter().filter(|n| n.role == crate::api::Role::Owner && n.parent_id.is_none() && used.contains(&n.id)).collect();
+    tops.sort_by(|a, b| a.name.cmp(&b.name));
+    let mut scopes: Vec<(String, String)> = tops.iter().map(|n| (n.id.clone(), n.name.clone())).collect();
+    for (id, label) in [("shared", "Shared"), ("notes", "Notes")] {
+        if used.contains(id) {
+            scopes.push((id.into(), label.into()));
         }
-        any = true;
-        group(main, groups, label, &list, me);
+    }
+    if scopes.len() > 1 {
+        scopes.push(("all".into(), "All".into()));
+    } else {
+        scopes.clear();
+    }
+    // A search looks through everything; otherwise the chosen place, or everything with nothing to choose.
+    let picked = main.tasks_scope.borrow().clone();
+    let showing = if !q.is_empty() || !scopes.iter().any(|(id, _)| *id == picked) { "all".to_owned() } else { picked };
+    if !scopes.is_empty() && q.is_empty() {
+        let chips = adw::ToggleGroup::builder().halign(gtk::Align::Start).css_classes(["round"]).build();
+        for (id, label) in &scopes {
+            chips.add(adw::Toggle::builder().label(label.as_str()).name(id.as_str()).build());
+        }
+        chips.set_active_name(Some(&showing));
+        let (weak, me) = (Rc::downgrade(main), me.clone());
+        chips.connect_active_name_notify(move |g| {
+            let (Some(main), Some(name)) = (weak.upgrade(), g.active_name()) else { return };
+            if *main.tasks_scope.borrow() == name.as_str() {
+                return;
+            }
+            main.tasks_scope.replace(name.to_string());
+            // Not from inside the toggle's own signal: redrawing removes it.
+            let me = me.clone();
+            glib::idle_add_local_once(move || {
+                if let Some(f) = me.upgrade() {
+                    f();
+                }
+            });
+        });
+        groups.append(&chips);
+    }
+    let shown: Vec<&TaskItem> = items
+        .iter()
+        .filter(|t| (showing == "all" || scope_of(&tree, t) == showing) && (q.is_empty() || t.text.to_lowercase().contains(q) || t.title.to_lowercase().contains(q)))
+        .collect();
+    let open: Vec<&TaskItem> = shown.iter().copied().filter(|t| !t.done).collect();
+    // One section per notebook, sub-notebooks A–Z before the top one's own, each soonest due first.
+    let mut sections: Vec<(String, String, usize, Vec<&TaskItem>)> = Vec::new();
+    for t in &open {
+        let (key, label, rank) = section_of(&tree, t, &showing);
+        match sections.iter_mut().find(|s| s.0 == key) {
+            Some(s) => s.3.push(t),
+            None => sections.push((key, label, rank, vec![t])),
+        }
+    }
+    sections.sort_by(|a, b| a.2.cmp(&b.2).then_with(|| a.1.cmp(&b.1)));
+    let done: Vec<&TaskItem> = shown.iter().copied().filter(|t| t.done).collect();
+    let any = !sections.is_empty();
+    for (_, label, _, mut list) in sections {
+        list.sort_by(|a, b| match (&a.due, &b.due) {
+            (Some(x), Some(y)) => x.cmp(y),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => std::cmp::Ordering::Equal,
+        });
+        group(main, groups, &label, &list, me);
     }
     if !any {
         let status = if q.is_empty() {
@@ -222,9 +304,6 @@ fn fill(main: &Rc<Main>, state: &Rc<RefCell<State>>, groups: &gtk::Box, me: &std
 
 fn group(main: &Rc<Main>, groups: &gtk::Box, label: &str, items: &[&TaskItem], me: &std::rc::Weak<Box<dyn Fn()>>) {
     let title = gtk::Label::builder().label(label).xalign(0.0).css_classes(["heading"]).build();
-    if label == "Overdue" {
-        title.add_css_class("error");
-    }
     let list = gtk::ListBox::builder().css_classes(["boxed-list"]).selection_mode(gtk::SelectionMode::None).build();
     for t in items {
         list.append(&row(main, t, me));
@@ -238,7 +317,7 @@ fn group(main: &Rc<Main>, groups: &gtk::Box, label: &str, items: &[&TaskItem], m
 fn row(main: &Rc<Main>, t: &TaskItem, me: &std::rc::Weak<Box<dyn Fn()>>) -> adw::ActionRow {
     let row = adw::ActionRow::builder()
         .title(glib::markup_escape_text(&t.text))
-        .subtitle(glib::markup_escape_text(&crumb(main, t)))
+        .subtitle(glib::markup_escape_text(&note_line(t)))
         .activatable(true)
         .build();
     let check = gtk::CheckButton::builder().active(t.done).valign(gtk::Align::Center).tooltip_text(if t.done { "Mark Not Done" } else { "Mark Done" }).build();

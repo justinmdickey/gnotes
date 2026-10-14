@@ -346,6 +346,9 @@ await sleep(500);
       `add-task Call the vet|${day(1)}`,
       "wait-list Call the vet",
       `dump ${f("added.json")}`,
+      "task-scope Home",
+      "wait-list Lemons",
+      `dump ${f("scoped.json")}`,
       "quit",
     ].join("\n"),
   },
@@ -364,6 +367,8 @@ const hiddenList = existsSync(f("hidden.json")) ? dump("hidden.json").list : [];
 check("Hide from Tasks takes a note's tasks off Tasks", !hiddenList.includes("Rake leaves"), hiddenList);
 const added = existsSync(f("added.json")) ? dump("added.json").list : [];
 check("New Task adds to the Inbox and shows in Tasks", added.includes("Call the vet"), added);
+const scoped = existsSync(f("scoped.json")) ? dump("scoped.json").list : [];
+check("a top notebook's chip shows only its tasks", scoped.includes("Lemons") && !scoped.includes("Call the vet") && !scoped.includes("Sam: write the release notes"), scoped);
 
 // Tables and boards, drawn as widgets.
 ({ code, stderr } = await demo.runApp({

@@ -107,6 +107,8 @@ pub struct Main {
     pub ask: OnceCell<Rc<super::ask::Ask>>,
     /// Text the Search page starts with.
     pub query: RefCell<String>,
+    /// Which place Tasks shows: a top notebook's id, "shared", "notes" or "all".
+    pub tasks_scope: RefCell<String>,
     editor: RefCell<Option<Rc<Editor>>>,
 }
 
@@ -130,6 +132,7 @@ impl Main {
             folder: RefCell::new(None),
             sidebar: OnceCell::new(),
             query: Default::default(),
+            tasks_scope: RefCell::new("all".into()),
             ask: OnceCell::new(),
             editor: RefCell::new(None),
         });

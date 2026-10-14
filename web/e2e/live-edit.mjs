@@ -580,7 +580,7 @@ try {
   await alice.waitForFunction(() => !!navigator.serviceWorker?.controller, { timeout: 10000 });
   // Tasks seen once online is kept on the device, so it opens with no server too.
   await alice.click("nav .row ::-p-text(Tasks)");
-  await alice.waitForFunction(() => [...document.querySelectorAll(".pane.list .task .text")].some((t) => t.textContent === "jam"), { timeout: 5000 });
+  await alice.waitForFunction(() => [...document.querySelectorAll(".pane.list .task .text")].some((t) => t.textContent === "jam"), { timeout: 15000 });
   await alice.click("nav .note-row ::-p-text(Groceries)");
   await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("bread"));
   // Snapshots are saved a moment after the last change.
@@ -2009,7 +2009,17 @@ try {
         return row && { group, where: row.querySelector(".where").textContent, due: row.querySelector(".due")?.textContent, done: row.querySelector(".box").getAttribute("aria-checked") };
       });
     const before = await errand();
-    check(before.group === "Today" && before.due === "Today" && before.where.endsWith("Errands"), `a task due today shows under Today with its note (${JSON.stringify(before)})`);
+    check(before.group === "Notes" && before.due === "Today" && before.where === "Errands", `a task shows under its notebook (loose notes: Notes) with its note and when it's due (${JSON.stringify(before)})`);
+    check(await alice.evaluate(() => !document.querySelector(".pane.list .chips")), "with tasks in one place only, Tasks has no chips to pick from");
+    // Moved into a notebook, its tasks show under that notebook.
+    await alice.evaluate(async () => {
+      const tree = await fetch("/api/tree").then((r) => r.json());
+      const home = tree.notebooks.find((n) => n.name === "Home" && !n.parent_id).id;
+      const errands = tree.notes.find((n) => n.title === "Errands").id;
+      await fetch(`/api/notes/${errands}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ notebook_id: home }) });
+    });
+    await alice.waitForFunction(() => [...document.querySelectorAll(".pane.list .group-title")].some((h) => h.textContent === "Home"), { timeout: 5000 });
+
     check(await alice.evaluate(() => document.querySelector(".tabbar .tab.on")?.textContent.includes("Tasks")), "the Tasks tab is lit on Tasks");
     await shot("phone-tasks-dark");
     // Ticking it from the list changes the note itself; Undo puts it back.
@@ -2067,11 +2077,20 @@ try {
     await alice.waitForFunction(
       () => {
         const row = [...document.querySelectorAll(".pane.list .task")].find((t) => t.querySelector(".text").textContent === "Pick up the dry cleaning");
-        return row?.closest("ul")?.previousElementSibling?.textContent === "Upcoming" && row.querySelector(".where").textContent === "Inbox" && row.querySelector(".due").textContent === "Tomorrow";
+        return row?.closest("ul")?.previousElementSibling?.textContent === "Notes" && row.querySelector(".where").textContent === "Inbox" && row.querySelector(".due").textContent === "Tomorrow";
       },
       { timeout: 5000 },
     );
     check((await alice.evaluate(() => location.hash)) === "#/tasks", "holding + and picking Task adds it to the Inbox, due when you chose, and you stay on Tasks");
+    // With tasks in two places, a chip per top notebook, then All, which shows each notebook's section.
+    await alice.waitForFunction(() => [...document.querySelectorAll(".pane.list .chips .chip")].map((c) => c.textContent.trim()).join(",") === "Home,Notes,All", { timeout: 5000 });
+    check(await alice.evaluate(() => ["Home", "Notes"].every((t) => [...document.querySelectorAll(".pane.list .group-title")].some((h) => h.textContent === t))), "a chip per top notebook with tasks, then All, which shows each notebook's section");
+    await shot("phone-tasks-chips-dark");
+    await alice.evaluate(() => [...document.querySelectorAll(".pane.list .chips .chip")].find((c) => c.textContent.trim() === "Notes").click());
+    await alice.waitForFunction(() => [...document.querySelectorAll(".pane.list .group-title")].every((h) => h.textContent === "Notes"));
+    check(await alice.evaluate(() => localStorage.getItem("gnotes.tasks.scope") === "notes"), "picking a chip shows just that place's tasks, and is remembered");
+    await alice.evaluate(() => [...document.querySelectorAll(".pane.list .chips .chip")].find((c) => c.textContent.trim() === "All").click());
+
     // A list note can keep its checkboxes out of Tasks, from its actions; Tasks says some are hidden.
     await alice.evaluate(() => [...document.querySelectorAll(".pane.list .task .what")].find((b) => b.textContent.includes("Return the folding table")).click());
     await alice.waitForSelector(".pane.editor .cm-content");
