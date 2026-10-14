@@ -5,6 +5,7 @@ import { StateEffect, StateField } from "@codemirror/state";
 import type { EditorState, Range } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate, WidgetType } from "@codemirror/view";
 import { iconSvg } from "./icons";
+import { DUE, dueLabel } from "./dates";
 import { EMBED, attachmentMeta, attachmentUrl, isTranscribing, onTranscribingChange, readPhoto, removeEmbed, transcribeMemo } from "./attachments";
 import { openNote } from "./store.svelte";
 import type { IconName } from "./icons";
@@ -307,6 +308,30 @@ class CheckboxWidget extends WidgetType {
   }
 }
 
+/** A task's "@2026-10-20", read as "Tomorrow" or "2 days late" off the line being edited. */
+class DueWidget extends WidgetType {
+  constructor(
+    readonly date: string,
+    readonly open: boolean,
+  ) {
+    super();
+  }
+
+  eq(other: DueWidget) {
+    return other.date === this.date && other.open === this.open;
+  }
+
+  toDOM() {
+    const { text, tone } = dueLabel(this.date);
+    const chip = document.createElement("span");
+    // Past due only matters while it's still to do.
+    chip.className = `cm-due${this.open && tone ? ` ${tone}` : ""}`;
+    chip.textContent = text;
+    chip.title = this.date;
+    return chip;
+  }
+}
+
 class BulletWidget extends WidgetType {
   eq() {
     return true;
@@ -528,8 +553,15 @@ function build(view: EditorView): { decorations: DecorationSet; atomic: Decorati
               decos.push(markerSpace.range(node.to, textFrom));
               stepOver.push(markerSpace.range(node.to, textFrom));
             }
-            const lineEnd = lineAt(node.from).to;
+            const line = lineAt(node.from);
+            const lineEnd = line.to;
             if (checked && lineEnd > textFrom) decos.push(doneText.range(textFrom, lineEnd));
+            // Its due date reads as a day, except on the line being edited, where it's text again.
+            const due = DUE.exec(state.sliceDoc(textFrom, lineEnd));
+            if (due && !active.has(line.number)) {
+              const at = textFrom + due.index + due[1].length;
+              decos.push(Decoration.replace({ widget: new DueWidget(due[2], !checked) }).range(at, at + 1 + due[2].length));
+            }
             break;
           }
         }

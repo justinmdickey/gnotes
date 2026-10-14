@@ -52,7 +52,7 @@ pub fn plain_text(body: &str) -> String {
                 break;
             }
         }
-        let l: String = embeds_as_labels(l)
+        let l: String = crate::tasks::without_dates(&embeds_as_labels(l))
             .replace("**", "")
             .replace("~~", "")
             .replace('`', "")
@@ -282,6 +282,8 @@ mod tests {
         assert_eq!(plain_text(body), "Groceries\nmilk\nnpm run build\nsee Voice memo here");
         // Wiki links keep their words, lose the brackets.
         assert_eq!(plain_text("See [[Groceries]] for the list"), "See Groceries for the list");
+        // A task's due date reads as nothing; Tasks shows it.
+        assert_eq!(plain_text("- [ ] Call the plumber @2026-10-20"), "Call the plumber");
     }
 
     #[test]

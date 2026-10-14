@@ -335,7 +335,12 @@ export async function startDemo({ ai = false } = {}) {
     "- [x] Pick colors",
     "```",
   ].join("\n"));
-  await write(sam, sync, "# Weekly sync\n\nQuick check-in on the **mobile release**.\n\n## Action items\n- [ ] Sam: write the release notes\n- [ ] Ann: try the beta");
+  // Due dates, one late and one tomorrow, for Tasks and the editor's date styling.
+  const day = (n) => {
+    const d = new Date(Date.now() + n * 864e5);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  };
+  await write(sam, sync, `# Weekly sync\n\nQuick check-in on the **mobile release**.\n\n## Action items\n- [ ] Sam: write the release notes @${day(-1)}\n- [ ] Ann: try the beta @${day(1)}`);
   await ann.call("DELETE", `/notes/${await ann.note()}`);
   // Titles and previews settle a moment after the last edit.
   await sleep(600);

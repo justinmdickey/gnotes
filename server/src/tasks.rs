@@ -72,6 +72,18 @@ fn checkbox(line: &str) -> Option<(bool, &str)> {
     Some((done, rest.trim()))
 }
 
+/// `text` without any `@YYYY-MM-DD` due dates, for search snippets.
+pub fn without_dates(text: &str) -> String {
+    let mut out = text.to_owned();
+    loop {
+        let (due, rest) = due_date(&out);
+        if due.is_none() {
+            return out;
+        }
+        out = rest;
+    }
+}
+
 /// The first `@YYYY-MM-DD` standing on its own in `text`, and the text without it.
 fn due_date(text: &str) -> (Option<String>, String) {
     let bytes = text.as_bytes();

@@ -4,6 +4,7 @@
   import { app, navigate } from "./lib/store.svelte";
   import { refreshTasks } from "./lib/tasks.svelte";
   import { toast } from "./lib/ui.svelte";
+  import { inDays, weekend } from "./lib/dates";
 
   /** A task in one step, from the tab bar's + or Tasks: it goes on the end of your Inbox note. */
   let { onclose }: { onclose: () => void } = $props();
@@ -14,14 +15,6 @@
   let busy = $state(false);
   let field = $state<HTMLInputElement>();
 
-  const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-  const inDays = (n: number) => {
-    const d = new Date();
-    d.setDate(d.getDate() + n);
-    return iso(d);
-  };
-  /** The coming Saturday; on a Saturday, the next one. */
-  const weekend = () => inDays((6 - new Date().getDay() + 7) % 7 || 7);
   const dates = [
     { label: "No Date", value: null },
     { label: "Today", value: inDays(0) },

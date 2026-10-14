@@ -39,6 +39,8 @@ pub struct Styled {
     pub spans: Vec<Span>,
     /// Where each checkbox's `[` is, and whether it's ticked.
     pub tasks: Vec<(usize, bool)>,
+    /// Each task's `@YYYY-MM-DD`: where it is, the date, and whether its box is still open.
+    pub dues: Vec<(usize, usize, String, bool)>,
     pub links: Vec<Link>,
     /// Photos: the whole `![alt](url)` and its url.
     pub images: Vec<Link>,
@@ -56,7 +58,7 @@ pub struct Styled {
 
 /// Every tag `analyze` uses, for the editor's tag table.
 pub const TAGS: &[&str] =
-    &["h1", "h2", "h3", "bold", "italic", "strike", "code", "codeblock", "quote", "mark", "link", "task", "done", "bullet", "table", "ghost", "hidden"];
+    &["h1", "h2", "h3", "bold", "italic", "strike", "code", "codeblock", "quote", "mark", "link", "task", "done", "bullet", "table", "ghost", "hidden", "due", "late"];
 
 /// Byte offset to character offset, for every byte position in `text`.
 fn char_index(text: &str) -> Vec<usize> {
@@ -207,6 +209,10 @@ pub fn analyze(text: &str) -> Styled {
                 out.tasks.push((ci[r.start], checked));
                 span(&mut out, r.start, r.end, "task");
                 span(&mut out, r.start, r.end, "ghost");
+                let line_end = text[r.end..].find('\n').map_or(text.len(), |i| r.end + i);
+                if let Some((s, date)) = due_in(&text[r.end..line_end]) {
+                    out.dues.push((ci[r.end + s], ci[r.end + s + 11], date.to_owned(), !checked));
+                }
                 if checked && let Some(item) = items.last() {
                     let start = r.end + (text[r.end..].len() - text[r.end..].trim_start_matches(' ').len());
                     let end = text[start..item.end].find('\n').map_or(item.end, |i| start + i);
@@ -325,6 +331,20 @@ pub fn continue_prefix(line: &str) -> Option<String> {
     Some(prefix.to_owned())
 }
 
+/// The first `@YYYY-MM-DD` standing on its own in `line`: where its `@` is, in bytes, and the date.
+/// The same form the server reads as a task's due date (server/src/tasks.rs).
+fn due_in(line: &str) -> Option<(usize, &str)> {
+    let b = line.as_bytes();
+    line.match_indices('@').find_map(|(i, _)| {
+        let date = line.get(i + 1..i + 11)?;
+        let d = date.as_bytes();
+        let shape = d.iter().enumerate().all(|(k, c)| if k == 4 || k == 7 { *c == b'-' } else { c.is_ascii_digit() });
+        let before = i == 0 || b[i - 1].is_ascii_whitespace();
+        let after = b.get(i + 11).is_none_or(|c| !c.is_ascii_alphanumeric());
+        (shape && before && after).then_some((i, date))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -343,6 +363,12 @@ mod tests {
         assert!(t.contains(&("*it*".into(), "italic")));
         assert!(t.contains(&("`code`".into(), "code")));
         assert!(t.contains(&("~~gone~~".into(), "strike")));
+    }
+
+    #[test]
+    fn finds_due_dates_on_tasks() {
+        let s = analyze("Chores\n- [ ] Mow @2026-10-20\n- [x] Gate @2026-10-01 done\n- [ ] me@2026-10-20\nNot a task @2026-10-20");
+        assert_eq!(s.dues, vec![(17, 28, "2026-10-20".into(), true), (40, 51, "2026-10-01".into(), false)]);
     }
 
     #[test]

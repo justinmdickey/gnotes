@@ -2010,6 +2010,26 @@ try {
     await alice.evaluate(() => [...document.querySelectorAll(".pane.list .task .what")].find((b) => b.textContent.includes("Return the folding table")).click());
     await alice.waitForFunction(() => location.hash.startsWith("#/tasks/note/") && !!document.querySelector(".pane.editor .cm-jumped"), { timeout: 5000 });
     check(await alice.evaluate(() => document.querySelector(".pane.editor .cm-jumped")?.textContent.includes("Return the folding table")), "a task's text opens its note with that line lit");
+    check(await alice.evaluate(() => document.querySelector(".pane.editor .cm-due.today")?.textContent === "Today"), "a task's due date reads as a day in the note");
+    // On a checklist item, the keyboard bar's calendar sets when it's due.
+    // The cursor on the task's line, as tapping it would put it there (a tap here lands mid-slide).
+    await alice.evaluate(() => {
+      const v = document.querySelector(".pane.editor .cm-content").cmTile.root.view;
+      const line = [...Array(v.state.doc.lines)].map((_, i) => v.state.doc.line(i + 1)).find((l) => l.text.includes("Return the folding"));
+      v.dispatch({ selection: { anchor: line.to } });
+      v.focus();
+    });
+    await alice.waitForSelector(".bar button[aria-label='Due date']", { visible: true });
+    // Emulated taps don't reach the keyboard bar's buttons here (any of them), so this clicks.
+    await alice.click(".bar button[aria-label='Due date']");
+    await alice.waitForSelector("[role=menuitem] ::-p-text(Tomorrow)");
+    await shot("phone-due-menu-dark");
+    await alice.tap("[role=menuitem] ::-p-text(Tomorrow)");
+    const tomorrow = new Date(Date.now() + 864e5);
+    const tomorrowIso = `${tomorrow.getFullYear()}-${String(tomorrow.getMonth() + 1).padStart(2, "0")}-${String(tomorrow.getDate()).padStart(2, "0")}`;
+    await alice.waitForFunction((d) => document.querySelector(".pane.editor .cm-content").cmTile.root.view.state.doc.toString().includes(`- [ ] Return the folding table @${d}`), { timeout: 5000 }, tomorrowIso);
+    check(true, "the keyboard bar's calendar moves a task's due date");
+    await closed(alice);
     await alice.click(".pane.editor .back-icon");
     await alice.waitForFunction(() => location.hash === "#/tasks" && document.querySelector(".pane.list .hero h1")?.textContent === "Tasks");
     check(true, "Back from the note returns to Tasks");

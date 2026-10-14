@@ -22,6 +22,12 @@ pub fn accent() -> gdk::RGBA {
     probe.color()
 }
 
+/// The theme's color for errors, like `accent`.
+pub fn error() -> gdk::RGBA {
+    let probe = gtk::Label::builder().css_classes(["error"]).build();
+    probe.color()
+}
+
 /// The monospace font family the desktop uses.
 pub fn monospace() -> String {
     let name = adw::StyleManager::default().monospace_font_name();
@@ -70,6 +76,8 @@ pub fn color_tags(view: &NoteView) {
         // A checkbox's `[ ]`: monospace, so the box drawn over it has room.
         set("task", &[("family", &mono)]);
         set("done", &[("foreground-rgba", &dim), ("strikethrough", &true)]);
+        set("due", &[("foreground-rgba", &dim), ("scale", &0.85f64), ("weight", &700i32)]);
+        set("late", &[("foreground-rgba", &error())]);
         set("jumped", &[("paragraph-background-rgba", &gdk::RGBA::new(accent.red(), accent.green(), accent.blue(), 0.22))]);
         // Live preview: marks hidden off the edited line; bullets and boxes drawn over clear text.
         // Pango takes an alpha of 0 as no alpha at all, so this is the least above it.
@@ -126,6 +134,14 @@ pub fn apply(view: &NoteView, text: &str, active: Option<(i32, i32)>) -> Styled 
     view.set_pixels_above_lines(if placeholder { 10 } else { 0 });
     for s in &styled.spans {
         buffer.apply_tag_by_name(s.tag, &at(s.start), &at(s.end));
+    }
+    // A task's due date: small and dim, red once it's late and the box is still open.
+    let today = super::tasks::today();
+    for (s, e, date, open) in &styled.dues {
+        buffer.apply_tag_by_name("due", &at(*s), &at(*e));
+        if *open && date.as_str() < today.as_str() {
+            buffer.apply_tag_by_name("late", &at(*s), &at(*e));
+        }
     }
     for (ranges, tag) in [(&styled.hidden, "hidden"), (&styled.ghosted, "ghost")] {
         for &(s, e) in ranges {

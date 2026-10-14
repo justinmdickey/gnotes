@@ -14,6 +14,7 @@
     onredo,
     onphoto,
     onrecord,
+    ondue,
   }: {
     view: EditorView;
     block: Block;
@@ -24,6 +25,8 @@
     onredo: () => void;
     onphoto: () => void;
     onrecord: () => void;
+    /** The due date button, on a checklist item. */
+    ondue: () => void;
   } = $props();
 
   const styles: [Block, string][] = [
@@ -100,6 +103,11 @@
       <Icon name={icon} />
     </button>
   {/each}
+  {#if block === "check"}
+    <!-- On a checklist item: when it's due. The editor shows the choices, since a sheet over the
+         keyboard would close this bar along with anything inside it. -->
+    <button class="flat icon main due" title="Due date" aria-label="Due date" onclick={ondue}><Icon name="calendar" /></button>
+  {/if}
   <button class="flat icon extra" class:active={block === "quote"} title="Quote" aria-label="Quote" aria-pressed={block === "quote"} onclick={() => setBlock(view, "quote")}>
     <Icon name="quote" />
   </button>
@@ -112,6 +120,7 @@
 </div>
 
 <style>
+
   .bar {
     --fade-before: 0px;
     --fade-after: 0px;

@@ -17,6 +17,7 @@
   import { dragHandles } from "./lib/dragHandles";
   import { undoCommands } from "./lib/undo";
   import { jumpLine, lightLine } from "./lib/jumpLine";
+  import { inDays, setDue, weekend } from "./lib/dates";
   import { blame } from "./lib/blame";
   import { emojiOnColon } from "./lib/emoji";
   import { tables } from "./lib/tables";
@@ -392,6 +393,20 @@
     ...(role && role !== "viewer" ? [{ label: "Move to…", icon: "move" as const, onselect: () => (moving = true) }] : []),
     ...(role === "owner" ? [{ label: "Move to Trash", icon: "trash" as const, destructive: true, onselect: () => trashNote(noteId) }] : []),
   ]);
+
+  /** The format bar's due date choices are open; they set the date on the cursor's line. */
+  let choosingDue = $state(false);
+  /** The browser's own date picker, for any other day. */
+  let datePicker = $state<HTMLInputElement>();
+  function pickDate() {
+    if (!datePicker) return;
+    datePicker.value = "";
+    try {
+      datePicker.showPicker();
+    } catch {
+      datePicker.focus();
+    }
+  }
 
   /** A list like groceries keeps its checkboxes out of Tasks, for everyone who sees the note. */
   async function hideTasks(hide: boolean) {
@@ -804,7 +819,7 @@
   <!-- Under the note, like a GNOME app's bottom toolbar; on phones it rides on the keyboard. -->
   {#if canEdit && view}
     <div class="format" style:bottom="{keyboard}px" bind:offsetHeight={formatHeight}>
-      <FormatBar {view} {block} {inline} {history} onundo={steps.undo} onredo={steps.redo} onphoto={pickPhoto} onrecord={startRecording} />
+      <FormatBar {view} {block} {inline} {history} onundo={steps.undo} onredo={steps.redo} onphoto={pickPhoto} onrecord={startRecording} ondue={() => (choosingDue = true)} />
     </div>
   {/if}
   {#if recording}
@@ -828,6 +843,23 @@
   <div class="adding" transition:bloom><span class="spinner"></span>Adding…</div>
 {/if}
 
+
+{#if choosingDue}
+  <!-- A sheet of its own rather than a menu: hiding the keyboard resizes the page, which closes menus. -->
+  <Dialog title="Due Date" onclose={() => (choosingDue = false)}>
+    <div class="due-choices" role="menu" aria-label="Due date">
+      {#each [["Today", inDays(0)], ["Tomorrow", inDays(1)], ["This Weekend", weekend()], ["Next Week", inDays(7)]] as [label, date] (label)}
+        <button class="flat due-choice" role="menuitem" onclick={() => ((choosingDue = false), view && setDue(view, date))}><span>{label}</span></button>
+      {/each}
+      <button class="flat due-choice" role="menuitem" onclick={() => ((choosingDue = false), pickDate())}><span>Pick a Date…</span></button>
+      <button class="flat due-choice" role="menuitem" onclick={() => ((choosingDue = false), view && setDue(view, null))}><span>No Date</span></button>
+    </div>
+    {#snippet actions()}
+      <button onclick={() => (choosingDue = false)}>Cancel</button>
+    {/snippet}
+  </Dialog>
+{/if}
+<input bind:this={datePicker} class="date-picker" type="date" tabindex="-1" aria-hidden="true" onchange={(e) => view && e.currentTarget.value && setDue(view, e.currentTarget.value)} />
 
 {#if moving}
   <MoveDialog kind="note" id={noteId} name={note?.title ?? ""} onclose={() => (moving = false)} />
@@ -1640,6 +1672,57 @@
     background: var(--accent-bg)
       url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 8.5l2.5 2.5L12 5.5' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
       center / 80% no-repeat;
+  }
+
+  .due-choices {
+    display: flex;
+    flex-direction: column;
+    margin: 0 -6px;
+  }
+
+  .due-choice {
+    justify-content: flex-start;
+    min-height: 48px;
+    padding: 0 12px;
+    border-radius: var(--radius);
+    font-size: var(--text-lg);
+    font-weight: 400;
+  }
+
+  /* There for its picker, never seen. */
+  .date-picker {
+    position: fixed;
+    bottom: 0;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  /* A task's due date, off the line being edited: a small pill, red once late, blue on the day. */
+  .page :global(.cm-due) {
+    display: inline-block;
+    /* Checklist lines hang their wrapped text with a negative indent, which an inline-block would take on too. */
+    text-indent: 0;
+    margin: 0 2px;
+    padding: 0 7px;
+    border-radius: var(--radius-pill);
+    background: var(--button-bg);
+    color: var(--dim-fg);
+    font-size: var(--text-xs);
+    font-weight: 700;
+    line-height: 1.6;
+    vertical-align: 0.1em;
+  }
+
+  .page :global(.cm-due.late) {
+    background: color-mix(in srgb, var(--destructive-bg) 16%, transparent);
+    color: var(--destructive);
+  }
+
+  .page :global(.cm-due.today) {
+    background: var(--accent-soft);
+    color: var(--accent);
   }
 
   /* The line a task in Tasks pointed at, lit like a search match for a moment. */

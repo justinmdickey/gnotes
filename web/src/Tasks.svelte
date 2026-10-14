@@ -9,6 +9,7 @@
   import { app, navigate } from "./lib/store.svelte";
   import { openTasks, setDone, tasks } from "./lib/tasks.svelte";
   import { media, scrollEdge, toast } from "./lib/ui.svelte";
+  import { dueLabel, today as todayIso } from "./lib/dates";
 
   openTasks();
 
@@ -24,22 +25,7 @@
   let leaving = $state(new Set<string>());
   const key = (t: TaskItem) => `${t.note}:${t.line}`;
 
-  /** Today as "YYYY-MM-DD" in local time, the form due dates are written in. */
-  function isoDay(d: Date) {
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-  }
-  const today = isoDay(new Date());
-  const DAY = 24 * 60 * 60 * 1000;
-  const dateOf = (s: string) => new Date(`${s}T12:00:00`);
-  function dueLabel(due: string): { text: string; tone: "late" | "today" | "" } {
-    const days = Math.round((dateOf(due).getTime() - dateOf(today).getTime()) / DAY);
-    if (days === 0) return { text: "Today", tone: "today" };
-    if (days === 1) return { text: "Tomorrow", tone: "" };
-    if (days === -1) return { text: "Yesterday", tone: "late" };
-    if (days < 0) return { text: `${-days} days late`, tone: "late" };
-    const d = dateOf(due);
-    return { text: d.toLocaleDateString([], days < 7 ? { weekday: "short" } : { month: "short", day: "numeric" }), tone: "" };
-  }
+  const today = todayIso();
 
   /** A note's place: its notebooks, outermost first, and the top one it sits in. */
   function placeOf(notebookId: string | null) {
