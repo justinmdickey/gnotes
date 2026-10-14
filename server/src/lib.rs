@@ -217,7 +217,7 @@ pub fn router(state: AppState) -> Router {
         .route("/notes/{id}/write", post(ai_edit::write))
         .route("/notes/{id}/authors", get(authors::list_authors))
         .route("/search", get(search::search))
-        .route("/tasks", get(tasks::list))
+        .route("/tasks", get(tasks::list).post(tasks::create))
         .route("/tasks/toggle", post(tasks::toggle))
         .route("/search/meaning", get(semantic::search))
         .route("/ask", post(ask::ask))

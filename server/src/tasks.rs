@@ -19,10 +19,14 @@ use crate::{
     perms::{Role, note_role},
     rooms::{note_body, write_text},
     search::visible_notes,
+    tree::add_note,
+    util::new_id,
 };
 
 /// Settings key set once every note that predates `note_tasks` has been indexed.
 const BACKFILLED: &str = "tasks_backfilled";
+/// The longest task a quick add takes, in bytes.
+const MAX_TASK: usize = 1000;
 
 /// One checkbox line in a note.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -250,6 +254,63 @@ pub async fn set_done(state: &AppState, user: &str, note: &str, line: usize, tex
         return Err(AppError::Conflict("That task changed in the note".into()));
     }
     Ok(())
+}
+
+/// The note `user`'s quick-added tasks go to: their Inbox, made at their top level the first time,
+/// or again once the last one is trashed or gone.
+async fn inbox(state: &AppState, user: &str) -> ApiResult<String> {
+    let current: Option<String> = sqlx::query_scalar(
+        "SELECT n.id FROM users u JOIN notes n ON n.id = u.inbox_note_id
+         WHERE u.id = ? AND n.owner_id = u.id AND n.deleted_at IS NULL",
+    )
+    .bind(user)
+    .fetch_optional(&state.db)
+    .await?;
+    if let Some(id) = current {
+        return Ok(id);
+    }
+    let id = new_id();
+    add_note(state, user, &id, None).await?;
+    sqlx::query("UPDATE users SET inbox_note_id = ? WHERE id = ?").bind(&id).bind(user).execute(&state.db).await?;
+    Ok(id)
+}
+
+/// Adds `- [ ] text @due` to the end of `user`'s Inbox, as its own line. Returns the Inbox's id.
+pub async fn add(state: &AppState, user: &str, text: &str, due: Option<&str>) -> ApiResult<String> {
+    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if text.is_empty() {
+        return Err(AppError::BadRequest("Say what the task is".into()));
+    }
+    if text.len() > MAX_TASK {
+        return Err(AppError::BadRequest(format!("A task holds at most {MAX_TASK} bytes")));
+    }
+    if due.is_some_and(|d| !is_date(d)) {
+        return Err(AppError::BadRequest("due is a date like 2026-10-20".into()));
+    }
+    let id = inbox(state, user).await?;
+    let line = match due {
+        Some(d) => format!("- [ ] {text} @{d}"),
+        None => format!("- [ ] {text}"),
+    };
+    let uuid: Uuid = id.parse().map_err(|_| AppError::NotFound)?;
+    write_text(state, uuid, user, None, |current| {
+        let current = current.trim_end_matches('\n');
+        if current.trim().is_empty() { format!("Inbox\n{line}") } else { format!("{current}\n{line}") }
+    })
+    .await?;
+    Ok(id)
+}
+
+#[derive(Deserialize)]
+pub struct NewTask {
+    pub text: String,
+    pub due: Option<String>,
+}
+
+/// `POST /tasks {text, due?}`: a task for your Inbox note, from the quick add.
+pub async fn create(State(state): State<AppState>, CurrentUser(me): CurrentUser, Json(t): Json<NewTask>) -> ApiResult<Json<serde_json::Value>> {
+    let note = add(&state, &me.id, &t.text, t.due.as_deref()).await?;
+    Ok(Json(serde_json::json!({ "note": note })))
 }
 
 #[derive(Deserialize)]

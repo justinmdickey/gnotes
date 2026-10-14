@@ -2109,3 +2109,44 @@ async fn tasks_follow_sharing_and_tick_live() {
     let alice = login(&server.base, "alice").await;
     assert_eq!(tasks(&alice).await.len(), 1);
 }
+
+#[tokio::test]
+async fn quick_added_tasks_go_to_your_inbox() {
+    let dir = TempDir::new().unwrap();
+    let server = start(&dir).await;
+    let alice = user(&server, "alice").await;
+    let agent = Agent::new(&alice, "write").await;
+    use reqwest::Method as M;
+
+    // The first one makes the Inbox at the top level; the next goes on the end of it.
+    let inbox = alice.post("/tasks", json!({ "text": "Call  the\nplumber", "due": "2026-10-20" })).await["note"].as_str().unwrap().to_owned();
+    alice.post("/tasks", json!({ "text": "Buy filters" })).await;
+    let note = agent.ok(M::GET, &format!("/notes/{inbox}"), None).await;
+    assert_eq!(note["text"], "Inbox\n- [ ] Call the plumber @2026-10-20\n- [ ] Buy filters");
+    assert_eq!(note["notebook_id"], Value::Null);
+    let listed = tasks(&alice).await;
+    assert_eq!(listed[0]["text"], "Call the plumber");
+    assert_eq!(listed[0]["due"], "2026-10-20");
+
+    // A rename keeps it the Inbox; agents add to it too.
+    let renamed = agent.ok(M::PATCH, &format!("/notes/{inbox}"), Some(json!({ "text": "Errands\n- [ ] Call the plumber @2026-10-20\n- [ ] Buy filters" }))).await;
+    assert_eq!(renamed["title"], "Errands");
+    let added = agent.ok(M::POST, "/tasks", Some(json!({ "text": "Mow" }))).await;
+    assert_eq!(added["id"], inbox.as_str());
+    assert!(added["text"].as_str().unwrap().ends_with("- [ ] Buy filters\n- [ ] Mow"));
+
+    // Bad input is a 400; a trashed Inbox means the next task makes a new one.
+    for body in [json!({ "text": "  " }), json!({ "text": "x", "due": "tomorrow" })] {
+        assert_eq!(alice.send(M::POST, "/tasks", body).await.status(), 400);
+    }
+    agent.ok(M::DELETE, &format!("/notes/{inbox}"), None).await;
+    let fresh = alice.post("/tasks", json!({ "text": "Start over" })).await["note"].as_str().unwrap().to_owned();
+    assert_ne!(fresh, inbox);
+    assert_eq!(agent.ok(M::GET, &format!("/notes/{fresh}"), None).await["text"], "Inbox\n- [ ] Start over");
+
+    // Each person has their own.
+    let bob = user(&server, "bob").await;
+    let bobs = bob.post("/tasks", json!({ "text": "Bob's thing" })).await["note"].as_str().unwrap().to_owned();
+    assert_ne!(bobs, fresh);
+    assert_eq!(tasks(&bob).await.len(), 1);
+}

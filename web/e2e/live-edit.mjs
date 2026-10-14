@@ -1831,7 +1831,7 @@ try {
     await alice.tap(".recorder button[aria-label='Discard recording']");
     await alice.waitForFunction(() => !document.querySelector(".recorder"));
     check(await alice.evaluate(() => !document.querySelector(".cm-listening") && !document.querySelector(".cm-content").innerText.includes("remember")), "discarding takes back the marker and any live text");
-    // Holding the tab bar's + offers a new note, a voice memo or a photo; a memo note starts recording straight away.
+    // Holding the tab bar's + offers a new note, a task, a voice memo or a photo; a memo note starts recording straight away.
     const hold = async () => {
       const plus = await (await alice.waitForSelector(".tabbar .compose")).boundingBox();
       await alice.touchscreen.touchStart(plus.x + plus.width / 2, plus.y + plus.height / 2);
@@ -1843,7 +1843,7 @@ try {
     };
     const lint = await alice.evaluate(() => location.hash);
     const offered = await hold();
-    check(offered === "New Note,Voice Memo,Photo" && (await alice.evaluate(() => location.hash)) === lint, `holding the tab bar + offers New Note, Voice Memo and Photo, without making a note (${offered})`);
+    check(offered === "New Note,Task,Voice Memo,Photo" && (await alice.evaluate(() => location.hash)) === lint, `holding the tab bar + offers New Note, Task, Voice Memo and Photo, without making a note (${offered})`);
     await shot("phone-compose-menu-dark");
     await alice.tap("dialog ::-p-text(Voice Memo)");
     await alice.waitForSelector(".recorder .stop:not([disabled])");
@@ -2010,6 +2010,29 @@ try {
     await alice.click(".pane.editor .back-icon");
     await alice.waitForFunction(() => location.hash === "#/tasks" && document.querySelector(".pane.list .hero h1")?.textContent === "Tasks");
     check(true, "Back from the note returns to Tasks");
+    // Holding + and picking Task adds one to your Inbox without opening a note.
+    const plus = await (await alice.waitForSelector(".tabbar .compose")).boundingBox();
+    await alice.touchscreen.touchStart(plus.x + plus.width / 2, plus.y + plus.height / 2);
+    await new Promise((r) => setTimeout(r, 650));
+    await alice.touchscreen.touchEnd();
+    await alice.waitForSelector("dialog [role=menu]");
+    await new Promise((r) => setTimeout(r, 400));
+    await alice.tap("dialog ::-p-text(Task)");
+    await closed(alice);
+    await alice.waitForSelector("dialog input[aria-label=Task]");
+    await alice.keyboard.type("Pick up the dry cleaning");
+    await alice.tap("dialog ::-p-text(Tomorrow)");
+    await shot("phone-new-task-dark");
+    await alice.keyboard.press("Enter");
+    await closed(alice);
+    await alice.waitForFunction(
+      () => {
+        const row = [...document.querySelectorAll(".pane.list .task")].find((t) => t.querySelector(".text").textContent === "Pick up the dry cleaning");
+        return row?.closest("ul")?.previousElementSibling?.textContent === "Upcoming" && row.querySelector(".where").textContent === "Inbox" && row.querySelector(".due").textContent === "Tomorrow";
+      },
+      { timeout: 5000 },
+    );
+    check((await alice.evaluate(() => location.hash)) === "#/tasks", "holding + and picking Task adds it to the Inbox, due when you chose, and you stay on Tasks");
     const avatar = await alice.evaluate(() => {
       const bar = document.querySelector(".pane.list .headerbar").getBoundingClientRect();
       const button = document.querySelector(".pane.list .headerbar .account").getBoundingClientRect();

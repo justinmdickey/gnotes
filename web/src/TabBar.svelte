@@ -1,6 +1,7 @@
 <script lang="ts">
   import Dialog from "./lib/Dialog.svelte";
   import Icon, { type IconName } from "./lib/Icon.svelte";
+  import NewTaskDialog from "./NewTaskDialog.svelte";
   import { app, composeNote, navigate, type View } from "./lib/store.svelte";
 
   /**
@@ -30,8 +31,9 @@
     { key: "shared", label: "Shared", icon: "people", view: { kind: "shared-notes" } },
   ]);
 
-  // Holding the + offers what else a new note can start with: a voice memo or a photo.
+  // Holding the + offers a task for the Inbox, or what else a new note can start with: a voice memo or a photo.
   let adding = $state(false);
+  let addingTask = $state(false);
   let photoInput: HTMLInputElement;
   let holdTimer: ReturnType<typeof setTimeout> | undefined;
   /** The press that opened the menu may also end in a click, which mustn't make a note or pick from the menu. */
@@ -115,6 +117,7 @@
   <Dialog onclose={() => (adding = false)}>
     <div class="sheet" role="menu" aria-label="New">
       <button class="flat item" role="menuitem" onclick={() => ((adding = false), void composeNote())}><Icon name="compose" /><span>New Note</span></button>
+      <button class="flat item" role="menuitem" onclick={() => ((adding = false), (addingTask = true))}><Icon name="checklist" /><span>Task</span></button>
       <button class="flat item" role="menuitem" onclick={memo}><Icon name="mic" /><span>Voice Memo</span></button>
       <button class="flat item" role="menuitem" onclick={pickPhoto}><Icon name="camera" /><span>Photo</span></button>
     </div>
@@ -122,6 +125,10 @@
       <button onclick={() => (adding = false)}>Cancel</button>
     {/snippet}
   </Dialog>
+{/if}
+
+{#if addingTask}
+  <NewTaskDialog onclose={() => (addingTask = false)} />
 {/if}
 
 <style>

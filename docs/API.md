@@ -34,6 +34,7 @@ A key acts as you: it sees what you see, including notes and notebooks shared wi
 | `DELETE /notes/{id}` | Move a note you own to the trash (restorable for 30 days) |
 | `GET /search?q=` | Notes that match, best first. Query: `mode` (`words` or `meaning`), `limit` (20, max 50) |
 | `GET /tasks` | Checkbox lines in every note you can see, by due date. Query: `done` (`true` or `false`), `due_before` (`YYYY-MM-DD`) |
+| `POST /tasks` | Add `{ "text", "due"? }` as a task at the end of your Inbox note (made the first time); answers with the note |
 
 Leave out `notebook_id` to work at the top level. On `PATCH`, `"notebook_id": null` moves a note to the top level.
 

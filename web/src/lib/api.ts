@@ -324,6 +324,8 @@ export const api = {
   adminResetPassword: (id: string, password: string) => request("POST", `/admin/users/${id}/password`, { password }),
   tree: () => request<Tree>("GET", "/tree"),
   tasks: () => request<{ tasks: TaskItem[] }>("GET", "/tasks").then((r) => r.tasks),
+  /** Adds a task to the end of your Inbox note, made the first time. */
+  addTask: (text: string, due: string | null) => request<{ note: string }>("POST", "/tasks", { text, due }),
   /** Ticks or unticks a task on the note's latest text; 409 when that line changed since the list loaded. */
   toggleTask: (t: TaskItem, done: boolean) => request("POST", "/tasks/toggle", { note: t.note, line: t.line, text: t.text, done }),
   search: (q: string) => request<{ results: SearchResult[] }>("GET", `/search?q=${encodeURIComponent(q)}`),

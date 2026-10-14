@@ -5,6 +5,7 @@
   import AccountButton from "./lib/AccountButton.svelte";
   import Icon from "./lib/Icon.svelte";
   import StatusPage from "./lib/StatusPage.svelte";
+  import NewTaskDialog from "./NewTaskDialog.svelte";
   import { app, navigate } from "./lib/store.svelte";
   import { openTasks, setDone, tasks } from "./lib/tasks.svelte";
   import { media, scrollEdge, toast } from "./lib/ui.svelte";
@@ -18,6 +19,7 @@
   /** Which part of your notes to show: everything, one of your top notebooks, or what's shared with you. */
   let scope = $state<string>("all");
   let showDone = $state(false);
+  let adding = $state(false);
   /** Just ticked: they stay a moment, crossed out, so a tick can be seen (and undone) before the row goes. */
   let leaving = $state(new Set<string>());
   const key = (t: TaskItem) => `${t.note}:${t.line}`;
@@ -135,6 +137,7 @@
       {/if}
     </div>
     <div class="end">
+      <button class="flat icon" title="New task" aria-label="New task" onclick={() => (adding = true)}><Icon name="plus" /></button>
       <AccountButton class="phone-only" />
     </div>
   </header>
@@ -192,7 +195,7 @@
       {#if tasks.items && q}
         <StatusPage icon="search" title="No Results" description="No open task has “{query}”." tone="neutral" />
       {:else if tasks.items}
-        <StatusPage icon="checklist" title="Nothing to Do" description="Checkboxes in your notes show up here. Type “- [ ]” in any note to add one." tone="neutral" />
+        <StatusPage icon="checklist" title="Nothing to Do" description="Checkboxes in your notes show up here. Type “- [ ]” in a note, or hold + and pick Task." tone="neutral" />
       {/if}
     {/each}
 
@@ -209,6 +212,10 @@
     {/if}
   </div>
 </section>
+
+{#if adding}
+  <NewTaskDialog onclose={() => (adding = false)} />
+{/if}
 
 <style>
   section {

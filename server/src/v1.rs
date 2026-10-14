@@ -42,7 +42,7 @@ pub fn router() -> Router<AppState> {
         .route("/notes/{id}", get(get_note).patch(update_note).delete(delete_note))
         .route("/notes/{id}/append", post(append))
         .route("/search", get(search))
-        .route("/tasks", get(list_tasks))
+        .route("/tasks", get(list_tasks).post(add_task))
         .fallback(|| async { AppError::BadRequest("No such endpoint; see docs/API.md".into()) })
 }
 
@@ -458,4 +458,17 @@ async fn list_tasks(State(state): State<AppState>, key: KeyUser, Query(q): Query
             })
             .collect(),
     ))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NewTask {
+    text: String,
+    due: Option<String>,
+}
+
+/// `POST /v1/tasks {text, due?}`: adds a task to the end of your Inbox note, making it if needed.
+async fn add_task(State(state): State<AppState>, key: KeyUser, Body(body): Body<NewTask>) -> ApiResult<Json<Note>> {
+    let id = tasks::add(&state, &key.user.id, &body.text, body.due.as_deref()).await?;
+    Ok(Json(load_note(&state, &key.user.id, &id).await?))
 }
