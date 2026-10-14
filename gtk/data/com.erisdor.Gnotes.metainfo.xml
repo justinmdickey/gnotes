@@ -30,6 +30,11 @@
     <control>keyboard</control>
   </supports>
   <releases>
+    <release version="1.6.0" date="2026-10-13">
+      <description>
+        <p>The summary is a view beside the note, and the cursor sits on the title of an empty note.</p>
+      </description>
+    </release>
     <release version="1.5.0" date="2026-10-12">
       <description>
         <p>The first release of the GNOME app.</p>
