@@ -30,6 +30,11 @@
     <control>keyboard</control>
   </supports>
   <releases>
+    <release version="1.8.0" date="2026-10-14">
+      <description>
+        <p>Tasks: every checkbox from every note in one list by due date, ticked from the list or opened at its line. New Task adds to your Inbox, the note menu can hide a list from Tasks or clear done items, and due dates turn red once late.</p>
+      </description>
+    </release>
     <release version="1.6.0" date="2026-10-13">
       <description>
         <p>The summary is a view beside the note, and the cursor sits on the title of an empty note.</p>
