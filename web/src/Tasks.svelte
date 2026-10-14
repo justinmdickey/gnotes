@@ -7,11 +7,17 @@
   import StatusPage from "./lib/StatusPage.svelte";
   import NewTaskDialog from "./NewTaskDialog.svelte";
   import { app, navigate } from "./lib/store.svelte";
-  import { openTasks, setDone, tasks } from "./lib/tasks.svelte";
+  import { onDevice, openTasks, refreshOnDevice, setDone, tasks } from "./lib/tasks.svelte";
   import { media, scrollEdge, toast } from "./lib/ui.svelte";
   import { dueLabel, today as todayIso } from "./lib/dates";
 
   openTasks();
+  // Offline, only notes kept on this device can change, so the others' boxes wait.
+  const offline = $derived(app.status !== "online");
+  $effect(() => {
+    if (offline) void refreshOnDevice();
+  });
+  const canTick = (t: TaskItem) => !offline || onDevice.ids.has(t.note);
 
   /** The big title has scrolled away, so the headerbar shows the name instead. */
   let compact = $state(false);
@@ -162,6 +168,8 @@
           role="checkbox"
           aria-checked={t.done}
           aria-label={t.done ? `Mark “${t.text}” not done` : `Mark “${t.text}” done`}
+          title={canTick(t) ? undefined : "Not on this device, so it waits until you're back online"}
+          disabled={!canTick(t)}
           onclick={() => tick(t)}
         ></button>
         <button class="flat what" onclick={() => jump(t)}>
@@ -359,6 +367,10 @@
     transition:
       background var(--fast) ease,
       border-color var(--fast) ease;
+  }
+
+  .box:disabled::before {
+    opacity: 0.4;
   }
 
   .box.checked::before {

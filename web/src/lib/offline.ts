@@ -92,6 +92,8 @@ export const cache = {
   /** Marks a note as having edits the server may not have. */
   markDirty: (id: string) => put("dirty", id, true),
   clearDirty: (id: string) => del("dirty", id),
+  /** The notes with a copy on this device. */
+  noteIds: () => keys("notes"),
   /** Drops a note's copy: it was thrown away, or isn't yours to see anymore. */
   forget: (id: string) => Promise.all([del("notes", id), del("dirty", id)]),
 };
@@ -156,6 +158,30 @@ export const editing = {
   add: (id: string) => open.add(id),
   delete: (id: string) => open.delete(id),
 };
+
+/**
+ * Ticks or unticks a task with no server, in the note's copy on this device, which is then pushed
+ * back like any edit made offline. Finds its line the way the server does: by number and text.
+ * False when the note has no copy here, is open in an editor (which owns its copy), or the line changed.
+ */
+export async function tickOffline(task: TaskItem, done: boolean): Promise<boolean> {
+  if (open.has(task.note)) return false;
+  const saved = await cache.note(task.note);
+  if (!saved) return false;
+  const doc = new LoroDoc();
+  doc.import(saved);
+  const body = doc.getText("body");
+  const lines = body.toString().split("\n");
+  const line = lines[task.line];
+  const box = line === undefined ? null : /^(\s*[-*+]\s+\[)[ xX](\].*)$/.exec(line);
+  if (!box || !line.includes(task.text)) return false;
+  lines[task.line] = `${box[1]}${done ? "x" : " "}${box[2]}`;
+  body.update(lines.join("\n"));
+  doc.commit();
+  await cache.saveNote(task.note, doc);
+  await cache.markDirty(task.note);
+  return true;
+}
 
 let flushing = false;
 let again = false;

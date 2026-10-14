@@ -578,6 +578,11 @@ try {
   await carol.evaluate(() => [...document.querySelectorAll("li button")].find((b) => b.textContent.includes("Groceries")).click());
   await carol.waitForSelector(".cm-content[contenteditable=true]");
   await alice.waitForFunction(() => !!navigator.serviceWorker?.controller, { timeout: 10000 });
+  // Tasks seen once online is kept on the device, so it opens with no server too.
+  await alice.click("nav .row ::-p-text(Tasks)");
+  await alice.waitForFunction(() => [...document.querySelectorAll(".pane.list .task .text")].some((t) => t.textContent === "jam"), { timeout: 5000 });
+  await alice.click("nav .note-row ::-p-text(Groceries)");
+  await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("bread"));
   // Snapshots are saved a moment after the last change.
   await new Promise((r) => setTimeout(r, 1200));
   const stopped = new Promise((r) => server.once("exit", r));
@@ -608,6 +613,15 @@ try {
   await alice.keyboard.type("# Packed offline\nsocks");
   await alice.waitForFunction(() => document.querySelector("nav")?.innerText.includes("Packed offline"), { timeout: 5000 });
   check(true, "a note made offline opens for typing and is listed by its title");
+  // Offline, a task in a note kept on this device still ticks from Tasks, and goes up on reconnecting.
+  await alice.click("nav .row ::-p-text(Tasks)");
+  await alice.waitForFunction(() => [...document.querySelectorAll(".pane.list .task .text")].some((t) => t.textContent === "jam"), { timeout: 5000 });
+  await alice.evaluate(() => [...document.querySelectorAll(".pane.list .task")].find((t) => t.querySelector(".text").textContent === "jam").querySelector(".box").click());
+  await alice.waitForFunction(() => [...document.querySelectorAll(".pane.list .task")].some((t) => t.querySelector(".text").textContent === "jam" && t.querySelector(".box").getAttribute("aria-checked") === "true"), { timeout: 5000 });
+  check(true, "offline, a task in a note kept on this device checks off from Tasks");
+  await new Promise((r) => setTimeout(r, 600));
+  await alice.click("nav .note-row ::-p-text(Packed offline)");
+  await alice.waitForFunction(() => /note\/[0-9a-f-]{36}/.test(location.hash) && document.querySelector(".cm-content")?.innerText.includes("socks"));
   await new Promise((r) => setTimeout(r, 1200));
   server = spawn(bin, [], { env, stdio: "inherit" });
   await waitForServer();
@@ -622,6 +636,8 @@ try {
   await alice.click("nav .note-row ::-p-text(Groceries)");
   await alice.waitForFunction(() => /carol offline[\s\S]*alice offline|alice offline[\s\S]*carol offline/.test(document.querySelector(".cm-content")?.innerText ?? ""), { timeout: 15000 });
   check(true, "back online, edits made offline on both sides merge, and the note made offline reaches the server");
+  await alice.waitForFunction(() => document.querySelector(".cm-content").cmTile.root.view.state.doc.toString().includes("- [x] jam"), { timeout: 15000 });
+  check(true, "a task ticked offline is ticked on the server once back online");
   await alice.evaluate(async (id) => {
     await fetch(`/api/notes/${id}`, { method: "DELETE" });
     await fetch(`/api/trash/note/${id}`, { method: "DELETE" });
