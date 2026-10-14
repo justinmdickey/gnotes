@@ -37,6 +37,8 @@ pub enum Event {
     Status(Status),
     /// Notebooks or notes changed; refetch `/tree`.
     TreeChanged,
+    /// Some note's checkboxes changed; refetch `/tasks` if they're showing.
+    TasksChanged,
     Joined { note: String, role: Role, version: VersionVector },
     Update { note: String, data: Vec<u8> },
     Presence { note: String, data: Vec<u8> },
@@ -90,6 +92,7 @@ fn parse_control(text: &str) -> Option<Event> {
     let note = msg["note"].as_str().map(str::to_owned);
     Some(match msg["t"].as_str()? {
         "tree_changed" => Event::TreeChanged,
+        "tasks_changed" => Event::TasksChanged,
         "joined" => {
             let bytes = STANDARD.decode(msg["version"].as_str()?).ok()?;
             Event::Joined { note: note?, role: parse_role(&msg["role"])?, version: VersionVector::decode(&bytes).ok()? }
@@ -267,6 +270,7 @@ mod tests {
         let ev = parse_control(&format!(r#"{{"t":"joined","note":"n","role":"editor","version":"{v}"}}"#));
         assert!(matches!(ev, Some(Event::Joined { role: Role::Editor, .. })));
         assert!(matches!(parse_control(r#"{"t":"tree_changed"}"#), Some(Event::TreeChanged)));
+        assert!(matches!(parse_control(r#"{"t":"tasks_changed"}"#), Some(Event::TasksChanged)));
         let ev = parse_control(r#"{"t":"error","note":"n","code":"out_of_sync"}"#);
         assert!(matches!(ev, Some(Event::Error { code, .. }) if code == "out_of_sync"));
     }

@@ -1,4 +1,4 @@
-//! The sidebar, like the PWA's desktop one (web/src/Sidebar.svelte): Search, Recent, your notebooks
+//! The sidebar, like the PWA's desktop one (web/src/Sidebar.svelte): Search, Tasks, Recent, your notebooks
 //! with their notes, what's shared with you, Trash; the main menu, and a banner while offline.
 
 use std::{
@@ -23,6 +23,7 @@ use crate::{
 enum Row {
     Ask,
     Search,
+    Tasks,
     Recent,
     Heading,
     Notebook(String),
@@ -228,6 +229,7 @@ impl Sidebar {
         match row {
             Row::Ask => main.show_place(Place::Ask),
             Row::Search => main.show_place(Place::Search),
+            Row::Tasks => main.show_place(Place::Tasks),
             Row::Recent => main.show_place(Place::Recent),
             Row::Shared => main.show_place(Place::Shared),
             Row::Trash => main.show_place(Place::Trash),
@@ -319,6 +321,7 @@ impl Sidebar {
         let Some(main) = self.main.upgrade() else { return };
         let want = match &*main.place.borrow() {
             Place::Note(id) => Row::Note(id.clone()),
+            Place::Tasks => Row::Tasks,
             Place::Recent => Row::Recent,
             Place::Search => Row::Search,
             Place::Ask => Row::Ask,
@@ -366,6 +369,7 @@ impl Sidebar {
             self.add_simple(Row::Ask, "starred-symbolic", "Ask", None);
         }
         self.add_simple(Row::Search, "system-search-symbolic", "Search", None);
+        self.add_simple(Row::Tasks, "checkbox-checked-symbolic", "Tasks", None);
         self.add_simple(Row::Recent, "document-open-recent-symbolic", "Recent", None);
         // What's shared with you, then what you've shared. Notes on this computer have no one to share with.
         if !main.store.local {

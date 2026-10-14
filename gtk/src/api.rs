@@ -55,6 +55,9 @@ pub struct TreeNote {
     pub shared: bool,
     #[serde(default)]
     pub shared_with: Vec<String>,
+    /// Its checkboxes are a plain list, kept out of Tasks.
+    #[serde(default)]
+    pub hide_tasks: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -104,6 +107,24 @@ pub struct UserSummary {
 pub struct SnippetPart {
     pub text: String,
     pub hit: bool,
+}
+
+/// A checkbox line in a note, from the server's task index (server/src/tasks.rs).
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct TaskItem {
+    pub note: String,
+    /// The note's title.
+    pub title: String,
+    pub notebook: Option<String>,
+    /// 0-based line in the note's text.
+    pub line: usize,
+    /// The task without its "- [ ]" or due date.
+    pub text: String,
+    pub done: bool,
+    /// "YYYY-MM-DD", from an "@YYYY-MM-DD" in the line.
+    pub due: Option<String>,
+    /// The column, for a card on a kanban board.
+    pub column: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -563,6 +584,32 @@ impl Api {
         url.query_pairs_mut().append_pair("q", q);
         let path = format!("/search?{}", url.query().unwrap_or_default());
         Ok(self.get::<Results>(&path).await?.results)
+    }
+
+    /// Every task in the notes you can see.
+    pub async fn tasks(&self) -> Result<Vec<TaskItem>> {
+        #[derive(Deserialize)]
+        struct Tasks {
+            tasks: Vec<TaskItem>,
+        }
+        Ok(self.get::<Tasks>("/tasks").await?.tasks)
+    }
+
+    /// Ticks or unticks a task on its note's latest text; a 409 when that line changed since.
+    pub async fn toggle_task(&self, t: &TaskItem, done: bool) -> Result<()> {
+        let body = json!({ "note": t.note, "line": t.line, "text": t.text, "done": done });
+        self.post::<Value>("/tasks/toggle", body).await.map(drop)
+    }
+
+    /// Adds a task to the end of your Inbox note, made the first time. Returns the Inbox's id.
+    pub async fn add_task(&self, text: &str, due: Option<&str>) -> Result<String> {
+        let v: Value = self.post("/tasks", json!({ "text": text, "due": due })).await?;
+        Ok(v["note"].as_str().unwrap_or_default().to_owned())
+    }
+
+    /// Keeps a note's checkboxes out of Tasks, or lets them back in.
+    pub async fn hide_tasks(&self, id: &str, hide: bool) -> Result<()> {
+        self.patch(&format!("/notes/{id}"), json!({ "hide_tasks": hide })).await.map(drop)
     }
 
     /// `kind` is "note" or "notebook".

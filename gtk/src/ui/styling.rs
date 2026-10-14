@@ -32,6 +32,8 @@ pub fn make_tags(buffer: &gtk::TextBuffer) {
     for name in markdown::TAGS {
         buffer.create_tag(Some(name), &[]);
     }
+    // The line a task in Tasks pointed at, lit for a moment. Not a Markdown tag, so restyling leaves it.
+    buffer.create_tag(Some("jumped"), &[]);
 }
 
 /// Colors for the Markdown tags, from the view's own text color, so they follow the style in use.
@@ -68,6 +70,7 @@ pub fn color_tags(view: &NoteView) {
         // A checkbox's `[ ]`: monospace, so the box drawn over it has room.
         set("task", &[("family", &mono)]);
         set("done", &[("foreground-rgba", &dim), ("strikethrough", &true)]);
+        set("jumped", &[("paragraph-background-rgba", &gdk::RGBA::new(accent.red(), accent.green(), accent.blue(), 0.22))]);
         // Live preview: marks hidden off the edited line; bullets and boxes drawn over clear text.
         // Pango takes an alpha of 0 as no alpha at all, so this is the least above it.
         let clear = gdk::RGBA::new(0.0, 0.0, 0.0, 1.0 / 65535.0);

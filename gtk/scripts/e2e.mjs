@@ -311,6 +311,60 @@ check("a code block's language can be picked", slashed.includes("```python\nkube
 check("dragging a block's grip moves it, whole", slashed.startsWith("# Snippets\n\n```python\nkubectl get pods -A\nflux reconcile kustomization apps\n```\nHandy commands"), slashed.slice(0, 120));
 check("the / menu adds a table", slashed.includes("| Column 1 | Column 2 | Column 3 |"));
 
+// Tasks: every checkbox from every note, ticked from the list, opened at its line; Hide from Tasks,
+// Clear Done and a ticked item sinking, in the note; New Task adds to the Inbox.
+const day = (n) => {
+  const d = new Date(Date.now() + n * 864e5);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+const chores = await ann.note(ids.home);
+await demo.write(ann, chores, `# Chores\n- [ ] Mow the lawn @${day(0)}\n- [ ] Fix the gate\n- [ ] Rake leaves`);
+await sleep(500);
+({ code, stderr } = await demo.runApp({
+  env: {
+    GNOTES_DRIVE: [
+      "wait-tree",
+      "open tasks",
+      "wait-list Mow the lawn",
+      `dump ${f("tasks.json")}`,
+      "task-tick Fix the gate",
+      "sleep 1500",
+      "task-open Rake leaves",
+      "wait-loaded",
+      "wait-jumped Rake leaves",
+      `dump ${f("jumped.json")}`,
+      "tick 0",
+      "sleep 600",
+      `dump ${f("sunk.json")}`,
+      "note-action clear-done",
+      "sleep 800",
+      "note-action hide-tasks",
+      "sleep 1200",
+      "open tasks",
+      "sleep 1500",
+      `dump ${f("hidden.json")}`,
+      `add-task Call the vet|${day(1)}`,
+      "wait-list Call the vet",
+      `dump ${f("added.json")}`,
+      "quit",
+    ].join("\n"),
+  },
+}));
+check("the Tasks run ran", code === 0, { code, stderr });
+const listed = existsSync(f("tasks.json")) ? dump("tasks.json") : {};
+check("Tasks lists checkboxes from your notes, with Tasks in the sidebar", ["Mow the lawn", "Fix the gate", "Rake leaves"].every((t) => listed.list?.includes(t)) && listed.sidebar?.some((l) => l.replace(/^> /, "") === "Tasks"), [listed.list, listed.sidebar]);
+const jumped = existsSync(f("jumped.json")) ? dump("jumped.json") : {};
+check("a task opens its note", jumped.title === "Chores", jumped.title);
+const sunk = existsSync(f("sunk.json")) ? dump("sunk.json").text : "";
+check("ticking from Tasks checks it off in the note", sunk.includes("- [x] Fix the gate"), sunk);
+check("a ticked item sinks below the open ones", sunk.endsWith("- [ ] Rake leaves\n- [x] Mow the lawn @" + day(0)), sunk);
+const cleared = await serverText(chores, (t) => !t.includes("[x]"));
+check("Clear Done takes out ticked items", cleared === "# Chores\n- [ ] Rake leaves", cleared);
+const hiddenList = existsSync(f("hidden.json")) ? dump("hidden.json").list : [];
+check("Hide from Tasks takes a note's tasks off Tasks", !hiddenList.includes("Rake leaves"), hiddenList);
+const added = existsSync(f("added.json")) ? dump("added.json").list : [];
+check("New Task adds to the Inbox and shows in Tasks", added.includes("Call the vet"), added);
+
 // Tables and boards, drawn as widgets.
 ({ code, stderr } = await demo.runApp({
   env: {

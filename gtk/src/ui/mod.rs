@@ -19,6 +19,7 @@ mod shot;
 mod sidebar;
 mod store;
 mod tables;
+mod tasks;
 mod styling;
 mod window;
 

@@ -58,6 +58,8 @@ pub struct Store {
     pub status: Cell<Status>,
     notes: RefCell<HashMap<String, Rc<dyn NoteHandler>>>,
     tree_watchers: RefCell<Vec<Watcher>>,
+    /// Pages showing tasks, told when some note's tasks change.
+    tasks_watchers: RefCell<Vec<Watcher>>,
     status_watchers: RefCell<Vec<Watcher>>,
     /// Shows a short message at the bottom of the window.
     pub toast: RefCell<Option<Box<dyn Fn(&str)>>>,
@@ -92,6 +94,7 @@ impl Store {
             status: Cell::new(Status::Connecting),
             notes: Default::default(),
             tree_watchers: Default::default(),
+            tasks_watchers: Default::default(),
             status_watchers: Default::default(),
             toast: Default::default(),
             on_signed_out: Default::default(),
@@ -149,6 +152,11 @@ impl Store {
         self.tree_watchers.borrow_mut().push(Rc::new(f));
     }
 
+    /// Calls `f` when some note's tasks change, until it returns false.
+    pub fn on_tasks(&self, f: impl Fn() -> bool + 'static) {
+        self.tasks_watchers.borrow_mut().push(Rc::new(f));
+    }
+
     /// Calls `f` when the connection changes, until it returns false.
     pub fn on_status(&self, f: impl Fn() -> bool + 'static) {
         self.status_watchers.borrow_mut().push(Rc::new(f));
@@ -174,6 +182,7 @@ impl Store {
                 }
             }
             Event::TreeChanged => self.refresh_tree(),
+            Event::TasksChanged => notify(&self.tasks_watchers),
             Event::Joined { note, role, version } => {
                 if let Some(h) = self.handler(&note) {
                     h.joined(role, version);
@@ -406,6 +415,7 @@ fn placeholder(id: &str, notebook_id: Option<String>, user: &User) -> TreeNote {
         updated_at: now_ms(),
         shared: false,
         shared_with: Vec::new(),
+        hide_tasks: false,
     }
 }
 

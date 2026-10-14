@@ -16,6 +16,7 @@ use crate::{bg, cache::Session};
 pub enum Place {
     Nothing,
     Note(String),
+    Tasks,
     Recent,
     Search,
     Ask,
@@ -169,6 +170,7 @@ impl Main {
                     e.close();
                     if let Some(prev) = main.nav.visible_page().and_then(|p| p.tag()) {
                         main.place.replace(match prev.as_str() {
+                            "tasks" => Place::Tasks,
                             "recent" => Place::Recent,
                             "ask" => Place::Ask,
                             "search" => Place::Search,
@@ -289,6 +291,8 @@ impl Main {
         action("new-notebook", Box::new(|m| dialogs::new_notebook(m, m.folder.borrow().clone())));
         action("search", Box::new(|m| m.show_place(Place::Search)));
         action("recent", Box::new(|m| m.show_place(Place::Recent)));
+        action("tasks", Box::new(|m| m.show_place(Place::Tasks)));
+        action("new-task", Box::new(super::tasks::new_task));
         action("logout", Box::new(|m| m.sign_out(true)));
         action("about", Box::new(|m| m.about()));
         action("shortcuts", Box::new(|m| m.shortcuts()));
@@ -299,6 +303,7 @@ impl Main {
         if let Some(app) = self.window.application() {
             app.set_accels_for_action("win.new-note", &["<Control>n"]);
             app.set_accels_for_action("win.new-notebook", &["<Control><Shift>n"]);
+            app.set_accels_for_action("win.new-task", &["<Control>t"]);
             app.set_accels_for_action("win.search", &["<Control>f", "<Control>k"]);
             app.set_accels_for_action("win.settings", &["<Control>comma"]);
             app.set_accels_for_action("win.shortcuts", &["<Control>question"]);
@@ -316,6 +321,7 @@ impl Main {
         }
         let page = match &place {
             Place::Nothing => lists::empty_page(self),
+            Place::Tasks => super::tasks::page(self),
             Place::Recent => lists::recent_page(self),
             Place::Search => lists::search_page(self),
             Place::Ask => self.ask().page.clone(),
@@ -346,7 +352,7 @@ impl Main {
         let editor = Editor::new(self, id);
         let page = editor.page.clone();
         *self.editor.borrow_mut() = Some(editor);
-        let listing = matches!(&*self.place.borrow(), Place::Recent | Place::Search | Place::Ask | Place::Shared | Place::Trash);
+        let listing = matches!(&*self.place.borrow(), Place::Tasks | Place::Recent | Place::Search | Place::Ask | Place::Shared | Place::Trash);
         if over_list && listing {
             self.nav.push(&page);
         } else {
@@ -359,6 +365,14 @@ impl Main {
         self.split.set_show_content(true);
         self.sidebar().reveal(id);
         self.sidebar().select();
+    }
+
+    /// Opens a task's note over the Tasks list, at the task's line.
+    pub fn open_task(self: &Rc<Self>, id: &str, line: usize) {
+        self.open_note(id, true);
+        if let Some(e) = self.editor() {
+            e.go_to_line(line);
+        }
     }
 
     pub fn editor(&self) -> Option<Rc<Editor>> {
@@ -445,6 +459,7 @@ impl Main {
                 &[
                     ("New Note", "<Control>n"),
                     ("New Notebook", "<Control><Shift>n"),
+                    ("New Task", "<Control>t"),
                     ("Search", "<Control>f"),
                     ("Preferences", "<Control>comma"),
                     ("Keyboard Shortcuts", "<Control>question"),

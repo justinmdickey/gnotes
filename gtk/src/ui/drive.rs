@@ -92,6 +92,8 @@ pub fn open_screen(main: &Rc<Main>, target: &str) {
             }
         }
         "recent" => main.show_place(Place::Recent),
+        "tasks" => main.show_place(Place::Tasks),
+        "new-task" => super::tasks::new_task(main),
         "ask" => {
             if arg.is_empty() {
                 main.show_place(Place::Ask);
@@ -384,6 +386,26 @@ async fn run(main: &Rc<Main>, cmd: &str, arg: &str) {
                 e.grip_drag(a.parse().unwrap_or(0), b.parse().unwrap_or(0));
             }
         }
+        "note-action" => {
+            if !editor().is_some_and(|e| e.note_action(arg)) {
+                eprintln!("drive: no note action {arg}");
+            }
+        }
+        "add-task" => {
+            let (text, due) = arg.split_once('|').map_or((arg, None), |(t, d)| (t, Some(d.to_owned())));
+            super::tasks::add(main, text.to_owned(), due);
+        }
+        "task-tick" | "task-open" => {
+            // The task row on the Tasks page whose title is `arg`.
+            match super::tasks::find_row(main, arg) {
+                Some((_, check)) if cmd == "task-tick" => check.set_active(!check.is_active()),
+                Some((row, _)) => {
+                    ActionRowExt::activate(&row);
+                }
+                None => eprintln!("drive: no task {arg}"),
+            }
+        }
+        "wait-jumped" => until(&format!("line {arg:?} lit"), || editor().is_some_and(|e| e.jumped_text().is_some_and(|t| t.contains(arg)))).await,
         "tick" => {
             if let Some(e) = editor()
                 && !e.toggle_task(arg.parse().unwrap_or(0))

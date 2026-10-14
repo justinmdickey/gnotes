@@ -113,6 +113,10 @@ pub struct Editor {
     player: RefCell<Option<(String, gtk::MediaFile)>>,
     /// Typing focuses a new note once its content has arrived.
     focus_when_ready: Cell<bool>,
+    /// A line to go to once the note's text arrives, from Tasks.
+    jump_to: Cell<Option<usize>>,
+    /// Whether the note has checklist items, and ticked ones, for the menu's Tasks actions.
+    checks: Cell<(bool, bool)>,
     /// The note was made here just now: it's yours, whatever the tree says while it catches up.
     fresh: Cell<bool>,
 }
@@ -450,6 +454,8 @@ impl Editor {
             photo_tags: Default::default(),
             player: Default::default(),
             focus_when_ready: Cell::new(false),
+            jump_to: Cell::new(None),
+            checks: Cell::new((false, false)),
             fresh: Cell::new(false),
         });
 
@@ -641,6 +647,17 @@ impl Editor {
         self.menu_button.set_menu_model(Some(&self.menu(note.map(|n| n.role))));
     }
 
+    fn refresh_menu(&self) {
+        let role = self.store.note(&self.id).map(|n| n.role);
+        self.menu_button.set_menu_model(Some(&self.menu(role)));
+    }
+
+    /// Runs one of the note menu's actions by name, as picking it would (for driven runs).
+    pub fn note_action(&self, name: &str) -> bool {
+        self.refresh_menu();
+        WidgetExt::activate_action(&self.page, &format!("note.{name}"), None).is_ok()
+    }
+
     /// Shows the Note / Summary switcher where there's room: the headerbar, or the bottom of a
     /// narrow window. Without a Summary view, the headerbar shows the note's name.
     fn place_switcher(&self) {
@@ -717,6 +734,36 @@ impl Editor {
             menu.insert_section(1, None, &media);
             action(&media, "Add Photo…", "photo", open(|_, e| e.pick_photo()));
             action(&media, "Record Voice Memo", "record", open(|_, e| e.start_recording()));
+        }
+        // A list like groceries keeps its checkboxes out of Tasks; Clear Done takes out ticked items.
+        let (any, done) = self.checks.get();
+        let hidden = self.store.note(&self.id).is_some_and(|n| n.hide_tasks);
+        if self.can_edit() && (any || hidden) {
+            let tasks = gio::Menu::new();
+            menu.insert_section(2, None, &tasks);
+            action(&tasks, if hidden { "Show in Tasks" } else { "Hide from Tasks" }, "hide-tasks", Box::new(move |m, id| {
+                let (api, m, id) = (m.store.api.clone(), m.clone(), id.to_owned());
+                glib::spawn_future_local(async move {
+                    match bg(async move { api.hide_tasks(&id, !hidden).await }).await {
+                        Ok(()) => {
+                            m.toast(if hidden { "Shows in Tasks again" } else { "Hidden from Tasks" });
+                            m.store.refresh_tree();
+                        }
+                        Err(e) => m.toast(&e.to_string()),
+                    }
+                });
+            }));
+            if done {
+                action(&tasks, "Clear Done", "clear-done", open(|m, e| {
+                    let n = e.clear_done();
+                    let weak = Rc::downgrade(e);
+                    m.toast_undo(&format!("Cleared {n} done"), move || {
+                        if let Some(e) = weak.upgrade() {
+                            e.undo(false);
+                        }
+                    });
+                }));
+            }
         }
         if role == Some(Role::Owner) {
             add("Move to Trash", "trash", Box::new(dialogs::trash_note));
@@ -873,6 +920,9 @@ impl Editor {
             self.refresh_editable();
             if self.focus_when_ready.get() {
                 self.focus();
+            }
+            if let Some(line) = self.jump_to.take() {
+                self.go_to_line(line);
             }
         }
         self.show_peers();
@@ -1524,13 +1574,105 @@ impl Editor {
         })
     }
 
-    /// Ticks or unticks the checkbox whose `[` is at `start`.
+    /// Ticks or unticks the checkbox whose `[` is at `start` (`done` is how it is now). Ticking an
+    /// item also moves it to the end of its run of checklist items at the same level, so what's left
+    /// to do stays on top, unless it has nested items under it. Like the web editor (livePreview.ts).
     fn tick(&self, start: usize, done: bool) {
         let s = start as i32 + 1;
+        let line = self.buffer.iter_at_offset(s).line();
+        let text = |n: i32| -> Option<String> {
+            let a = self.buffer.iter_at_line(n)?;
+            let mut b = a;
+            if !b.ends_line() {
+                b.forward_to_line_end();
+            }
+            Some(self.buffer.text(&a, &b, true).to_string())
+        };
+        let Some(this) = text(line) else { return };
+        let indent: String = this.chars().take_while(|c| c.is_whitespace()).collect();
+        let sibling = |t: &str| t.strip_prefix(indent.as_str()).is_some_and(is_checklist_item);
+        let mut last = line;
+        while text(last + 1).is_some_and(|t| sibling(&t)) {
+            last += 1;
+        }
+        let nested = text(line + 1).is_some_and(|t| !t.trim().is_empty() && t.chars().take_while(|c| c.is_whitespace()).count() > indent.chars().count());
         self.edit(|b| {
             b.delete(&mut b.iter_at_offset(s), &mut b.iter_at_offset(s + 1));
             b.insert(&mut b.iter_at_offset(s), if done { " " } else { "x" });
+            if done || last == line || nested {
+                return;
+            }
+            // Take the ticked line out and put it after the run's last item.
+            let (Some(mut a), Some(mut z)) = (b.iter_at_line(line), b.iter_at_line(line + 1)) else { return };
+            let moved = b.text(&a, &z, true).to_string();
+            b.delete(&mut a, &mut z);
+            let Some(mut end) = b.iter_at_line(last - 1) else { return };
+            if !end.ends_line() {
+                end.forward_to_line_end();
+            }
+            b.insert(&mut end, &format!("\n{}", moved.trim_end_matches('\n')));
         });
+    }
+
+    /// Scrolls to `line` and lights it for a moment, once the text is here.
+    pub fn go_to_line(&self, line: usize) {
+        if !self.doc.borrow().has_data {
+            self.jump_to.set(Some(line));
+            return;
+        }
+        let Some(start) = self.buffer.iter_at_line(line as i32) else { return };
+        let mut end = start;
+        end.forward_to_line_end();
+        self.buffer.apply_tag_by_name("jumped", &start, &end);
+        let mark = self.buffer.create_mark(None, &start, true);
+        let (view, buffer) = (self.view.clone(), self.buffer.clone());
+        // After layout, or the scroll lands short of a line not measured yet.
+        glib::idle_add_local_once(move || {
+            view.scroll_to_mark(&mark, 0.1, true, 0.0, 0.3);
+            buffer.delete_mark(&mark);
+        });
+        let buffer = self.buffer.clone();
+        glib::timeout_add_local_once(std::time::Duration::from_millis(1600), move || {
+            let (s, e) = buffer.bounds();
+            buffer.remove_tag_by_name("jumped", &s, &e);
+        });
+    }
+
+    /// Whether the line lit by `go_to_line` is still lit, and what it says (for driven runs).
+    pub fn jumped_text(&self) -> Option<String> {
+        let tag = self.buffer.tag_table().lookup("jumped")?;
+        let mut it = self.buffer.start_iter();
+        if !it.starts_tag(Some(&tag)) && !it.forward_to_tag_toggle(Some(&tag)) {
+            return None;
+        }
+        let mut end = it;
+        end.forward_to_tag_toggle(Some(&tag));
+        Some(self.buffer.text(&it, &end, true).to_string())
+    }
+
+    /// Takes out every ticked item outside code and boards, as one undo step.
+    pub fn clear_done(&self) -> usize {
+        let text = self.shown_text();
+        let mut fence = false;
+        let mut gone = Vec::new();
+        for (n, l) in text.lines().enumerate().skip(1) {
+            let t = l.trim_start();
+            if t.starts_with("```") || t.starts_with("~~~") {
+                fence = !fence;
+            } else if !fence && is_done_item(t) {
+                gone.push(n as i32);
+            }
+        }
+        self.edit(|b| {
+            // From the bottom up, so earlier line numbers stay put.
+            for &n in gone.iter().rev() {
+                let (Some(mut a), Some(mut z)) = (b.iter_at_line(n - 1), b.iter_at_line(n)) else { continue };
+                a.forward_to_line_end();
+                z.forward_to_line_end();
+                b.delete(&mut a, &mut z);
+            }
+        });
+        gone.len()
     }
 
     /// The language picker of code block `n`, from its label.
@@ -2137,6 +2279,11 @@ impl Editor {
         let active = self.active_lines();
         self.active.set(active);
         let styled = styling::apply(&self.view, &text, active);
+        // The menu offers Hide from Tasks once there's a checkbox, and Clear Done once one's ticked.
+        let checks = (!styled.tasks.is_empty(), styled.tasks.iter().any(|t| t.1));
+        if self.checks.replace(checks) != checks {
+            self.refresh_menu();
+        }
         let at = |o: usize| self.buffer.iter_at_offset(o as i32);
         let mut pictures = Vec::new();
         let column = self.view.column_width() as f32;
@@ -2953,4 +3100,17 @@ enum Target {
     Link(String),
     Recording(String),
     Photo(gdk::Texture),
+}
+
+/// "- [ ] …", "* [x] …", "+ [X] …", with no indent before it.
+fn is_checklist_item(l: &str) -> bool {
+    let mut c = l.chars();
+    matches!(c.next(), Some('-' | '*' | '+')) && {
+        let rest = c.as_str().trim_start();
+        rest.len() < l.len() - 1 && (rest.starts_with("[ ]") || rest.starts_with("[x]") || rest.starts_with("[X]"))
+    }
+}
+
+fn is_done_item(l: &str) -> bool {
+    is_checklist_item(l) && !l[1..].trim_start().starts_with("[ ]")
 }
