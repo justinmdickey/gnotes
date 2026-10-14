@@ -31,6 +31,8 @@ export interface TreeNote {
   shared: boolean;
   /** Who it's shared with, by display name: only on your own notes. Missing from trees saved by older versions. */
   shared_with?: string[];
+  /** Its checkboxes are a plain list, kept out of Tasks. Missing from trees saved by older versions. */
+  hide_tasks?: boolean;
 }
 
 export interface SharedRoot {
@@ -338,6 +340,8 @@ export const api = {
   renameNotebook: (id: string, name: string) => request("PATCH", `/notebooks/${id}`, { name }),
   moveNotebook: (id: string, parent_id: string | null) => request("PATCH", `/notebooks/${id}`, { parent_id }),
   moveNote: (id: string, notebook_id: string | null) => request("PATCH", `/notes/${id}`, { notebook_id }),
+  /** Keeps a note's checkboxes out of Tasks, or lets them back in. */
+  hideTasks: (id: string, hide_tasks: boolean) => request("PATCH", `/notes/${id}`, { hide_tasks }),
   deleteNotebook: (id: string) => request("DELETE", `/notebooks/${id}`),
 
   /** `id` is a client-made UUIDv7, so a note made offline keeps the same id. */

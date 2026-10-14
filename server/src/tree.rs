@@ -47,6 +47,8 @@ pub struct TreeNote {
     pub(crate) shared: bool,
     /// Who it's shared with, by display name. Only on your own notes; others don't see each other.
     pub(crate) shared_with: Vec<String>,
+    /// Its checkboxes are a plain list, kept out of Tasks.
+    pub(crate) hide_tasks: bool,
 }
 
 /// Something shared with the caller directly, shown under "Shared with me".
@@ -66,7 +68,7 @@ pub struct Tree {
 }
 
 type NotebookRow = (String, Option<String>, String, String, i64);
-type NoteRow = (String, Option<String>, String, String, String, i64);
+type NoteRow = (String, Option<String>, String, String, String, i64, bool);
 
 pub async fn get_tree(State(state): State<AppState>, CurrentUser(me): CurrentUser) -> ApiResult<Json<Tree>> {
     Ok(Json(load_tree(&state, &me).await?))
@@ -117,7 +119,7 @@ pub(crate) async fn load_tree(state: &AppState, me: &User) -> ApiResult<Tree> {
     let shared_ids: Vec<&String> =
         notebooks.values().filter(|nb| nb.role != Role::Owner).map(|nb| &nb.id).collect();
     let own_notes: Vec<NoteRow> = sqlx::query_as(
-        "SELECT n.id, n.notebook_id, n.title, n.preview, u.display_name, n.updated_at
+        "SELECT n.id, n.notebook_id, n.title, n.preview, u.display_name, n.updated_at, n.hide_tasks
          FROM notes n JOIN users u ON u.id = n.owner_id
          WHERE n.owner_id = ? AND n.deleted_at IS NULL",
     )
@@ -125,7 +127,7 @@ pub(crate) async fn load_tree(state: &AppState, me: &User) -> ApiResult<Tree> {
     .fetch_all(db)
     .await?;
     let notebook_notes: Vec<NoteRow> = sqlx::query_as(
-        "SELECT n.id, n.notebook_id, n.title, n.preview, u.display_name, n.updated_at
+        "SELECT n.id, n.notebook_id, n.title, n.preview, u.display_name, n.updated_at, n.hide_tasks
          FROM notes n JOIN users u ON u.id = n.owner_id
          WHERE n.deleted_at IS NULL AND n.owner_id != ?
            AND n.notebook_id IN (SELECT value FROM json_each(?))",
@@ -134,8 +136,8 @@ pub(crate) async fn load_tree(state: &AppState, me: &User) -> ApiResult<Tree> {
     .bind(serde_json::to_string(&shared_ids)?)
     .fetch_all(db)
     .await?;
-    let direct_notes: Vec<(String, Option<String>, String, String, String, i64, String)> = sqlx::query_as(
-        "SELECT n.id, n.notebook_id, n.title, n.preview, u.display_name, n.updated_at, s.role
+    let direct_notes: Vec<(String, Option<String>, String, String, String, i64, bool, String)> = sqlx::query_as(
+        "SELECT n.id, n.notebook_id, n.title, n.preview, u.display_name, n.updated_at, n.hide_tasks, s.role
          FROM shares s JOIN notes n ON n.id = s.resource_id JOIN users u ON u.id = n.owner_id
          WHERE s.user_id = ?1 AND s.resource_type = 'note' AND n.deleted_at IS NULL AND n.owner_id != ?1",
     )
@@ -144,19 +146,19 @@ pub(crate) async fn load_tree(state: &AppState, me: &User) -> ApiResult<Tree> {
     .await?;
 
     let mut notes: HashMap<String, TreeNote> = HashMap::new();
-    for (id, notebook_id, title, preview, owner, updated_at) in own_notes {
-        notes.insert(id.clone(), TreeNote { id, notebook_id, title, preview, owner, role: Role::Owner, updated_at, shared: false, shared_with: vec![] });
+    for (id, notebook_id, title, preview, owner, updated_at, hide_tasks) in own_notes {
+        notes.insert(id.clone(), TreeNote { id, notebook_id, title, preview, owner, role: Role::Owner, updated_at, shared: false, shared_with: vec![], hide_tasks });
     }
-    for (id, notebook_id, title, preview, owner, updated_at) in notebook_notes {
+    for (id, notebook_id, title, preview, owner, updated_at, hide_tasks) in notebook_notes {
         let role = notebook_id.as_ref().and_then(|nb| notebooks.get(nb)).map_or(Role::Viewer, |nb| nb.role);
-        notes.insert(id.clone(), TreeNote { id, notebook_id, title, preview, owner, role, updated_at, shared: false, shared_with: vec![] });
+        notes.insert(id.clone(), TreeNote { id, notebook_id, title, preview, owner, role, updated_at, shared: false, shared_with: vec![], hide_tasks });
     }
-    for (id, notebook_id, title, preview, owner, updated_at, role) in direct_notes {
+    for (id, notebook_id, title, preview, owner, updated_at, hide_tasks, role) in direct_notes {
         let role = Role::parse(&role).unwrap_or(Role::Viewer);
         notes
             .entry(id.clone())
             .and_modify(|n| n.role = n.role.max(role))
-            .or_insert(TreeNote { id, notebook_id, title, preview, owner, role, updated_at, shared: false, shared_with: vec![] });
+            .or_insert(TreeNote { id, notebook_id, title, preview, owner, role, updated_at, shared: false, shared_with: vec![], hide_tasks });
     }
 
     let shared: Vec<SharedRoot> = sqlx::query_as::<_, (String, String, String, bool)>(
@@ -443,6 +445,8 @@ pub(crate) async fn add_note(state: &AppState, me: &str, id: &str, notebook: Opt
 pub struct NotePatch {
     #[serde(default, deserialize_with = "double_option")]
     notebook_id: Option<Option<String>>,
+    /// Keeps the note's checkboxes out of Tasks (`true`) or lets them back in.
+    hide_tasks: Option<bool>,
 }
 
 pub async fn update_note(
@@ -454,6 +458,11 @@ pub async fn update_note(
     require_note(&state, &me.id, &id, Role::Editor).await?;
     if let Some(target) = &body.notebook_id {
         move_note(&state, &me.id, &id, target.as_deref()).await?;
+    }
+    if let Some(hide) = body.hide_tasks {
+        sqlx::query("UPDATE notes SET hide_tasks = ? WHERE id = ?").bind(hide).bind(&id).execute(&state.db).await?;
+        state.hub.tree_changed();
+        state.hub.tasks_changed();
     }
     Ok(Json(json!({ "ok": true })))
 }

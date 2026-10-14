@@ -2087,6 +2087,15 @@ async fn tasks_follow_sharing_and_tick_live() {
         garage_text.replace("- [ ] Order tiles", "- [x] Order tiles")
     );
 
+    // A note kept out of Tasks drops out for everyone; a viewer can't change that.
+    let res = bob.send(M::PATCH, &format!("/notes/{garage}"), json!({ "hide_tasks": true })).await;
+    assert_eq!(res.status(), 403);
+    alice.send(M::PATCH, &format!("/notes/{loose}"), json!({ "hide_tasks": true })).await;
+    assert!(!tasks(&bob).await.iter().any(|t| t["note"] == loose.as_str()));
+    assert!(alice.get("/tree").await["notes"].as_array().unwrap().iter().any(|n| n["id"] == loose.as_str() && n["hide_tasks"] == true));
+    alice.send(M::PATCH, &format!("/notes/{loose}"), json!({ "hide_tasks": false })).await;
+    assert!(tasks(&bob).await.iter().any(|t| t["note"] == loose.as_str()));
+
     // Agents filter by done and due date; trashed notes drop out.
     let open = agent.ok(M::GET, "/tasks?done=false&due_before=2026-10-13", None).await;
     assert_eq!(open.as_array().unwrap().len(), 1);

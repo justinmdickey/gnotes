@@ -188,6 +188,8 @@ async function seed(page) {
     await del(`/notes/${tree.notes.find((n) => n.title === "Old packing list").id}`);
     const groceries = tree.notes.find((n) => n.title === "Groceries").id;
     await fetch("/api/shares", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ resource_type: "note", resource_id: groceries, username: "bob", role: "viewer" }) });
+    // A shopping list is a list, not tasks, so it stays out of Tasks.
+    await fetch(`/api/notes/${groceries}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ hide_tasks: true }) });
     const old = await fetch("/api/notebooks", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Archive", parent_id: null }) }).then((r) => r.json());
     await del(`/notebooks/${old.id}`);
   });

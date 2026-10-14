@@ -208,7 +208,7 @@ pub async fn visible(state: &AppState, user: &str, done: Option<bool>, due_befor
         visible_notes!(),
         "SELECT n.id, n.title, n.notebook_id, t.line, t.text, t.done, t.due, t.board_column
          FROM note_tasks t JOIN notes n ON n.id = t.note_id
-         WHERE n.deleted_at IS NULL AND n.id IN (SELECT id FROM visible)
+         WHERE n.deleted_at IS NULL AND n.hide_tasks = 0 AND n.id IN (SELECT id FROM visible)
            AND (?2 IS NULL OR t.done = ?2) AND (?3 IS NULL OR t.due < ?3)
          ORDER BY t.due IS NULL, t.due, n.title, n.id, t.line"
     ))

@@ -16,6 +16,7 @@
   import { slashMenu } from "./lib/slash";
   import { dragHandles } from "./lib/dragHandles";
   import { undoCommands } from "./lib/undo";
+  import { jumpLine, lightLine } from "./lib/jumpLine";
   import { blame } from "./lib/blame";
   import { emojiOnColon } from "./lib/emoji";
   import { tables } from "./lib/tables";
@@ -25,7 +26,7 @@
   import Fab from "./lib/Fab.svelte";
   import type { MenuItem } from "./lib/Menu.svelte";
   import StatusPage from "./lib/StatusPage.svelte";
-  import { app, colorFor, composeNote, goBack, navigate, pathOf, retitle, saveTree, trashNote, twoPane, viewTitle, type View } from "./lib/store.svelte";
+  import { app, colorFor, composeNote, goBack, navigate, pathOf, refreshTree, retitle, saveTree, trashNote, twoPane, viewTitle, type View } from "./lib/store.svelte";
   import { bloom, media, scrollEdge } from "./lib/ui.svelte";
   import FormatBar from "./FormatBar.svelte";
   import Recorder from "./Recorder.svelte";
@@ -145,6 +146,12 @@
   $effect(() => {
     if (app.status === "offline") untrack(() => editedSinceJoin && markDirty());
   });
+  /** Whether the note has checklist items, and ticked ones, for its Tasks actions. */
+  let checklist = $state({ any: false, done: false });
+  function readChecklist() {
+    const text = doc.getText("body").toString();
+    checklist = { any: /^\s*[-*+]\s+\[[ xX]\]/m.test(text), done: /^\s*[-*+]\s+\[[xX]\]/m.test(text) };
+  }
   let saveTimer: ReturnType<typeof setTimeout> | undefined;
   function save() {
     clearTimeout(saveTimer);
@@ -160,6 +167,7 @@
     if (loaded) return;
     loaded = true;
     refreshEditable();
+    readChecklist();
     if (app.freshNote === ownId && canEdit) {
       // Made to hold a memo or photos (the tab bar's long-press menu): start on that instead of typing.
       const add = app.freshAdd;
@@ -178,13 +186,8 @@
     untrack(() => {
       app.jump = null;
       const line = v.state.doc.line(Math.min(jump.line + 1, v.state.doc.lines));
-      v.dispatch({ effects: EditorView.scrollIntoView(line.from, { y: "center" }) });
-      requestAnimationFrame(() => {
-        const at = v.domAtPos(line.from).node;
-        const el = (at instanceof Element ? at : at.parentElement)?.closest(".cm-line, .cm-kanban");
-        el?.classList.add("cm-jumped");
-        setTimeout(() => el?.classList.remove("cm-jumped"), 1600);
-      });
+      v.dispatch({ effects: [EditorView.scrollIntoView(line.from, { y: "center" }), lightLine.of(line.from)] });
+      setTimeout(() => v.dispatch({ effects: lightLine.of(null) }), 1600);
     });
   });
 
@@ -382,9 +385,43 @@
           { label: "Tidy Up", icon: "broom" as const, onselect: () => void startTidy() },
         ]
       : []),
+    ...(canEdit && (checklist.any || note?.hide_tasks)
+      ? [{ label: note?.hide_tasks ? "Show in Tasks" : "Hide from Tasks", icon: "checklist" as const, onselect: () => void hideTasks(!note?.hide_tasks) }]
+      : []),
+    ...(canEdit && checklist.done ? [{ label: "Clear Done", icon: "check" as const, onselect: clearDone }] : []),
     ...(role && role !== "viewer" ? [{ label: "Move to…", icon: "move" as const, onselect: () => (moving = true) }] : []),
     ...(role === "owner" ? [{ label: "Move to Trash", icon: "trash" as const, destructive: true, onselect: () => trashNote(noteId) }] : []),
   ]);
+
+  /** A list like groceries keeps its checkboxes out of Tasks, for everyone who sees the note. */
+  async function hideTasks(hide: boolean) {
+    try {
+      await api.hideTasks(noteId, hide);
+      await refreshTree();
+      toast(hide ? "Hidden from Tasks" : "Shows in Tasks again");
+    } catch {
+      toast("Couldn't reach the server");
+    }
+  }
+
+  /** Takes out every ticked item (boards keep theirs), as one step Undo puts back. */
+  function clearDone() {
+    if (!view) return;
+    const d = view.state.doc;
+    const gone = [];
+    let fence: string | null = null;
+    for (let n = 2; n <= d.lines; n++) {
+      const line = d.line(n);
+      const mark = /^\s{0,3}(`{3,}|~{3,})/.exec(line.text)?.[1];
+      if (mark) fence = fence ? null : mark;
+      else if (!fence && /^\s*[-*+]\s+\[[xX]\]/.test(line.text)) gone.push({ from: line.from - 1, to: line.to });
+    }
+    if (!gone.length) return toast("Nothing ticked outside the board");
+    undoManager.setMergeInterval(0);
+    view.dispatch({ changes: gone, userEvent: "delete.cleardone" });
+    undoManager.setMergeInterval(1000);
+    toast(`Cleared ${gone.length} done`, { label: "Undo", run: steps.undo });
+  }
 
   const madeAt = (ms: number) => new Date(ms).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 
@@ -430,6 +467,7 @@
           markdown({ base: markdownLanguage }),
           syntaxHighlighting(markdownStyle),
           livePreview,
+          jumpLine,
           linkClicks,
           codeBlocks,
           slashMenu({ photo: () => pickPhoto(), record: () => startRecording(), tidy: () => void startTidy(), prompt: openAiPrompt, canAI: () => canAI }),
@@ -475,6 +513,7 @@
       if (!sync.sendUpdate(noteId, bytes)) markDirty();
     });
     const offSave = doc.subscribe(() => {
+      readChecklist();
       saveTimer ??= setTimeout(save, 800);
     });
     const offPresence = ephemeral.subscribeLocalUpdates((bytes) => sync.sendPresence(noteId, bytes));
@@ -745,15 +784,18 @@
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
   <div class="scroll" class:gone={lost} onclick={focusEnd} onscroll={onScroll} use:scrollEdge bind:this={scroller}>
     <div class="column" class:hidden={!loaded}>
-      {#if place}
-        <!-- Where the note lives. -->
+      {#if place || note?.hide_tasks}
+        <!-- Where the note lives, and whether its checkboxes stay out of Tasks. -->
         <div class="note-head">
+          {#if place}
           <button class="chip-link notebook-chip" title="Open {place.label}" onclick={(e) => (e.stopPropagation(), openPlace())}>
             <Icon name={place.icon} size={14} /><span>{place.label}</span><Icon name="next" size={12} />
           </button>
+          {/if}
+          {#if note?.hide_tasks}<span class="dim hidden-tasks"><Icon name="checklist" size={14} />Hidden from Tasks</span>{/if}
         </div>
       {/if}
-      <div class="page" class:with-chip={place} class:can-edit={canEdit}
+      <div class="page" class:with-chip={place || note?.hide_tasks} class:can-edit={canEdit}
         class:can-read={canEdit && app.features.photo_text}
         class:can-transcribe={canEdit && app.features.transcription}
         bind:this={parent}></div>
@@ -1314,6 +1356,13 @@
     align-items: center;
     gap: 12px;
     padding: 20px max(var(--gutter), calc((100% - var(--measure)) / 2)) 0 max(18px, calc((100% - var(--measure)) / 2 - 6px));
+  }
+
+  .hidden-tasks {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: var(--text-sm);
   }
 
   .notebook-chip {

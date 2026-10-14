@@ -458,6 +458,8 @@ try {
   await alice.$eval(".cm-checkbox", (el) => el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })));
   await bob.waitForSelector(".cm-checkbox.checked", { timeout: 5000 });
   check(true, "checklist item created and ticked live");
+  const ticked = await alice.evaluate(() => document.querySelector(".cm-content").cmTile.root.view.state.doc.toString());
+  check(ticked.includes("- [ ] jam\n- [x] butter"), `a ticked item sinks below the open ones in its list (${JSON.stringify(ticked.slice(-40))})`);
 
   // ---- Tables and kanban boards (lib/tables.ts, lib/kanban.ts) ----
   // Alice builds both in a new note; Bob, who can only view it, watches them change live.
@@ -662,7 +664,8 @@ try {
     "the note's actions button is neutral, leaving blue to the main action",
   );
   const plain = await openNoteActions(alice);
-  check(plain.join(",") === "Photo,Voice Memo,Move to…,Move to Trash", `without AI, the note's actions are Photo, Voice Memo, Move to… and Move to Trash (${plain})`);
+  // This note has a ticked checklist item, so it also offers Hide from Tasks and Clear Done.
+  check(plain.join(",") === "Photo,Voice Memo,Hide from Tasks,Clear Done,Move to…,Move to Trash", `without AI, the note's actions are Photo, Voice Memo, its Tasks actions, Move to… and Move to Trash (${plain})`);
   await alice.keyboard.press("Escape");
   await alice.waitForFunction(() => !document.querySelector("[role=menuitem]"));
   check(await alice.evaluate(() => document.activeElement?.matches("button[aria-label='Note actions']")), "Escape closes the note's actions, back on their button");
@@ -800,7 +803,7 @@ try {
   await new Promise((r) => setTimeout(r, 600));
   const untidy = await markdown(alice);
   const withAI = await openNoteActions(alice);
-  check(withAI.join(",") === "Photo,Voice Memo,Summary,Edit with AI,Tidy Up,Move to…,Move to Trash", `with AI, the note's actions add Summary, Edit with AI and Tidy Up (${withAI})`);
+  check(withAI.join(",") === "Photo,Voice Memo,Summary,Edit with AI,Tidy Up,Hide from Tasks,Clear Done,Move to…,Move to Trash", `with AI, the note's actions add Summary, Edit with AI and Tidy Up (${withAI})`);
   if (process.env.SHOTS) await (await new Promise((r) => setTimeout(r, 400)), alice.screenshot({ path: join(process.env.SHOTS, "desktop-note-actions.png") }));
   await alice.mouse.click(400, 300);
   await alice.waitForFunction(() => !document.querySelector("[role=menuitem]"));
@@ -1976,9 +1979,9 @@ try {
     const today = new Date();
     const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
     await alice.tap(".tabbar .compose");
-    await alice.waitForSelector(".pane.editor .cm-content[contenteditable=true]");
+    await alice.waitForFunction(() => document.activeElement?.matches(".pane.editor .cm-content[contenteditable=true]"));
     await alice.keyboard.type(`Errands\n- [ ] Return the folding table @${todayIso}`);
-    await alice.tap(".editor header button.done");
+    await (await alice.waitForSelector(".editor header button.done", { visible: true })).tap();
     await alice.waitForSelector(".tabbar");
     await alice.evaluate(() => [...document.querySelectorAll(".tabbar button")].find((b) => b.textContent.includes("Tasks")).click());
     await alice.waitForFunction(() => location.hash === "#/tasks" && document.querySelector(".pane.list .hero h1")?.textContent === "Tasks");
@@ -2018,8 +2021,8 @@ try {
     await alice.waitForSelector("dialog [role=menu]");
     await new Promise((r) => setTimeout(r, 400));
     await alice.tap("dialog ::-p-text(Task)");
-    await closed(alice);
-    await alice.waitForSelector("dialog input[aria-label=Task]");
+    // The menu's sheet makes way for the New Task one, so wait for its field, not for no dialog.
+    await alice.waitForFunction(() => document.activeElement?.matches("dialog input[aria-label=Task]"), { timeout: 5000 });
     await alice.keyboard.type("Pick up the dry cleaning");
     await alice.tap("dialog ::-p-text(Tomorrow)");
     await shot("phone-new-task-dark");
@@ -2033,6 +2036,31 @@ try {
       { timeout: 5000 },
     );
     check((await alice.evaluate(() => location.hash)) === "#/tasks", "holding + and picking Task adds it to the Inbox, due when you chose, and you stay on Tasks");
+    // A list note can keep its checkboxes out of Tasks, from its actions; Tasks says some are hidden.
+    await alice.evaluate(() => [...document.querySelectorAll(".pane.list .task .what")].find((b) => b.textContent.includes("Return the folding table")).click());
+    await alice.waitForSelector(".pane.editor .cm-content");
+    await noteAction(alice, "Hide from Tasks");
+    await alice.waitForSelector(".pane.editor .hidden-tasks");
+    await alice.click(".pane.editor .back-icon");
+    await alice.waitForFunction(() => location.hash === "#/tasks");
+    await alice.waitForFunction(
+      () => !document.querySelector(".pane.list .task .text") || ![...document.querySelectorAll(".pane.list .task .text")].some((t) => t.textContent === "Return the folding table"),
+      { timeout: 5000 },
+    );
+    check(await alice.evaluate(() => document.querySelector(".pane.list .hidden-note")?.textContent.includes("1 note is hidden")), "Hide from Tasks takes a note's tasks off Tasks, and Tasks says one note is hidden");
+    // Clear Done takes the ticked items out of a note in one step.
+    await alice.evaluate(() => [...document.querySelectorAll(".pane.list .task .what")].find((b) => b.textContent.includes("Pick up the dry cleaning")).click());
+    await alice.waitForSelector(".pane.editor .cm-checkbox");
+    await alice.$eval(".pane.editor .cm-checkbox", (el) => el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })));
+    await alice.waitForSelector(".pane.editor .cm-checkbox.checked");
+    await noteAction(alice, "Clear Done");
+    await alice.waitForFunction(() => !document.querySelector(".pane.editor .cm-checkbox.checked"));
+    const inbox = await alice.evaluate(() => document.querySelector(".pane.editor .cm-content").cmTile.root.view.state.doc.toString());
+    check(!inbox.includes("dry cleaning"), `Clear Done removes ticked items (${JSON.stringify(inbox)})`);
+    await alice.click(".pane.editor .back-icon");
+    await alice.waitForFunction(() => location.hash === "#/tasks");
+    // Let the pane finish sliding back before measuring its headerbar.
+    await new Promise((r) => setTimeout(r, 500));
     const avatar = await alice.evaluate(() => {
       const bar = document.querySelector(".pane.list .headerbar").getBoundingClientRect();
       const button = document.querySelector(".pane.list .headerbar .account").getBoundingClientRect();
@@ -2078,7 +2106,7 @@ try {
     await alice.evaluate(() => [...document.querySelectorAll(".tabbar button")].find((b) => b.textContent.includes("Notes")).click());
     await alice.waitForFunction(() => document.querySelector(".pane.list .hero h1")?.textContent === "Notes");
     check(await alice.evaluate(() => /^\s*Recent\s*Trash\s*$/.test(document.querySelector(".pane.list .scroll > :last-child")?.textContent ?? "")), "Recent and Trash are the last rows on the phone's Notes screen");
-    await alice.click(".pane.list .trash-link button");
+    await alice.click(".pane.list .trash-link li:last-child button");
     await alice.waitForFunction(() => document.querySelector(".pane.list .hero h1")?.textContent === "Trash");
     check(await alice.evaluate(() => document.querySelector(".tabbar .tab.on")?.textContent.includes("Notes")), "Trash opens from the Notes tab and keeps it lit");
     await shot("phone-trash-dark");

@@ -254,6 +254,29 @@ class AttachmentWidget extends WidgetType {
   }
 }
 
+/** A checklist item at exactly this indent: "- [ ] …", "* [x] …". */
+const sibling = (text: string, indent: string) => text.startsWith(indent) && /^[-*+]\s+\[[ xX]\]/.test(text.slice(indent.length));
+
+/**
+ * Flips the box whose "[" is at `pos`. Ticking an item also moves it to the end of its run of
+ * checklist items at the same level, so what's left to do stays on top (unless it has nested items
+ * under it, which would have to move too). Unticking leaves it where it is.
+ */
+function tick(view: EditorView, pos: number, done: boolean) {
+  const doc = view.state.doc;
+  const flip = { from: pos + 1, to: pos + 2, insert: done ? "x" : " " };
+  const line = doc.lineAt(pos);
+  const indent = /^\s*/.exec(line.text)![0];
+  let last = line.number;
+  while (last < doc.lines && sibling(doc.line(last + 1).text, indent)) last++;
+  const next = line.number < doc.lines ? doc.line(line.number + 1).text : "";
+  const hasChildren = /^\s*/.exec(next)![0].length > indent.length && next.trim() !== "";
+  if (!done || last === line.number || hasChildren) return view.dispatch({ changes: flip });
+  const at = pos - line.from + 1;
+  const ticked = line.text.slice(0, at) + "x" + line.text.slice(at + 1);
+  view.dispatch({ changes: [{ from: line.from, to: line.to + 1 }, { from: doc.line(last).to, insert: "\n" + ticked }] });
+}
+
 class CheckboxWidget extends WidgetType {
   constructor(
     readonly checked: boolean,
@@ -274,8 +297,7 @@ class CheckboxWidget extends WidgetType {
     box.addEventListener("mousedown", (e) => {
       e.preventDefault();
       if (!view.state.facet(EditorView.editable)) return;
-      // Flip the character inside "[ ]" / "[x]".
-      view.dispatch({ changes: { from: this.pos + 1, to: this.pos + 2, insert: this.checked ? " " : "x" } });
+      tick(view, this.pos, !this.checked);
     });
     return box;
   }

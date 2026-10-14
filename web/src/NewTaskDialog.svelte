@@ -12,6 +12,7 @@
   let due = $state<string | null>(null);
   let error = $state("");
   let busy = $state(false);
+  let field = $state<HTMLInputElement>();
 
   const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   const inDays = (n: number) => {
@@ -49,10 +50,11 @@
 <Dialog title="New Task" {onclose}>
   <form id="new-task" onsubmit={add}>
     <!-- svelte-ignore a11y_autofocus -->
-    <input placeholder="What needs doing?" aria-label="Task" bind:value={text} autofocus enterkeyhint="done" />
+    <input bind:this={field} placeholder="What needs doing?" aria-label="Task" bind:value={text} autofocus enterkeyhint="done" />
     <div class="dates" role="group" aria-label="Due">
+      <!-- Picking a date hands the cursor back to the field, so Enter still adds the task. -->
       {#each dates as d (d.label)}
-        <button type="button" class="chip" class:on={due === d.value} aria-pressed={due === d.value} onclick={() => (due = d.value)}>{d.label}</button>
+        <button type="button" class="chip" class:on={due === d.value} aria-pressed={due === d.value} onclick={() => ((due = d.value), field?.focus())}>{d.label}</button>
       {/each}
     </div>
     <p class="dim where">Goes to your <strong>Inbox</strong> note</p>

@@ -93,6 +93,8 @@
       { label: "No Date", late: false, items: open.filter((t) => !t.due) },
     ].filter((g) => g.items.length),
   );
+  /** Notes kept out of Tasks, like a grocery list, so it's clear some checkboxes aren't here. */
+  const hidden = $derived(app.tree.notes.filter((n) => n.hide_tasks).length);
   const counts = $derived.by(() => {
     const all = (tasks.items ?? []).filter((t) => !t.done);
     const late = all.filter((t) => t.due && t.due < today).length;
@@ -209,6 +211,9 @@
         </ul>
       {/if}
       <button class="flat more" onclick={() => (showDone = !showDone)}>{showDone ? "Hide Done" : `Show ${done.length} Done`}</button>
+    {/if}
+    {#if hidden}
+      <p class="dim hidden-note">{hidden === 1 ? "1 note is" : `${hidden} notes are`} hidden from Tasks. A note's actions show them again.</p>
     {/if}
   </div>
 </section>
@@ -428,6 +433,12 @@
   .due.late {
     color: var(--destructive);
     font-weight: 700;
+  }
+
+  .hidden-note {
+    margin: 14px 6px 0;
+    font-size: var(--text-sm);
+    text-align: center;
   }
 
   .more {
