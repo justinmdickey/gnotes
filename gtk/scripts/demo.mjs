@@ -342,7 +342,7 @@ export async function startDemo({ ai = false } = {}) {
     "| Room | Paint | Done by |",
     "| --- | --- | --- |",
     "| Kitchen | Sage | May |",
-    "| Hall | White | June |",
+    "| [[Snippets\\|Hall]] | White | June |",
     "",
     "```kanban",
     "## To do",

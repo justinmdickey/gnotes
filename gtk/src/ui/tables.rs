@@ -9,13 +9,14 @@ use std::{
 
 use adw::prelude::*;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 enum Look {
     Bold,
     Italic,
     Strike,
     Code,
-    Link,
+    /// What a click opens: `wiki:Title` for a [[link]], or the address.
+    Link(String),
 }
 
 /// Inline Markdown as it reads: the text without its marks, and which bytes of that are bold,
@@ -51,10 +52,10 @@ fn render(src: &str) -> (String, Vec<(usize, usize, Look)>) {
                 && let Some(end) = after.find("]]")
             {
                 let inner = &after[..end];
-                let shown = inner.split_once('|').map_or(inner, |(_, alias)| alias);
+                let (target, shown) = inner.split_once('|').unwrap_or((inner, inner));
                 let start = out.len();
                 out.push_str(shown.trim());
-                looks.push((start, out.len(), Look::Link));
+                looks.push((start, out.len(), Look::Link(format!("wiki:{}", target.trim()))));
                 rest = &after[end + 2..];
                 continue;
             }
@@ -65,7 +66,7 @@ fn render(src: &str) -> (String, Vec<(usize, usize, Look)>) {
             {
                 let start = out.len();
                 walk(&after[..close], out, looks);
-                looks.push((start, out.len(), Look::Link));
+                looks.push((start, out.len(), Look::Link(after[close + 2..close + 2 + end].to_owned())));
                 rest = &after[close + 2 + end + 1..];
                 continue;
             }
@@ -129,28 +130,32 @@ impl RichEntry {
 
     fn show_formatted(&self) {
         let (shown, looks) = render(&self.raw.borrow());
-        let attrs = gtk::pango::AttrList::new();
-        for (s, e, look) in looks {
-            let mut a: gtk::pango::Attribute = match look {
-                Look::Bold => gtk::pango::AttrInt::new_weight(gtk::pango::Weight::Bold).into(),
-                Look::Italic => gtk::pango::AttrInt::new_style(gtk::pango::Style::Italic).into(),
-                Look::Strike => gtk::pango::AttrInt::new_strikethrough(true).into(),
-                Look::Code => gtk::pango::AttrString::new_family(&super::styling::monospace()).into(),
-                Look::Link => {
-                    let c = super::styling::accent();
-                    let color = |v: f32| (v * 65535.0) as u16;
-                    let mut fg: gtk::pango::Attribute = gtk::pango::AttrColor::new_foreground(color(c.red()), color(c.green()), color(c.blue())).into();
-                    fg.set_start_index(s as u32);
-                    fg.set_end_index(e as u32);
-                    attrs.insert(fg);
-                    gtk::pango::AttrInt::new_underline(gtk::pango::Underline::Single).into()
-                }
-            };
-            a.set_start_index(s as u32);
-            a.set_end_index(e as u32);
-            attrs.insert(a);
+        self.swap(&shown, Some(&attributes(&looks)));
+    }
+
+    /// The link under `x` (in the entry) while it shows its text formatted.
+    fn link_at(&self, x: f64) -> Option<String> {
+        if self.editing.get() {
+            return None;
         }
-        self.swap(&shown, Some(&attrs));
+        let mut child = self.entry.first_child();
+        let text = loop {
+            let w = child?;
+            if let Ok(t) = w.clone().downcast::<gtk::Text>() {
+                break t;
+            }
+            child = w.next_sibling();
+        };
+        let at = self.entry.compute_point(&text, &gtk::graphene::Point::new(x as f32, 0.0))?;
+        let (shown, looks) = render(&self.raw.borrow());
+        let layout = text.create_pango_layout(Some(&shown));
+        layout.set_attributes(Some(&attributes(&looks)));
+        let (inside, i, _) = layout.xy_to_index(at.x() as i32 * gtk::pango::SCALE, 0);
+        let i = i as usize;
+        looks.into_iter().find_map(|(s, e, look)| match look {
+            Look::Link(url) if inside && s <= i && i < e => Some(url),
+            _ => None,
+        })
     }
 
     fn swap(&self, text: &str, attrs: Option<&gtk::pango::AttrList>) {
@@ -161,6 +166,32 @@ impl RichEntry {
         self.entry.set_attributes(attrs.unwrap_or(&gtk::pango::AttrList::new()));
         self.quiet.set(false);
     }
+}
+
+/// The Pango attributes that draw `looks`.
+fn attributes(looks: &[(usize, usize, Look)]) -> gtk::pango::AttrList {
+    let attrs = gtk::pango::AttrList::new();
+    for &(s, e, ref look) in looks {
+        let mut a: gtk::pango::Attribute = match look {
+            Look::Bold => gtk::pango::AttrInt::new_weight(gtk::pango::Weight::Bold).into(),
+            Look::Italic => gtk::pango::AttrInt::new_style(gtk::pango::Style::Italic).into(),
+            Look::Strike => gtk::pango::AttrInt::new_strikethrough(true).into(),
+            Look::Code => gtk::pango::AttrString::new_family(&super::styling::monospace()).into(),
+            Look::Link(_) => {
+                let c = super::styling::accent();
+                let color = |v: f32| (v * 65535.0) as u16;
+                let mut fg: gtk::pango::Attribute = gtk::pango::AttrColor::new_foreground(color(c.red()), color(c.green()), color(c.blue())).into();
+                fg.set_start_index(s as u32);
+                fg.set_end_index(e as u32);
+                attrs.insert(fg);
+                gtk::pango::AttrInt::new_underline(gtk::pango::Underline::Single).into()
+            }
+        };
+        a.set_start_index(s as u32);
+        a.set_end_index(e as u32);
+        attrs.insert(a);
+    }
+    attrs
 }
 
 /// A new 3×2 table, as the "/" menu puts it in.
@@ -343,9 +374,20 @@ pub enum Change {
     Reshape(Box<dyn Fn(&str) -> Option<String>>),
     /// Show the Markdown itself, cursor at the block's start.
     EditText,
+    /// Open a link in a cell, like a click on one in the text.
+    Follow(String),
 }
 
 pub type OnChange = Rc<dyn Fn(Change)>;
+
+/// A cell's press handler: true when the press at `x` opened a link.
+type Press = Rc<dyn Fn(f64) -> bool>;
+
+/// Presses a table cell at `x`, as a click there would: true when that opened a link.
+pub fn press_cell(entry: &gtk::Entry, x: f64) -> bool {
+    let press = unsafe { entry.data::<Press>("gnotes-press").map(|p| p.as_ref().clone()) };
+    press.is_some_and(|p| p(x))
+}
 
 /// The grid for a table, with a cell entry per cell.
 pub fn table_widget(table: &Table, editable: bool, on_change: OnChange) -> gtk::Widget {
@@ -363,6 +405,18 @@ pub fn table_widget(table: &Table, editable: bool, on_change: OnChange) -> gtk::
                 .css_classes(if r == 0 { vec!["table-cell", "table-head"] } else { vec!["table-cell"] })
                 .build();
             let rich = RichEntry::new(entry.clone(), cell.map(|c| c.text.as_str()).unwrap_or_default());
+            // A press on a link opens it instead of starting to edit the cell.
+            let (r2, on) = (rich.clone(), on_change.clone());
+            let press: Press = Rc::new(move |x| r2.link_at(x).map(|url| on(Change::Follow(url))).is_some());
+            let click = gtk::GestureClick::builder().button(gtk::gdk::BUTTON_PRIMARY).propagation_phase(gtk::PropagationPhase::Capture).build();
+            let p = press.clone();
+            click.connect_pressed(move |g, n, x, _| {
+                if n == 1 && p(x) {
+                    g.set_state(gtk::EventSequenceState::Claimed);
+                }
+            });
+            entry.add_controller(click);
+            unsafe { entry.set_data("gnotes-press", press) };
             let on = on_change.clone();
             entry.connect_changed(move |e| {
                 if rich.typed() {
@@ -637,7 +691,8 @@ mod tests {
     fn cells_read_without_their_marks() {
         let (text, looks) = render("**[[nimbus — the main|nimbus]]** and *a* [site](https://x.y) `ls`");
         assert_eq!(text, "nimbus and a site ls");
-        assert!(looks.contains(&(0, 6, Look::Bold)) && looks.contains(&(0, 6, Look::Link)));
+        assert!(looks.contains(&(0, 6, Look::Bold)) && looks.contains(&(0, 6, Look::Link("wiki:nimbus — the main".into()))));
+        assert!(looks.contains(&(13, 17, Look::Link("https://x.y".into()))));
         assert!(looks.contains(&(11, 12, Look::Italic)) && looks.contains(&(18, 20, Look::Code)));
         // Underscores inside words stay.
         assert_eq!(render("snake_case_name").0, "snake_case_name");

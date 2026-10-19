@@ -2717,6 +2717,9 @@ impl Editor {
                 self.buffer.place_cursor(&it);
                 self.queue_restyle();
             }
+            Change::Follow(url) => {
+                self.follow(&url);
+            }
         }
     }
 

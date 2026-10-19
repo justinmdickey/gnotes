@@ -354,6 +354,14 @@ async fn run(main: &Rc<Main>, cmd: &str, arg: &str) {
                 None => eprintln!("drive: no field {arg}"),
             }
         }
+        "block-link" => {
+            // A click on the first link in a table cell, found by pressing along it.
+            let (n, a) = arg.split_once('|').unwrap_or((arg, "0"));
+            let entry = editor().and_then(|e| e.block_widget_at(n.parse().unwrap_or(0))).and_then(|w| widgets::<gtk::Entry>(&w).into_iter().nth(a.parse().unwrap_or(0)));
+            if !entry.is_some_and(|e| (0..e.width()).step_by(2).any(|x| super::tables::press_cell(&e, x as f64))) {
+                eprintln!("drive: no link in field {arg}");
+            }
+        }
         "block-entry" | "block-click" => {
             let parts: Vec<&str> = arg.splitn(3, '|').collect();
             let (Some(e), &[n, a, b]) = (editor(), &parts[..]) else { return };

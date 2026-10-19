@@ -393,6 +393,9 @@ check("a top notebook's chip shows only its tasks", scoped.includes("Lemons") &&
       "cursor 3",
       "sleep 500",
       `dump ${f("into-table.json")}`,
+      "block-link 0|6",
+      "sleep 500",
+      `dump ${f("table-link.json")}`,
       "quit",
     ].join("\n"),
   },
@@ -400,12 +403,13 @@ check("a top notebook's chip shows only its tasks", scoped.includes("Lemons") &&
 check("tables and boards ran", code === 0, { code, stderr });
 const plans = await demo.read(ann, ids.plans);
 check("typing in a table cell changes just that cell", plans.includes("| Kitchen | Olive | May |"), plans);
-check("Add Row after typing in a cell keeps what was typed", /\| Kitchen \| Olive \| May \|\n\| Hall \| White \| June \|\n\|  \|  \|  \|/.test(plans), plans);
+check("Add Row after typing in a cell keeps what was typed", /\| Kitchen \| Olive \| May \|\n\| \[\[Snippets\\\|Hall\]\] \| White \| June \|\n\|  \|  \|  \|/.test(plans), plans);
 check("editing one card after another keeps both", plans.includes("- [ ] Buy primer\n- Move the sofa"), plans);
 check("Add Card on a board adds a card to its column", /## Doing\n- Patch the wall\n- New card/.test(plans), plans);
 const blocks = dump("blocks.json").blocks;
 check("redrawn tables and boards leave nothing behind", blocks[0] === 2 && blocks[1] === 2, blocks);
 check("the cursor steps over a table instead of opening its Markdown", dump("into-table.json").blocks[1] === 2, dump("into-table.json").blocks);
+check("clicking a [[link]] in a table cell opens its note", dump("table-link.json").title === "Snippets", dump("table-link.json").title);
 
 // Settings: your name, API keys, invites, AI services and import.
 writeFileSync(f("Imported.md"), "# Imported note\n\nFrom a Markdown file.");
