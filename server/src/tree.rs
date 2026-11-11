@@ -559,16 +559,22 @@ pub async fn restore(
     CurrentUser(me): CurrentUser,
     Path((kind, id)): Path<(String, String)>,
 ) -> ApiResult<Json<Value>> {
-    let lookup = match kind.as_str() {
+    restore_item(&state, &me.id, &kind, &id).await?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// Restores one trashed item, `kind` ("note" or "notebook") and `id`, owned by `user_id`.
+pub(crate) async fn restore_item(state: &AppState, user_id: &str, kind: &str, id: &str) -> ApiResult<()> {
+    let lookup = match kind {
         "notebook" => "SELECT deleted_at FROM notebooks WHERE id = ? AND owner_id = ?",
         "note" => "SELECT deleted_at FROM notes WHERE id = ? AND owner_id = ?",
         _ => return Err(AppError::NotFound),
     };
     let deleted_at: Option<Option<i64>> = sqlx::query_scalar(lookup)
-    .bind(&id)
-    .bind(&me.id)
-    .fetch_optional(&state.db)
-    .await?;
+        .bind(id)
+        .bind(user_id)
+        .fetch_optional(&state.db)
+        .await?;
     let Some(Some(ts)) = deleted_at else {
         return Err(AppError::NotFound);
     };
@@ -581,7 +587,7 @@ pub async fn restore(
              )
              UPDATE notes SET deleted_at = NULL WHERE deleted_at = ?2 AND notebook_id IN (SELECT id FROM sub)",
         )
-        .bind(&id)
+        .bind(id)
         .bind(ts)
         .execute(&mut *tx)
         .await?;
@@ -591,7 +597,7 @@ pub async fn restore(
              )
              UPDATE notebooks SET deleted_at = NULL WHERE deleted_at = ?2 AND id IN (SELECT id FROM sub)",
         )
-        .bind(&id)
+        .bind(id)
         .bind(ts)
         .execute(&mut *tx)
         .await?;
@@ -600,7 +606,7 @@ pub async fn restore(
             "UPDATE notebooks SET parent_id = NULL WHERE id = ?
                AND parent_id IN (SELECT id FROM notebooks WHERE deleted_at IS NOT NULL)",
         )
-        .bind(&id)
+        .bind(id)
         .execute(&mut *tx)
         .await?;
     } else {
@@ -610,14 +616,14 @@ pub async fn restore(
                              THEN NULL ELSE notebook_id END
              WHERE id = ?",
         )
-        .bind(&id)
+        .bind(id)
         .execute(&mut *tx)
         .await?;
     }
     tx.commit().await?;
     state.hub.tree_changed();
     state.export.changed();
-    Ok(Json(json!({ "ok": true })))
+    Ok(())
 }
 
 /// Removes one trashed item for good: a note, or a notebook with everything trashed along with it.

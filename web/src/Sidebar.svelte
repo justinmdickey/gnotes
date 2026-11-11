@@ -336,7 +336,7 @@
         {#if app.features.ask}
           <button class="row flat" class:selected={isSelected({ kind: "ask" })} onclick={() => navigate({ kind: "ask" })}>
             <Icon name="sparkle" />
-            <span class="label">Ask</span>
+            <span class="label">Scribe</span>
           </button>
         {:else}
           <button class="row flat" onclick={() => ((app.findNotes = true), navigate({ kind: "root" }))}>

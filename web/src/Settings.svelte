@@ -13,6 +13,7 @@
   let name = $state(app.user?.display_name ?? "");
   let savedName = $state(app.user?.display_name ?? "");
   let error = $state("");
+  let scribe = $state(app.user?.scribe_access ?? "add");
   /** On a phone, the big title has scrolled away, so the headerbar shows it instead. */
   let compact = $state(false);
 
@@ -109,6 +110,14 @@
       app.user = user;
       savedName = user.display_name;
     }, "Name saved");
+  }
+
+  async function saveScribe() {
+    if (await run(async () => {
+      app.user = await api.setScribeAccess(scribe);
+    }, "Scribe saved")) {
+      // The empty page's line and the group's note follow the new level.
+    }
   }
 
   async function savePassword(e: SubmitEvent) {
@@ -240,6 +249,33 @@
           />
         </li>
       </ul>
+
+      {#if app.features.ask}
+        <h2 class="group-title">Scribe</h2>
+        <p class="dim group-note">What Scribe may do with your notes. It always acts as you: it never sees or changes a note you couldn't, and never shares, unshares or empties the trash.</p>
+        <ul class="boxed">
+          <li>
+            <span class="label">Access</span>
+            <div class="choices" role="radiogroup" aria-label="What Scribe may do">
+              <label class="choice">
+                <input type="radio" name="scribe" value="read" bind:group={scribe} onchange={saveScribe} />
+                <span class="label">Read only<span class="dim sub">Search and read your notes and answer</span></span>
+              </label>
+              <label class="choice">
+                <input type="radio" name="scribe" value="add" bind:group={scribe} onchange={saveScribe} />
+                <span class="label">Add<span class="dim sub">Also make notes, add to the end of a note, add tasks and tick tasks</span></span>
+              </label>
+              <label class="choice">
+                <input type="radio" name="scribe" value="full" bind:group={scribe} onchange={saveScribe} />
+                <span class="label">Full<span class="dim sub">Also change text inside a note, move notes, and move notes you own to the trash</span></span>
+              </label>
+            </div>
+          </li>
+          {#if !app.features.ask_actions}
+            <li class="dim">Actions need a chat model with tool calling; Scribe answers only.</li>
+          {/if}
+        </ul>
+      {/if}
 
       <h2 class="group-title">Devices</h2>
       <ul class="boxed">
@@ -383,7 +419,7 @@
           <ServiceForm
             name="summaries"
             title="AI Summaries"
-            subtitle="Summarize notes, and answer Ask Your Notes"
+            subtitle="Summarize notes, and answer Scribe"
             explain="A note's Summary tab sends the note here and shows what comes back: the gist, key points and action items. Nothing is sent until someone opens that tab. Any OpenAI-compatible chat service works, such as Ollama, llama.cpp or vLLM on your own hardware."
             urlPlaceholder="http://ollama:11434/v1"
             modelPlaceholder="llama3.1"
@@ -403,8 +439,8 @@
           <ServiceForm
             name="embed"
             title="Semantic Search"
-            subtitle="Find notes by meaning in Ask"
-            explain="Powers Ask: when you ask a question, it finds notes by meaning, not just matching words, and the AI Summaries service answers from them. Notes are sent here in pieces to be indexed, and again after edits. Any OpenAI-compatible embeddings service works, such as Ollama with nomic-embed-text."
+            subtitle="Find notes by meaning in Scribe"
+            explain="Powers Scribe: when you ask a question, it finds notes by meaning, not just matching words, and the AI Summaries service answers from them. Notes are sent here in pieces to be indexed, and again after edits. Any OpenAI-compatible embeddings service works, such as Ollama with nomic-embed-text."
             urlPlaceholder="http://ollama:11434/v1"
             modelPlaceholder="nomic-embed-text"
             bind:settings={embed}

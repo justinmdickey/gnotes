@@ -360,6 +360,8 @@ pub async fn features(State(state): State<AppState>, CurrentUser(_): CurrentUser
         "semantic_search": state.embed.read().await.is_some(),
         // Ask needs both: embeddings to find the notes, the summary chat model to write the answer.
         "ask": state.embed.read().await.is_some() && state.summary.read().await.is_some(),
+        // Scribe acts when the chat service takes tools; false once it has rejected them.
+        "ask_actions": state.embed.read().await.is_some() && state.summary.read().await.is_some() && !crate::ask::tools_rejected(),
         "max_upload": MAX_UPLOAD,
         "version": crate::VERSION,
     }))

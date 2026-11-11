@@ -31,6 +31,26 @@ const whisper = createServer((req, res) => {
       const body = JSON.parse(Buffer.concat(chunks).toString());
       const photo = Array.isArray(body.messages[0].content);
       const last = body.messages.at(-1).content;
+      // Scribe's tool loop: a question that makes a note gets one create_note call, once.
+      const all = body.messages.map((m) => (typeof m.content === "string" ? m.content : "")).join(" ");
+      if (!body.messages.some((m) => m.role === "tool") && Array.isArray(body.tools) && body.tools.length && all.includes("Make a note called E2E Scribe Note")) {
+        setTimeout(() =>
+          res.end(
+            JSON.stringify({
+              choices: [
+                {
+                  message: {
+                    role: "assistant",
+                    content: null,
+                    tool_calls: [{ id: "call_1", type: "function", function: { name: "create_note", arguments: JSON.stringify({ text: "E2E Scribe Note\n- Milk" }) } }],
+                  },
+                },
+              ],
+            }),
+          ),
+        );
+        return;
+      }
       if (body.messages[0].role === "system") {
         const content = last.includes("cheese") ? "Cheese is on your list too [1]." : "You have milk and cheese on your list [1].";
         res.setHeader("content-type", "text/event-stream");
@@ -674,7 +694,7 @@ try {
   await alice.keyboard.type("bread");
   await alice.waitForFunction(() => [...document.querySelectorAll(".pane.list .note")].some((c) => c.textContent.includes("Groceries") && c.querySelector(".snippet mark")));
   check(
-    await alice.evaluate(() => !document.querySelector(".pane.list .ask") && ![...document.querySelectorAll("nav .row")].some((r) => r.textContent.trim() === "Ask")),
+    await alice.evaluate(() => !document.querySelector(".pane.list .ask") && ![...document.querySelectorAll("nav .row")].some((r) => r.textContent.trim() === "Scribe")),
     "without AI services the sidebar's Search row opens the Notes list's search, which finds notes as you type and offers nothing about asking",
   );
   await alice.click(".pane.list .search .clear");
@@ -983,7 +1003,7 @@ try {
   for (let i = 0; i < 12 && (await markdown(alice)) !== untidy; i++) await alice.keyboard.press("Backspace");
   check(await markdown(alice) === untidy, "Escape gives the empty item back, and it deletes like any other");
 
-  // Finding by meaning is Ask's: "dairy" isn't in Groceries, but milk and cheese are. The list's search is words only, and offers Ask.
+  // Finding by meaning is Scribe's: "dairy" isn't in Groceries, but milk and cheese are. The list's search is words only, and offers Scribe.
   await alice.evaluate(() => document.activeElement?.blur());
   // Notes are embedded a few seconds after typing stops.
   await alice.waitForFunction(async () => (await fetch("/api/search/meaning?q=dairy").then((r) => r.json())).results.length > 0, { timeout: 40000, polling: 500 });
@@ -995,11 +1015,11 @@ try {
   await new Promise((r) => setTimeout(r, 600));
   check(
     await alice.evaluate(() => !document.querySelector(".pane.list .note") && !document.querySelector(".pane.list .meaning") && document.querySelector(".pane.list .status").textContent.includes("No Results")),
-    "a list's search finds notes by their words only, and offers Ask when none match",
+    "a list's search finds notes by their words only, and offers Scribe when none match",
   );
   if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-search-ask.png") });
   await alice.click(".pane.list .status .pill");
-  // The row opens the Ask screen and asks it there. The notes found show as cards first; the answer streams in under the question after.
+  // The row opens the Scribe screen and asks it there. The notes found show as cards first; the answer streams in under the question after.
   await alice.waitForSelector(".pane.list .turn .card", { timeout: 5000 });
   check(
     await alice.evaluate(
@@ -1009,15 +1029,15 @@ try {
         !document.querySelector(".pane.list .answer") &&
         document.querySelector(".pane.list .card").textContent.includes("Groceries") &&
         !!document.querySelector(".pane.list .card .snippet") &&
-        document.querySelector("nav .row.selected")?.textContent.trim() === "Ask",
+        document.querySelector("nav .row.selected")?.textContent.trim() === "Scribe",
     ),
-    "a list's Ask Your Notes row opens the Ask screen, lit in the sidebar, which shows the notes it found as cards before the answer",
+    "a list's Ask Scribe row opens the Scribe screen, lit in the sidebar, which shows the notes it found as cards before the answer",
   );
   await alice.waitForSelector(".pane.list .turn[aria-busy=true] .answer", { timeout: 5000 });
   check(true, "the answer shows while it's still being written");
   await alice.waitForSelector(".pane.list .turn[aria-busy=false] .answer", { timeout: 5000 });
   check(await alice.evaluate(() => document.querySelector(".pane.list .answer").textContent.includes("milk and cheese on your list")), "the answer comes from the notes found");
-  check(await alice.evaluate(() => !!document.querySelector(".pane.list .answer .cite")), "Ask streams an answer from your notes with a numbered link");
+  check(await alice.evaluate(() => !!document.querySelector(".pane.list .answer .cite")), "Scribe streams an answer from your notes with a numbered link");
   if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-ask.png") });
   // A follow-up builds on the question before; both stay in the conversation.
   await alice.type(".pane.list .composer input", "and the cheese?");
@@ -1042,25 +1062,74 @@ try {
   if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-ask-follow-up.png") });
   await alice.click(".pane.list .turn:last-child .card");
   await alice.waitForFunction(() => location.hash.startsWith("#/ask/note/") && document.querySelector(".cm-content")?.innerText.includes("cheese"));
-  check(true, "an Ask card opens its note");
+  check(true, "a Scribe card opens its note");
   // Later checks start from the note opened from Recent, as before.
   const askedNote = await alice.evaluate(() => location.hash.replace("#/ask/", "#/all/"));
   // The sidebar's Ask row, at the top, opens the same screen in the main pane, the conversation still there.
-  check(await alice.evaluate(() => document.querySelector("nav .scroll .row")?.textContent.trim() === "Ask"), "with AI set up, the sidebar's top row is Ask");
-  await alice.click("nav .row ::-p-text(Ask)");
+  check(await alice.evaluate(() => document.querySelector("nav .scroll .row")?.textContent.trim() === "Scribe"), "with AI set up, the sidebar's top row is Scribe");
+  await alice.click("nav .row ::-p-text(Scribe)");
   await alice.waitForFunction(() => location.hash === "#/ask" && document.querySelectorAll(".pane.list .turn").length === 2);
-  check(true, "the sidebar's Ask row opens the Ask screen with the conversation kept");
+  check(true, "the sidebar's Scribe row opens the Scribe screen with the conversation kept");
   // New Chat starts over; typing a question lists nothing until it's sent.
   await alice.click(".pane.list .new-chat");
-  await alice.waitForFunction(() => !document.querySelector(".pane.list .turn") && document.querySelector(".pane.list .composer input").placeholder === "Ask your notes…");
+  await alice.waitForFunction(() => !document.querySelector(".pane.list .turn") && document.querySelector(".pane.list .composer input").placeholder === "Ask or tell Scribe…");
   await alice.type(".pane.list .composer input", "dairy");
   await new Promise((r) => setTimeout(r, 600));
-  check(await alice.evaluate(() => !document.querySelector(".pane.list .card")), "New Chat starts over, and Ask lists nothing until a question is sent");
+  check(await alice.evaluate(() => !document.querySelector(".pane.list .card")), "New Chat starts over, and Scribe lists nothing until a question is sent");
   await alice.evaluate(() => {
     const input = document.querySelector(".pane.list .composer input");
     input.value = "";
     input.dispatchEvent(new Event("input", { bubbles: true }));
   });
+  await alice.evaluate((h) => (location.hash = h), askedNote);
+  await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("cheese"));
+
+  // Scribe acts at the level chosen in Account. At Read only, the same question answers without acting: no card, no note.
+  await alice.goto(`${base}/#/settings`);
+  await alice.waitForSelector(".settings-layer input[name=scribe][value=read]");
+  await alice.click(".settings-layer input[name=scribe][value=read]");
+  await alice.waitForFunction(() => document.body.innerText.includes("Scribe saved"));
+  await alice.click(".settings-layer .back");
+  await alice.waitForFunction(() => !document.querySelector(".settings-layer"));
+  await alice.evaluate(() => (location.hash = "#/ask"));
+  await alice.waitForSelector(".pane.list .composer input");
+  await alice.type(".pane.list .composer input", "Make a note called E2E Scribe Note about the milk");
+  await alice.keyboard.press("Enter");
+  await alice.waitForSelector(".pane.list .turn[aria-busy=false]", { timeout: 15000 });
+  check(
+    await alice.evaluate(async () => !document.querySelector(".pane.list .action") && !(await fetch("/api/tree").then((r) => r.json())).notes.some((n) => n.title === "E2E Scribe Note")),
+    "at Read only, Scribe answers without acting: no card, no note made",
+  );
+  if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-scribe-read.png") });
+  // At Add, the same question makes the note, with a card to undo it.
+  await alice.goto(`${base}/#/settings`);
+  await alice.click(".settings-layer input[name=scribe][value=add]");
+  await alice.waitForFunction(() => document.body.innerText.includes("Scribe saved"));
+  await alice.click(".settings-layer .back");
+  await alice.waitForFunction(() => !document.querySelector(".settings-layer"));
+  await alice.evaluate(() => (location.hash = "#/ask"));
+  await alice.waitForSelector(".pane.list .composer input");
+  await alice.type(".pane.list .composer input", "Make a note called E2E Scribe Note about the milk");
+  await alice.keyboard.press("Enter");
+  await alice.waitForSelector(".pane.list .turn .action", { timeout: 15000 });
+  check(await alice.evaluate(() => document.querySelector(".pane.list .action .t")?.textContent === "E2E Scribe Note"), "at Add, Scribe's change shows as a card with the note's title and an Undo");
+  await alice.waitForSelector(".pane.list .turn[aria-busy=false]", { timeout: 15000 });
+  const scribeNote = await alice.evaluate(async () => (await fetch("/api/tree").then((r) => r.json())).notes.find((n) => n.title === "E2E Scribe Note")?.id);
+  check(!!scribeNote, "the note Scribe made is in the tree");
+  if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-scribe-action.png") });
+  await alice.click(".pane.list .action button::-p-text(Undo)");
+  await alice.waitForFunction(
+    async (id) => !(await fetch("/api/tree").then((r) => r.json())).notes.some((n) => n.id === id),
+    { timeout: 15000, polling: 500 },
+    scribeNote,
+  );
+  await alice.waitForFunction(() => !!document.querySelector(".pane.list .action.undone"), { timeout: 5000 });
+  check(true, "Undo takes Scribe's note back and strikes the card");
+  // Undo trashed the note; take it out of the trash so the Trash checks start clean.
+  await alice.evaluate(async (id) => {
+    await fetch(`/api/trash/note/${id}`, { method: "DELETE" });
+  }, scribeNote);
+  // Back to the note the later checks start from.
   await alice.evaluate((h) => (location.hash = h), askedNote);
   await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("cheese"));
 
@@ -1111,7 +1180,7 @@ try {
   const rows = await sidebar();
   const at = (name) => rows.indexOf(name);
   check(at("Vault") < at("Trips") && at("Trips") < at("Camping") && at("Camping") < at("Ideas") && at("Lisbon") === -1, `sidebar shows folders, then notes, with sub-folders folded (${rows})`);
-  check(rows[0] === "Ask" && rows[1] === "Tasks" && rows[2] === "Recent" && rows.at(-1) === "Trash", "the sidebar starts with Ask, Tasks and Recent and ends with Trash, after the folders");
+  check(rows[0] === "Scribe" && rows[1] === "Tasks" && rows[2] === "Recent" && rows.at(-1) === "Trash", "the sidebar starts with Scribe, Tasks and Recent and ends with Trash, after the folders");
   await alice.click("nav button[aria-label=\"Show what's in Trips\"]");
   await alice.waitForFunction(() => [...document.querySelectorAll("nav .note-row .label")].some((l) => l.textContent === "Lisbon"));
   check(true, "unfolding a notebook shows its notes");
@@ -2183,9 +2252,9 @@ try {
     check(true, "Back from Trash returns to Notes");
 
     // Ask, a tab of its own: sending chats about your notes, follow-ups continue it, and Back leaves.
-    await alice.evaluate(() => [...document.querySelectorAll(".tabbar button")].find((b) => b.textContent.includes("Ask")).click());
-    await alice.waitForFunction(() => location.hash === "#/ask" && document.querySelector(".tabbar .tab.on")?.textContent.includes("Ask") && !!document.querySelector(".pane.list .headerbar .account"));
-    check(await alice.evaluate(() => document.querySelector(".pane.list .status")?.textContent.includes("Ask Your Notes")), "the Ask tab opens on a plain page with its field");
+    await alice.evaluate(() => [...document.querySelectorAll(".tabbar button")].find((b) => b.textContent.includes("Scribe")).click());
+    await alice.waitForFunction(() => location.hash === "#/ask" && document.querySelector(".tabbar .tab.on")?.textContent.includes("Scribe") && !!document.querySelector(".pane.list .headerbar .account"));
+    check(await alice.evaluate(() => document.querySelector(".pane.list .status")?.textContent.includes("Scribe")), "the Scribe tab opens on a plain page with its field");
     await shot("phone-ask-dark");
     await alice.tap(".pane.list .composer input");
     await alice.keyboard.type("cheese");

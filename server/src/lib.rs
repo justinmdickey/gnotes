@@ -172,6 +172,7 @@ pub fn router(state: AppState) -> Router {
         .route("/auth/logout", post(auth::logout))
         .route("/auth/setup", get(auth::setup_needed).post(auth::setup))
         .route("/me", get(auth::me).patch(account::update_me))
+        .route("/me/scribe", patch(account::set_scribe))
         .route("/me/password", post(account::change_password))
         .route("/me/logout-others", post(account::logout_others))
         .route("/me/keys", get(api_keys::list_keys).post(api_keys::create_key))
@@ -221,6 +222,7 @@ pub fn router(state: AppState) -> Router {
         .route("/tasks/toggle", post(tasks::toggle))
         .route("/search/meaning", get(semantic::search))
         .route("/ask", post(ask::ask))
+        .route("/ask/undo", post(ask::undo))
         .route("/attachments/{id}/text", post(attachments::photo_text))
         .route("/ws", get(ws::handler))
         // The agent API, for API keys only; the routes above take a logged-in session.

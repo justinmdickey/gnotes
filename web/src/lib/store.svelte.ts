@@ -55,7 +55,7 @@ export function viewTitle(view: View, tree: Tree): string {
   if (view.kind === "all") return "Recent";
   if (view.kind === "shared-notes") return "Shared";
   if (view.kind === "trash") return "Trash";
-  if (view.kind === "ask") return "Ask";
+  if (view.kind === "ask") return "Scribe";
   if (view.kind === "tasks") return "Tasks";
   return tree.notebooks.find((n) => n.id === view.id)?.name ?? "Notes";
 }

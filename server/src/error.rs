@@ -19,6 +19,8 @@ pub enum AppError {
     /// Also used when the caller has no access, so hidden items don't leak.
     NotFound,
     Conflict(String),
+    /// The chat service answered 400 to a request that offered tools; fall back to answer-only.
+    ToolsRejected,
     Internal(anyhow::Error),
 }
 
@@ -36,6 +38,7 @@ impl IntoResponse for AppError {
             AppError::NotAllowed(m) => (StatusCode::FORBIDDEN, "forbidden", m),
             AppError::NotFound => (StatusCode::NOT_FOUND, "not_found", "Not found".into()),
             AppError::Conflict(m) => (StatusCode::CONFLICT, "conflict", m),
+            AppError::ToolsRejected => (StatusCode::CONFLICT, "conflict", "The chat service doesn't support tools".into()),
             AppError::Internal(e) => {
                 tracing::error!("internal error: {e:#}");
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal", "Internal error".into())

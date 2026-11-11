@@ -5,6 +5,8 @@ export interface User {
   username: string;
   display_name: string;
   is_admin: boolean;
+  /** What Scribe may do with your notes. Absent from older servers. */
+  scribe_access?: "read" | "add" | "full";
 }
 
 export interface TreeNotebook {
@@ -193,6 +195,19 @@ export interface AskDone {
   cited: number[];
 }
 
+/** One thing Scribe did in a turn, as an `action` event; `before` is the replaced text or the old notebook, when there is one. */
+export interface AskAction {
+  /** What changed. */
+  kind: "created" | "appended" | "task_added" | "task_done" | "replaced" | "moved" | "trashed";
+  note: string;
+  title: string;
+  /** What was written. */
+  text: string;
+  before?: string | null;
+  /** The task's line, for task actions. */
+  line?: number | null;
+}
+
 /** A note's AI summary. `summary` is null until someone asks for one. */
 export interface NoteSummary {
   summary: string | null;
@@ -213,6 +228,8 @@ export interface Features {
   semantic_search?: boolean;
   /** Questions can be asked of your notes (semantic search plus the summary chat model). */
   ask?: boolean;
+  /** Scribe can act, not just answer (the chat model takes tools). Absent from older servers. */
+  ask_actions?: boolean;
   max_upload: number;
   /** The server's release, e.g. "0.7.0", or "dev". */
   version: string;
@@ -268,7 +285,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
  */
 async function ask(
   messages: AskMessage[],
-  on: { onSources: (s: AskSources) => void; onText: (piece: string) => void },
+  on: { onSources: (s: AskSources) => void; onText: (piece: string) => void; onAction?: (a: AskAction) => void },
   signal?: AbortSignal,
 ): Promise<AskDone> {
   const res = await fetch("/api/ask", {
@@ -299,6 +316,7 @@ async function ask(
       const body = JSON.parse(data);
       if (name === "sources") on.onSources(body);
       else if (name === "delta") on.onText(body.text);
+      else if (name === "action") on.onAction?.(body);
       else if (name === "done") return body;
       else if (name === "error") throw new ApiError(409, "conflict", body.message);
     }
@@ -315,6 +333,10 @@ export const api = {
     request<User>("POST", "/auth/setup", { username, display_name, password }),
   users: () => request<UserSummary[]>("GET", "/users"),
   updateMe: (display_name: string) => request<User>("PATCH", "/me", { display_name }),
+  /** What Scribe may do with your notes. */
+  setScribeAccess: (access: User["scribe_access"]) => request<User>("PATCH", "/me/scribe", { access }),
+  /** Takes one of Scribe's changes back (an `action` event's data). */
+  undoAskAction: (action: AskAction) => request("POST", "/ask/undo", { action }),
   changePassword: (current: string, next: string) => request("POST", "/me/password", { current, new: next }),
   logoutOthers: () => request("POST", "/me/logout-others", {}),
   apiKeys: () => request<ApiKey[]>("GET", "/me/keys"),

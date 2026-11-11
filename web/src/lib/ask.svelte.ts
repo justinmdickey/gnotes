@@ -1,4 +1,4 @@
-import { api, ApiError, type AskMessage, type AskNote, type SnippetPart } from "./api";
+import { api, ApiError, type AskAction, type AskMessage, type AskNote, type SnippetPart } from "./api";
 
 /**
  * Ask: a conversation with your notes. Each question shows the notes found for it as cards, then
@@ -11,6 +11,8 @@ export interface Turn {
   /** The notes found; null while searching. */
   notes: AskNote[] | null;
   terms: string[];
+  /** What Scribe did in the turn, in order; the ones that changed something offer an Undo. */
+  actions: AskAction[];
   /** The answer so far, as it streams in. */
   answer: string;
   /** Set once the answer is finished: the notes it cites. */
@@ -55,7 +57,7 @@ function history(): AskMessage[] {
 /** Asks the next question of the conversation. */
 export async function ask(text: string) {
   const messages: AskMessage[] = [...history(), { role: "user", text }];
-  chat.turns.push({ question: text, notes: null, terms: [], answer: "", cited: null, none: false, error: "" });
+  chat.turns.push({ question: text, notes: null, terms: [], actions: [], answer: "", cited: null, none: false, error: "" });
   const turn = chat.turns[chat.turns.length - 1];
   const signal = stop.signal;
   chat.busy = true;
@@ -68,6 +70,7 @@ export async function ask(text: string) {
           turn.terms = s.terms;
         },
         onText: (piece) => (turn.answer += piece),
+        onAction: (a) => turn.actions.push(a),
       },
       signal,
     );
@@ -111,4 +114,9 @@ export function titleParts(title: string, terms: string[]): SnippetPart[] {
     const w = word.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "").toLowerCase();
     return { text: word, hit: !!w && terms.some((t) => w.startsWith(t)) };
   });
+}
+
+/** Takes one of Scribe's changes back, the same way it was made. */
+export async function undoAction(a: AskAction) {
+  await api.undoAskAction(a);
 }

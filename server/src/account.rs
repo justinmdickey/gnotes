@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 
 use crate::{
     AppState,
-    auth::{CurrentUser, SESSION_COOKIE, User, hash_password, hash_token, verify_password},
+    auth::{CurrentUser, SESSION_COOKIE, ScribeAccess, User, hash_password, hash_token, verify_password},
     error::{ApiResult, AppError},
     util::now_ms,
 };
@@ -63,6 +63,25 @@ pub async fn update_me(
     // Owner names show in other people's note lists.
     state.hub.tree_changed();
     Ok(Json(User { display_name, ..me }))
+}
+
+#[derive(Deserialize)]
+pub struct ScribePatch {
+    access: ScribeAccess,
+}
+
+/// `PATCH /me/scribe {access}`: what your Scribe may do.
+pub async fn set_scribe(
+    State(state): State<AppState>,
+    CurrentUser(me): CurrentUser,
+    Json(body): Json<ScribePatch>,
+) -> ApiResult<Json<User>> {
+    sqlx::query("UPDATE users SET scribe_access = ? WHERE id = ?")
+        .bind(body.access)
+        .bind(&me.id)
+        .execute(&state.db)
+        .await?;
+    Ok(Json(User { scribe_access: body.access, ..me }))
 }
 
 #[derive(Deserialize)]

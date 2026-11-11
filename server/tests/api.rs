@@ -1720,11 +1720,18 @@ async fn semantic_search_and_ask_follow_meaning_and_sharing() {
     let (sources, deltas, done) = ask(&alice, question("Which dairy brand?")).await;
     assert_eq!(found_notes(&sources), vec![groceries.clone()]);
     assert_eq!((deltas, done), (Vec::<String>::new(), json!({ "answer": null, "cited": [] })));
-    // With nothing close, no notes come back and the model isn't asked at all.
+    // Read only, with nothing close: no notes come back and the model isn't asked at all.
+    alice.send(reqwest::Method::PATCH, "/me/scribe", json!({ "access": "read" })).await;
     let asked = seen.prompts.lock().unwrap().len();
     let (sources, _, done) = ask(&alice, question("What's the weather like?")).await;
     assert_eq!((sources["notes"].clone(), done["answer"].clone()), (json!([]), Value::Null));
     assert_eq!(seen.prompts.lock().unwrap().len(), asked);
+    // A level that can act asks the model with no notes, so it can search and act; none are sent.
+    alice.send(reqwest::Method::PATCH, "/me/scribe", json!({ "access": "add" })).await;
+    let (sources, _, _) = ask(&alice, question("What's the weather like?")).await;
+    assert_eq!(sources["notes"], json!([]));
+    let last = seen.prompts.lock().unwrap().last().unwrap().clone();
+    assert!(!last.contains("buy milk") && !last.contains("oil"), "no notes are sent when none are found: {last}");
     // Limits on what the app can send.
     let long = "why ".repeat(300);
     assert_eq!(alice.send(reqwest::Method::POST, "/ask", json!({ "messages": question(&long) })).await.status(), 400);
@@ -1776,18 +1783,18 @@ async fn semantic_search_and_ask_follow_meaning_and_sharing() {
     assert_eq!((found_notes(&sources), done["cited"].clone()), (vec![trip.clone()], json!([1])));
     alice.send(reqwest::Method::DELETE, &format!("/shares/{}", share["id"].as_str().unwrap()), json!({})).await;
     assert!(by_meaning(&bob, "travel").await.is_empty());
-    let asked = seen.prompts.lock().unwrap().len();
-    let (sources, _, done) = ask(&bob, question("When do I travel? passport")).await;
-    assert_eq!((sources["notes"].clone(), done["answer"].clone()), (json!([]), Value::Null));
-    assert_eq!(seen.prompts.lock().unwrap().len(), asked, "an unshared note is never sent");
+    let (sources, _, _) = ask(&bob, question("When do I travel? passport")).await;
+    assert_eq!(sources["notes"], json!([]));
+    let last = seen.prompts.lock().unwrap().last().unwrap().clone();
+    assert!(!last.contains("renew the passport"), "an unshared note is never sent: {last}");
 
     // Trashed notes drop out, by meaning and by their words.
     alice.send(reqwest::Method::DELETE, &format!("/notes/{groceries}"), json!({})).await;
     assert!(by_meaning(&alice, "dairy").await.is_empty());
-    let asked = seen.prompts.lock().unwrap().len();
     let (sources, _, _) = ask(&alice, question("dairy milk eggs?")).await;
     assert_eq!(sources["notes"], json!([]));
-    assert_eq!(seen.prompts.lock().unwrap().len(), asked, "a trashed note is never sent");
+    let last = seen.prompts.lock().unwrap().last().unwrap().clone();
+    assert!(!last.contains("buy milk and eggs"), "a trashed note is never sent: {last}");
 }
 
 #[tokio::test]
@@ -2158,4 +2165,208 @@ async fn quick_added_tasks_go_to_your_inbox() {
     let bobs = bob.post("/tasks", json!({ "text": "Bob's thing" })).await["note"].as_str().unwrap().to_owned();
     assert_ne!(bobs, fresh);
     assert_eq!(tasks(&bob).await.len(), 1);
+}
+
+/// A stand-in chat model that calls one tool per request, named in the user's message, then
+/// answers "Done." once a tool result comes back. With `reject_tools` it answers 400 to any
+/// request that offers tools, as a service without tool calling does.
+async fn fake_tools(reject_tools: bool) -> (String, std::sync::Arc<std::sync::Mutex<Vec<Value>>>) {
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen2 = seen.clone();
+    let fake = axum::Router::new()
+        .route(
+            "/v1/embeddings",
+            axum::routing::post(move |axum::Json(body): axum::Json<Value>| async move {
+                let inputs = body["input"].as_array().unwrap();
+                let data: Vec<Value> =
+                    inputs.iter().enumerate().map(|(i, t)| json!({ "index": i, "embedding": fake_embedding(t.as_str().unwrap()) })).collect();
+                axum::Json(json!({ "data": data }))
+            }),
+        )
+        .route(
+        "/v1/chat/completions",
+        axum::routing::post(move |axum::Json(body): axum::Json<Value>| async move {
+            use axum::response::IntoResponse;
+            if reject_tools && body.get("tools").is_some() {
+                return (axum::http::StatusCode::BAD_REQUEST, "tools are not supported").into_response();
+            }
+            let messages = body["messages"].as_array().unwrap().clone();
+            seen2.lock().unwrap().push(body.clone());
+            let last = messages.last().unwrap();
+            let content = last["content"].as_str().unwrap_or_default();
+            if last["role"] == "tool" {
+                return axum::Json(json!({ "choices": [{ "message": { "role": "assistant", "content": "Done." } }] })).into_response();
+            }
+            if body.get("tools").is_none() {
+                return axum::Json(json!({ "choices": [{ "message": { "role": "assistant", "content": "Answer only." } }] })).into_response();
+            }
+            let (name, args) = if content.contains("create") {
+                ("create_note", json!({ "text": "Plumber\n$4,200 for the drain", "notebook": "Home" }))
+            } else if content.contains("append") {
+                ("append_to_note", json!({ "note": content.split_whitespace().last().unwrap(), "text": "oat milk" }))
+            } else if content.contains("task") {
+                ("add_task", json!({ "text": "Call the vet", "due": "2026-11-16", "note": "Groceries" }))
+            } else if content.contains("tick") {
+                ("set_task_done", json!({ "note": content.split_whitespace().last().unwrap(), "line": 1, "text": "buy milk", "done": true }))
+            } else if content.contains("replace") {
+                ("replace_in_note", json!({ "note": content.split_whitespace().last().unwrap(), "find": "buy milk", "replace": "buy oat milk" }))
+            } else if content.contains("trash") {
+                ("trash_note", json!({ "note": content.split_whitespace().last().unwrap() }))
+            } else {
+                ("search_notes", json!({ "query": "milk" }))
+            };
+            axum::Json(json!({
+                "choices": [{ "message": { "role": "assistant", "content": "", "tool_calls": [{
+                    "id": "call_1", "type": "function",
+                    "function": { "name": name, "arguments": args.to_string() },
+                }] } }]
+            })).into_response()
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/v1", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, fake).await });
+    (url, seen)
+}
+
+/// One Scribe turn, read to the end: the `action` events, in order, and the final answer.
+async fn scribe(user: &User, q: &str) -> (Vec<Value>, Value) {
+    let res = user.send(reqwest::Method::POST, "/ask", json!({ "messages": question(q) })).await;
+    assert!(res.status().is_success(), "ask: {}", res.status());
+    let body = res.text().await.unwrap();
+    let (mut actions, mut done) = (Vec::new(), Value::Null);
+    for block in body.split("\n\n") {
+        let name = block.lines().find_map(|l| l.strip_prefix("event: ")).unwrap_or_default();
+        let Some(data) = block.lines().find_map(|l| l.strip_prefix("data: ")) else { continue };
+        let data: Value = serde_json::from_str(data).unwrap();
+        match name {
+            "action" => actions.push(data),
+            "done" => done = data,
+            _ => {}
+        }
+    }
+    (actions, done)
+}
+
+#[tokio::test]
+async fn scribe_acts_at_the_level_chosen() {
+    let (fake_url, seen) = fake_tools(false).await;
+    let dir = TempDir::new().unwrap();
+    let server = start(&dir).await;
+    auth::create_user(&server.state.db, "root", "", "password123", true).await.unwrap();
+    let root = login(&server.base, "root").await;
+    let alice = user(&server, "alice").await;
+    let carol = user(&server, "carol").await;
+    root.send(reqwest::Method::PUT, "/admin/settings/embed", json!({ "url": fake_url, "model": "fake-embed" })).await;
+    root.send(reqwest::Method::PUT, "/admin/settings/summary", json!({ "url": fake_url, "model": "fake-chat" })).await;
+    assert_eq!(alice.get("/features").await["ask_actions"], true);
+
+    // A note to work on, and the notebook a new note goes into.
+    let mut ws = alice.ws().await;
+    let groceries = alice.post("/notes", json!({})).await["id"].as_str().unwrap().to_owned();
+    ws.join_and_sync(&groceries, None).await;
+    ws.send_frame(0x01, &groceries, &edit(&LoroDoc::new(), 0, "# Groceries\n- [ ] buy milk\n- [ ] buy eggs")).await;
+    alice.post("/notebooks", json!({ "name": "Home" })).await;
+
+    // The default level is Add: make a note, append to one, add a dated task, tick one.
+    assert_eq!(alice.get("/me").await["scribe_access"], "add");
+    let mut undos = Vec::new();
+    let (actions, done) = scribe(&alice, "create a note for the plumber").await;
+    assert_eq!(actions.len(), 1, "{actions:?}");
+    assert_eq!((actions[0]["kind"].clone(), actions[0]["title"].clone()), (json!("created"), json!("Plumber")));
+    let created = actions[0]["note"].as_str().unwrap().to_owned();
+    assert_eq!(done["answer"], "Done.");
+    undos.push(actions[0].clone());
+    let tree = alice.get("/tree").await;
+    let home = tree["notebooks"].as_array().unwrap().iter().find(|n| n["name"] == "Home").unwrap()["id"].clone();
+    assert!(tree["notes"].as_array().unwrap().iter().any(|n| n["id"] == created && n["notebook_id"] == home), "the new note is in Home: {tree}");
+
+    let (actions, _) = scribe(&alice, &format!("append {groceries}")).await;
+    assert_eq!((actions.len(), actions[0]["kind"].clone()), (1, json!("appended")));
+    undos.push(actions[0].clone());
+    let (actions, _) = scribe(&alice, "add a task").await;
+    assert_eq!((actions.len(), actions[0]["kind"].clone(), actions[0]["note"].clone()), (1, json!("task_added"), json!(groceries)));
+    assert_eq!(actions[0]["text"], "- [ ] Call the vet @2026-11-16");
+    undos.push(actions[0].clone());
+    let (actions, _) = scribe(&alice, &format!("tick {groceries}")).await;
+    assert_eq!((actions.len(), actions[0]["kind"].clone()), (1, json!("task_done")));
+    undos.push(actions[0].clone());
+
+    // Undo takes each back, in reverse: the tick is back, the task and the append are out, the note is trashed.
+    for a in undos.into_iter().rev() {
+        let res = alice.send(reqwest::Method::POST, "/ask/undo", json!({ "action": a })).await;
+        assert!(res.status().is_success(), "undo: {}", res.status());
+    }
+    let text = note_text(&server, &groceries).await;
+    assert!(!text.contains("oat milk") && !text.contains("Call the vet"), "undo took the append and the task out: {text}");
+    assert!(text.contains("- [ ] buy milk"), "undo unticked the task: {text}");
+    let trash = alice.get("/trash").await;
+    assert!(trash.as_array().unwrap().iter().any(|t| t["id"] == created), "undo trashed the new note: {trash}");
+
+    // Read only: the same asks change nothing, and the model is told so. "milk" is in the note,
+    // so the search finds it and the turn reaches the model.
+    alice.send(reqwest::Method::PATCH, "/me/scribe", json!({ "access": "read" })).await;
+    assert_eq!(alice.get("/me").await["scribe_access"], "read");
+    let (actions, _) = scribe(&alice, &format!("append milk {groceries}")).await;
+    assert!(actions.is_empty(), "{actions:?}");
+    let last = seen.lock().unwrap().last().unwrap().to_string();
+    assert!(last.contains("above your Scribe level"), "the model is told the tool was refused: {last}");
+
+    // Full: replace and trash work; at Add they're refused.
+    alice.send(reqwest::Method::PATCH, "/me/scribe", json!({ "access": "full" })).await;
+    let (actions, _) = scribe(&alice, &format!("replace {groceries}")).await;
+    assert_eq!((actions.len(), actions[0]["kind"].clone(), actions[0]["before"].clone()), (1, json!("replaced"), json!("buy milk")));
+    assert!(note_text(&server, &groceries).await.contains("buy oat milk"));
+    let victim = alice.post("/notes", json!({})).await["id"].as_str().unwrap().to_owned();
+    ws.join_and_sync(&victim, None).await;
+    ws.send_frame(0x01, &victim, &edit(&LoroDoc::new(), 0, "# To trash\nold estimate")).await;
+    let (actions, _) = scribe(&alice, &format!("trash {victim}")).await;
+    assert_eq!((actions.len(), actions[0]["kind"].clone()), (1, json!("trashed")));
+    alice.send(reqwest::Method::PATCH, "/me/scribe", json!({ "access": "add" })).await;
+    let (actions, _) = scribe(&alice, &format!("replace {groceries}")).await;
+    assert!(actions.is_empty(), "replace is refused at Add: {actions:?}");
+    let (actions, _) = scribe(&alice, &format!("trash {victim}")).await;
+    assert!(actions.is_empty(), "trash is refused at Add: {actions:?}");
+
+    // A viewer's append is refused, and the model is told so; the note is unchanged.
+    alice.post("/shares", json!({ "resource_type": "note", "resource_id": groceries, "username": "carol", "role": "viewer" })).await;
+    let before = note_text(&server, &groceries).await;
+    let (actions, _) = scribe(&carol, &format!("append {groceries}")).await;
+    assert!(actions.is_empty(), "{actions:?}");
+    let last = seen.lock().unwrap().last().unwrap().to_string();
+    assert!(last.contains("only view"), "the model is told a viewer can't append: {last}");
+    assert_eq!(note_text(&server, &groceries).await, before);
+}
+
+#[tokio::test]
+async fn scribe_falls_back_when_the_service_rejects_tools() {
+    let (fake_url, seen) = fake_tools(true).await;
+    let dir = TempDir::new().unwrap();
+    let server = start(&dir).await;
+    auth::create_user(&server.state.db, "root", "", "password123", true).await.unwrap();
+    let root = login(&server.base, "root").await;
+    let alice = user(&server, "alice").await;
+    root.send(reqwest::Method::PUT, "/admin/settings/embed", json!({ "url": fake_url, "model": "fake-embed" })).await;
+    root.send(reqwest::Method::PUT, "/admin/settings/summary", json!({ "url": fake_url, "model": "fake-chat" })).await;
+
+    // The first turn tries the tools, the service says no, and the turn still answers.
+    assert_eq!(alice.get("/features").await["ask_actions"], true);
+    let (actions, done) = scribe(&alice, "create a note for the plumber").await;
+    assert!(actions.is_empty(), "{actions:?}");
+    assert_eq!(done["answer"], "Answer only.");
+    assert_eq!(alice.get("/features").await["ask_actions"], false, "the fallback is remembered");
+    // And the next turn goes straight to the answer-only turn.
+    let asked = seen.lock().unwrap().len();
+    let (actions, done) = scribe(&alice, "create a note for the plumber").await;
+    assert!(actions.is_empty());
+    assert_eq!(done["answer"], "Answer only.");
+    let prompts = seen.lock().unwrap();
+    assert_eq!(prompts.len(), asked + 1);
+    assert!(prompts.last().unwrap().get("tools").is_none(), "the fallback doesn't offer tools");
+}
+
+/// A note's text straight from the server, the way the room keeps it.
+async fn note_text(server: &Server, note: &str) -> String {
+    let id = uuid::Uuid::parse_str(note).unwrap();
+    gnotes_server::rooms::note_body(&server.state, id).await.unwrap()
 }

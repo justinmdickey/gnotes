@@ -26,7 +26,7 @@
   // Until AI search is set up, Ask's place is Search: the Notes list, with the cursor in its search field.
   const right: Tab[] = $derived([
     app.features.ask
-      ? { key: "ask", label: "Ask", icon: "sparkle", view: { kind: "ask" } }
+      ? { key: "ask", label: "Scribe", icon: "sparkle", view: { kind: "ask" } }
       : { key: "search", label: "Search", icon: "search", view: { kind: "root" }, find: true },
     { key: "shared", label: "Shared", icon: "people", view: { kind: "shared-notes" } },
   ]);

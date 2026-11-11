@@ -374,7 +374,7 @@
         <li>
           <button class="flat place-row" onclick={() => openAsk(query.trim())}>
             <Icon name="sparkle" />
-            <span class="name">Ask Your Notes<span class="dim sub">“{query.trim()}”</span></span>
+            <span class="name">Ask Scribe<span class="dim sub">“{query.trim()}”</span></span>
             <span class="dim chev"><Icon name="next" /></span>
           </button>
         </li>
@@ -408,7 +408,7 @@
         <!-- The folders above are enough; no empty state over them. -->
       {:else if query && asking && !questionLike}
         <StatusPage icon="search" title="No Results" description="No note has the words “{query}”." tone="neutral">
-          <button class="pill" onclick={() => openAsk(query.trim())}><Icon name="sparkle" />Ask Your Notes</button>
+          <button class="pill" onclick={() => openAsk(query.trim())}><Icon name="sparkle" />Ask Scribe</button>
         </StatusPage>
       {:else if query}
         <StatusPage icon="search" title="No Results" description="Nothing matches “{query}”." tone="neutral" />

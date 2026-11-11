@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 
 use crate::{
     AppState,
-    auth::{CurrentUser, User, hash_token, random_token},
+    auth::{CurrentUser, ScribeAccess, User, hash_token, random_token},
     error::{ApiResult, AppError},
     util::{new_id, now_ms},
 };
@@ -145,15 +145,15 @@ impl FromRequestParts<AppState> for KeyUser {
             .map(str::trim)
             .filter(|t| t.starts_with(KEY_PREFIX))
             .ok_or(AppError::BadKey)?;
-        let row: Option<(String, String, String, Option<i64>, String, String, String, bool)> = sqlx::query_as(
-            "SELECT k.id, k.name, k.scope, k.last_used_at, u.id, u.username, u.display_name, u.is_admin
+        let row: Option<(String, String, String, Option<i64>, String, String, String, bool, ScribeAccess)> = sqlx::query_as(
+            "SELECT k.id, k.name, k.scope, k.last_used_at, u.id, u.username, u.display_name, u.is_admin, u.scribe_access
              FROM api_keys k JOIN users u ON u.id = k.user_id
              WHERE k.token_hash = ? AND u.disabled_at IS NULL",
         )
         .bind(hash_token(token))
         .fetch_optional(&state.db)
         .await?;
-        let (key_id, key_name, scope, last_used_at, id, username, display_name, is_admin) = row.ok_or(AppError::BadKey)?;
+        let (key_id, key_name, scope, last_used_at, id, username, display_name, is_admin, scribe_access) = row.ok_or(AppError::BadKey)?;
         let scope = Scope::parse(&scope);
         if scope == Scope::Read && !matches!(parts.method, Method::GET | Method::HEAD) {
             return Err(AppError::NotAllowed("This key can only read; make a Read and write key to change notes".into()));
@@ -162,6 +162,6 @@ impl FromRequestParts<AppState> for KeyUser {
         if last_used_at.is_none_or(|t| now - t > TOUCH_EVERY_MS) {
             sqlx::query("UPDATE api_keys SET last_used_at = ? WHERE id = ?").bind(now).bind(&key_id).execute(&state.db).await?;
         }
-        Ok(KeyUser { user: User { id, username, display_name, is_admin }, key_name, scope })
+        Ok(KeyUser { user: User { id, username, display_name, is_admin, scribe_access }, key_name, scope })
     }
 }

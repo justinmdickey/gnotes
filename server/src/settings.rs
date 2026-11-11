@@ -337,6 +337,10 @@ pub async fn put_chat(
         // A new service or model: embed whatever it hasn't seen yet.
         state.embedder.refresh_all();
     }
+    if let Chat::Summary = chat {
+        // A new service or model: try tools again.
+        crate::ask::tools_rejected_reset();
+    }
     Ok(Json(json!({ chat.key(): describe_chat(slot.as_ref(), off.as_ref(), true) })))
 }
 

@@ -1,21 +1,23 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
   import type { SnippetPart } from "./lib/api";
-  import { answerParts, ask, cards, chat, endChat, startChat, titleParts } from "./lib/ask.svelte";
+  import { answerParts, ask, cards, chat, endChat, startChat, titleParts, undoAction } from "./lib/ask.svelte";
+  import type { AskAction } from "./lib/api";
   import AccountButton from "./lib/AccountButton.svelte";
   import Icon from "./lib/Icon.svelte";
   import StatusPage from "./lib/StatusPage.svelte";
   import { app, openNote, pathOf, viewTitle } from "./lib/store.svelte";
-  import { media, scrollEdge } from "./lib/ui.svelte";
+  import { media, scrollEdge, toast } from "./lib/ui.svelte";
 
   /**
-   * Ask: a conversation with your notes, the app's AI search. Sending a question finds notes by
-   * words and meaning and answers from them; the same field asks follow-ups. Plain word search is
-   * the notes list's. What's typed and the conversation live in lib/ask, so they're still here
-   * after a visit to another tab.
+   * Scribe: a conversation with your notes, the app's AI search. Sending a message finds notes by
+   * words and meaning, answers from them, and at a level that can act, changes your notes; each
+   * change shows as a card with an Undo. Plain word search is the notes list's. What's typed and
+   * the conversation live in lib/ask, so they're still here after a visit to another tab.
    */
   const ai = $derived(!!app.features.ask);
   const chatting = $derived(ai && chat.turns.length > 0);
+  const level = $derived(app.user?.scribe_access ?? "add");
 
   let scroller = $state<HTMLElement>();
   let field = $state<HTMLInputElement>();
@@ -58,9 +60,72 @@
       text: path.length ? path.join(" › ") : note.role === "owner" ? "Notes" : `Shared by ${note.owner}`,
     };
   }
+
+  /** An action's icon, by what it did. */
+  function actionIcon(kind: string) {
+    switch (kind) {
+      case "created": return "note";
+      case "appended": return "plus";
+      case "task_added": return "checklist";
+      case "task_done": return "check";
+      case "replaced": return "rename";
+      case "moved": return "move";
+      case "trashed": return "trash";
+      default: return "sparkle";
+    }
+  }
+
+  /** What Scribe can do at the current level, for the empty page. */
+  const levelLine = $derived(
+    level === "read"
+      ? "Scribe can search and read your notes and answer."
+      : level === "add"
+        ? "Scribe can search and read your notes, and make notes, add to notes, add and tick tasks."
+        : "Scribe can search and read your notes, and also change, move and trash them.",
+  );
+  const examples = $derived(
+    level === "read"
+      ? ["Where is my garage note?", "What's due this week?"]
+      : level === "add"
+        ? ["Add milk to Groceries", "Make a note for the plumber's quote, $4,200"]
+        : ["Tick off the oil change", "Move the quote to Home"],
+  );
+
+  /** Takes one of Scribe's changes back, and strikes the card's button. */
+  let undone = $state<Set<string>>(new Set());
+  async function undo(turnKey: string, a: AskAction) {
+    try {
+      await undoAction(a);
+      undone = new Set([...undone, turnKey]);
+    } catch {
+      toast("Couldn't undo that");
+    }
+  }
+
+  /** Opens the note an action touched; task actions, at the task's line. */
+  function openAction(a: AskAction) {
+    if (a.line != null) app.jump = { note: a.note, line: a.line };
+    openNote(a.note);
+  }
 </script>
 
 {#snippet marked(parts: SnippetPart[])}{#each parts as part, i (i)}{#if part.hit}<mark>{part.text}</mark>{:else}{part.text}{/if}{/each}{/snippet}
+
+<!-- What Scribe did in a turn: an icon, the note's title, the text it wrote, and an Undo. -->
+{#snippet actionCard(key: string, a: AskAction)}
+  <div class="action" class:undone={undone.has(key)}>
+    <button class="flat body" onclick={() => openAction(a)}>
+      <Icon name={actionIcon(a.kind)} />
+      <span class="a">
+        <span class="t">{a.title || "New Note"}</span>
+        {#if a.text}<span class="dim sub">{a.text}</span>{/if}
+      </span>
+    </button>
+    {#if !undone.has(key)}
+      <button class="flat" onclick={() => undo(key, a)}>Undo</button>
+    {/if}
+  </div>
+{/snippet}
 
 <!-- A found note: its number, title, the passage that matched, and where it lives. -->
 {#snippet card(id: string, title: SnippetPart[], snippet: SnippetPart[], n: number)}
@@ -97,6 +162,9 @@
         {#each chat.turns as turn, i (i)}
           <section class="turn" aria-busy={!turn.cited && !turn.error}>
             <p class="question">{turn.question}</p>
+            {#each turn.actions as a, j (j)}
+              {@render actionCard(`${i}:${j}`, a)}
+            {/each}
             {#if turn.error}
               <p class="error">{turn.error}</p>
             {:else if !turn.notes}
@@ -124,9 +192,13 @@
         <p class="dim disclaimer">Written by AI from your notes. It can get things wrong.</p>
       {/if}
     {:else if ai}
-      <StatusPage icon="sparkle" title="Ask Your Notes" description="Ask a question, and get an answer from your notes with links to them." fill />
+      <StatusPage icon="sparkle" title="Scribe" description={levelLine} fill>
+        {#each examples as e (e)}
+          <button class="suggested chip" onclick={() => startChat(e)}>{e}</button>
+        {/each}
+      </StatusPage>
     {:else}
-      <StatusPage icon="sparkle" title="Ask Isn't Set Up" description="An admin can turn on Semantic Search and Summaries in Settings." fill />
+      <StatusPage icon="sparkle" title="Scribe Isn't Set Up" description="An admin can turn on Semantic Search and Summaries in Settings." fill />
     {/if}
   </div>
 
@@ -137,15 +209,15 @@
         <input
           bind:this={field}
           bind:value={chat.draft}
-          placeholder={chatting ? "Ask a follow-up…" : "Ask your notes…"}
-          aria-label={chatting ? "Ask a follow-up" : "Ask your notes"}
+          placeholder={chatting ? "Ask a follow-up…" : "Ask or tell Scribe…"}
+          aria-label={chatting ? "Ask a follow-up" : "Ask or tell Scribe"}
           enterkeyhint="send"
           maxlength="1000"
           onfocus={() => (app.typing = media.phone)}
           onblur={() => (app.typing = false)}
         />
       </label>
-      <button class="suggested icon circular send" type="submit" title="Ask" aria-label="Ask" disabled={chat.busy || !chat.draft.trim()}>
+      <button class="suggested icon circular send" type="submit" title="Send to Scribe" aria-label="Send to Scribe" disabled={chat.busy || !chat.draft.trim()}>
         <Icon name="send" />
       </button>
     </form>
@@ -306,6 +378,56 @@
   .disclaimer {
     margin: 14px 0 0;
     font-size: var(--text-sm);
+  }
+
+  /* What Scribe did: a row like a found note's card, with an Undo beside it. */
+  .action {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 12px;
+    padding: 10px 14px;
+    border-radius: var(--radius);
+    background: var(--view-bg);
+    box-shadow: inset 0 0 0 1px var(--border);
+  }
+
+  .action .body {
+    flex: 1;
+    min-width: 0;
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+    padding: 0;
+    text-align: left;
+  }
+
+  .action .a {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  .action .t {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 700;
+  }
+
+  .action .sub {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .action.undone {
+    opacity: 0.55;
+  }
+
+  /* The empty page's example chips: suggested buttons, wrapped. */
+  .chip {
+    margin: 8px 8px 0 0;
   }
 
   /* The one field, pinned under the results or the conversation, with send beside it. */

@@ -19,7 +19,7 @@ Gnotes is a self-hosted Markdown notes app. One server holds a household's accou
 | AI edits | On demand: Edit with AI (in the note's actions) rewrites the whole note as you ask, and may remove things; the AI Prompt block (`/ai`) writes new text at one spot in the note. Both use the summary chat model and only ever change the note through the editor. See [Edit with AI and the AI Prompt block](#edit-with-ai-and-the-ai-prompt-block). |
 | Text from photos | On demand: Get Text on a photo (on hover, always on touch) sends it to an OpenAI-compatible chat API with a vision model (e.g. Ollama or llama.cpp on local hardware), and the text it reads goes under the photo. |
 | Tasks | A task is a checkbox line in any note, kanban cards included; the note's text stays the only source. The server indexes them (`note_tasks`, `server/src/tasks.rs`) whenever a note's tasks change, and the Tasks tab lists every open one you can see: a chip per top notebook (plus Shared, Notes and All, the pick remembered per device), a section per sub-notebook, soonest due first (`@YYYY-MM-DD` in the line). Ticking one there edits the note's latest text on the server and refuses (409) if that line changed. No reminders or repeats. |
-| AI search | Optional. Notes are embedded in chunks through an OpenAI-compatible embeddings API, in the background after edits settle. Ask is a chat that finds notes by words and meaning, shows them, and streams an answer from the summary chat model with links to them. See [AI search](#ai-search). |
+| AI search | Optional. Notes are embedded in chunks through an OpenAI-compatible embeddings API, in the background after edits settle. Scribe is a chat that finds notes by words and meaning, shows them, and streams an answer from the summary chat model with links to them; at a level that can act it changes your notes. See [AI search](#ai-search). |
 
 **CRDT** (conflict-free replicated data type): a data structure where edits made on different devices, even offline, merge automatically without conflicts.
 
@@ -192,7 +192,7 @@ Changes to `/tree` are pushed over the websocket as `tree_changed`, so clients o
 
 ### AI search
 
-Both parts are off until an admin sets up Settings → Semantic Search (an OpenAI-compatible embeddings API). Ask also needs Settings → AI Summaries, whose chat model writes the answers. `/features` says which are on; the app shows neither when they're off.
+Both parts are off until an admin sets up Settings → Semantic Search (an OpenAI-compatible embeddings API). Scribe also needs Settings → AI Summaries, whose chat model writes the answers. `/features` says which are on; the app shows neither when they're off.
 
 **Embeddings.** Each note's search text (`note_text`) is cut into chunks of about 1,000 characters at line breaks. Each chunk is embedded as its note's title plus the chunk, and kept in `note_chunks` (`note_id, idx, text, hash, model, embedding`) with a hash of that text and the model's name.
 
@@ -220,19 +220,32 @@ A document prefix is part of the embedded text, so its hash changes and those ch
 2. **Hybrid search.** The search's words, without stop words like "where", "is" and "note", go to full-text search as an any-word query (best 20 notes), and the search goes to the embeddings as above (at least 0.35, best 20 notes). The two lists are mixed by reciprocal rank fusion (each note scores the sum of 1 / (60 + rank) over the lists it's in), and the best 8 notes are kept. Visibility and trash rules are the same as search.
 3. **Cards.** Those notes go to the app at once, numbered, each with a snippet: the full-text snippet around the words found, or else the note's closest chunk with the search's words marked.
 4. **Answer.** Each note's closest 3 passages (by meaning, then by shared words; about 16,000 characters in all) go to the chat model as a numbered system message, then the earlier turns, then the question. The prompt says to answer only from those notes, cite them as `[n]`, keep it short, answer a "where is that note…" question with which note it is rather than its content, and reply `NO_ANSWER` when they don't say. The answer is streamed (`stream: true`); a service that ignores that and sends one JSON body works too, as one piece.
+5. **Actions.** When the caller's Scribe access allows it (below), the same chat model is offered tools and the turn runs as a tool loop: the model may call a tool, the server checks the tool's own visibility rules, runs it, and feeds the result back, up to 8 calls, then the model writes the answer. Every change it makes is sent to the app at once as an `action` event (kind, the note's id and title, the text it wrote, and the task's line for task tools) and is applied by the same code path as the app's own requests, so a note it writes is a real note, and its own `before` text is kept for Undo. A service that rejects tool calling (400/404) is answered without tools instead, and the flag is cleared until the summary service is saved again.
+
+The caller's **Scribe access** (`users.scribe_access`, changed by `PATCH /me/scribe`, default `add`) decides which tools are offered:
+
+| Level | Tools offered |
+| --- | --- |
+| `read` | none: search and read notes and tasks, and answer |
+| `add` | those, plus make a note, append to a note, add a task, and tick a task |
+| `full` | those, plus change text inside a note, move a note, and move a note you own to the trash |
+
+A tool's own rules still apply: it can only touch a note the caller can edit (or move/trash a note the caller owns), and it never shares, unshares, or empties the trash. Every change is one the app itself could make, and it's undone by `POST /ask/undo` (the `before` text, or the note's id for a made note), which the app's Undo button calls.
 
 The reply is server-sent events:
 
 ```
 event: sources   data: {"query": "<what was searched>", "terms": ["gift", "ideas"], "notes": [{"n": 1, "note": "<id>", "title": "Christmas gift ideas", "snippet": [{"text": "…", "hit": false}]}]}
 event: delta     data: {"text": "That's in your note"}          // repeated as the answer is written
+event: action    data: {"kind": "created", "note": "<id>", "title": "Plumber quote", "text": "$4,200 for the kitchen drain"}
 event: done      data: {"answer": "That's in your note \"Christmas gift ideas\" [1].", "cited": [1]}
 event: error     data: {"message": "Couldn't reach the answer service"}
 ```
 
 - With no notes found, `done` follows `sources` straight away with `"answer": null`, and the chat model isn't called.
 - `answer` is null when the model says `NO_ANSWER`. Text that might still become `NO_ANSWER`, and a leading `<think>…</think>`, is held back rather than streamed; a reasoning model's separate `reasoning` is dropped.
-- `cited` holds only numbers of notes that were sent. Only notes the caller can see right now are ever sent: unsharing or trashing a note takes it out of search and Ask at once.
+- `cited` holds only numbers of notes that were sent. Only notes the caller can see right now are ever sent: unsharing or trashing a note takes it out of search and Scribe at once.
+- `action` is sent as each tool's change is applied, before the answer finishes; its `text` is what the tool wrote (the task's line, for a ticked task), and `before` (only for `replaced`) is the text it took back for Undo.
 - Ending the conversation (New Chat, logging out) stops the answer: the server stops reading from the chat service.
 
 **Measured.** With 30 household notes and 30 questions (finder questions like "where is that note about gift ideas?", follow-ups, exact words like "Stradic" or "policy 44-BX-1912", paraphrases like "which contractor is doing the shingles?") against qwen3-embedding:
@@ -247,12 +260,14 @@ event: error     data: {"message": "Couldn't reach the answer service"}
 
 With the instruction, the note a question was about scored 0.48 (median), and the best match of an unrelated question 0.16–0.40. For meaning matches, a 0.35 floor made 72% of listed notes right ones, against 52% at 0.3.
 
-**In the app.** Ask is the app's AI search, a place of its own: the phone's Ask tab and the top row of the desktop sidebar (`#/ask`). One field, "Ask your notes…", sits at the bottom with a send button. Sending starts a conversation, and the same field then asks follow-ups; nothing is listed while typing. Plain word search is the field at the top of each notes list. With no AI services set up the tab and row are **Search** (search icon), which open Notes with the cursor in its search field. The empty page is one line saying what it does.
+**In the app.** Scribe is the app's AI search, a place of its own: the phone's Scribe tab and the top row of the desktop sidebar (`#/ask`). One field, "Ask or tell Scribe…", sits at the bottom with a send button. Sending starts a conversation, and the same field then asks follow-ups; nothing is listed while typing. Plain word search is the field at the top of each notes list. With no AI services set up the tab and row are **Search** (search icon), which open Notes with the cursor in its search field. The empty page is one line saying what the current level allows, with example chips for it.
 
 - Each turn shows the question as a bubble, then the found notes as cards (number, title, the snippet with matched words marked, and where the note lives) while the answer streams in above them. Once done, only the cited cards stay; if the notes don't say, the cards are listed as the closest ones.
+- When Scribe acts, each change shows as a card of its own (icon, the note's title, the text it wrote) with an **Undo**; tapping it opens the note, a task's at its line. Undo takes the change back and strikes the card.
 - The answer's `[n]` become small numbered links. A card or link opens the note; Back returns to the conversation.
 - What's typed and the conversation stay while you visit other tabs, until **New Chat** or logging out; leaving doesn't stop an answer.
-- A note list's search finds notes inside its folder by their words only. Its **Ask Your Notes** row opens Ask with the search text and asks it. The row comes first when the search reads like a question (ends in `?` or starts with a question word), otherwise last. With no matches at all it's the empty page's button.
+- Account has a **Scribe** group (shown when AI search is set up) with the access level: **Read only**, **Add** (the default) and **Full**, each with one line of what it may do. When the chat model can't call tools, the group says so and Scribe answers only.
+- A note list's search finds notes inside its folder by their words only. Its **Ask Scribe** row opens Scribe with the search text and asks it. The row comes first when the search reads like a question (ends in `?` or starts with a question word), otherwise last. With no matches at all it's the empty page's button.
 
 ### Tidy Up
 

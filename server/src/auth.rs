@@ -23,12 +23,34 @@ use crate::{
 pub const SESSION_COOKIE: &str = "gnotes_session";
 const SESSION_DAYS: i64 = 90;
 
+/// What Scribe may do with your notes (docs/DESIGN.md, AI search).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
+#[serde(rename_all = "lowercase")]
+#[sqlx(rename_all = "lowercase")]
+pub enum ScribeAccess {
+    Read,
+    Add,
+    Full,
+}
+
+impl ScribeAccess {
+    /// The level's rank: a tool is offered only at or below it.
+    pub fn rank(self) -> u8 {
+        match self {
+            ScribeAccess::Read => 0,
+            ScribeAccess::Add => 1,
+            ScribeAccess::Full => 2,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, sqlx::FromRow)]
 pub struct User {
     pub id: String,
     pub username: String,
     pub display_name: String,
     pub is_admin: bool,
+    pub scribe_access: ScribeAccess,
 }
 
 /// Each argon2 hash takes about 19 MiB, so only a few run at once: a burst of logins waits its turn
@@ -91,6 +113,7 @@ pub async fn create_user(
         username: username.into(),
         display_name: display_name.into(),
         is_admin,
+        scribe_access: ScribeAccess::Add,
     };
     let result = sqlx::query(
         "INSERT INTO users (id, username, display_name, password_hash, is_admin, created_at)
@@ -123,7 +146,7 @@ impl FromRequestParts<AppState> for CurrentUser {
         let jar = CookieJar::from_headers(&parts.headers);
         let token = jar.get(SESSION_COOKIE).ok_or(AppError::Unauthorized)?.value().to_owned();
         let user = sqlx::query_as::<_, User>(
-            "SELECT u.id, u.username, u.display_name, u.is_admin
+            "SELECT u.id, u.username, u.display_name, u.is_admin, u.scribe_access
              FROM sessions s JOIN users u ON u.id = s.user_id
              WHERE s.token_hash = ? AND s.expires_at > ? AND u.disabled_at IS NULL",
         )
@@ -148,14 +171,14 @@ pub async fn login(
     jar: CookieJar,
     Json(body): Json<LoginBody>,
 ) -> ApiResult<(CookieJar, Json<User>)> {
-    let row = sqlx::query_as::<_, (String, String, String, bool, String)>(
-        "SELECT id, username, display_name, is_admin, password_hash FROM users WHERE username = ? AND disabled_at IS NULL",
+    let row = sqlx::query_as::<_, (String, String, String, bool, ScribeAccess, String)>(
+        "SELECT id, username, display_name, is_admin, scribe_access, password_hash FROM users WHERE username = ? AND disabled_at IS NULL",
     )
     .bind(body.username.trim().to_lowercase())
     .fetch_optional(&state.db)
     .await?;
 
-    let Some((id, username, display_name, is_admin, password_hash)) = row else {
+    let Some((id, username, display_name, is_admin, scribe_access, password_hash)) = row else {
         return Err(AppError::Unauthorized);
     };
     if !verify_password(body.password, password_hash).await? {
@@ -163,7 +186,7 @@ pub async fn login(
     }
 
     let jar = start_session(&state, &id, &headers, jar).await?;
-    Ok((jar, Json(User { id, username, display_name, is_admin })))
+    Ok((jar, Json(User { id, username, display_name, is_admin, scribe_access })))
 }
 
 /// A random URL-safe token; only its hash is ever stored.
