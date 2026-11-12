@@ -6,7 +6,7 @@ import type { EditorState, Range } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate, WidgetType } from "@codemirror/view";
 import { iconSvg } from "./icons";
 import { DUE, dueLabel } from "./dates";
-import { EMBED, attachmentMeta, attachmentUrl, isTranscribing, onTranscribingChange, readPhoto, removeEmbed, transcribeMemo } from "./attachments";
+import { EMBED, FILE, attachmentMeta, attachmentUrl, humanSize, isTranscribing, onTranscribingChange, readPhoto, removeEmbed, transcribeMemo } from "./attachments";
 import { openNote } from "./store.svelte";
 import type { IconName } from "./icons";
 
@@ -255,6 +255,77 @@ class AttachmentWidget extends WidgetType {
   }
 }
 
+/**
+ * A file, drawn in place of its `[name](att:id)` line: a type icon, the name and the size. A PDF
+ * opens in the browser's viewer; anything else downloads. Inline in a sentence it reads as a link.
+ */
+class FileWidget extends WidgetType {
+  constructor(
+    readonly id: string,
+    readonly name: string,
+  ) {
+    super();
+  }
+
+  eq(other: FileWidget) {
+    return other.id === this.id;
+  }
+
+  toDOM() {
+    const chip = document.createElement("div");
+    chip.className = "cm-file loading";
+    chip.setAttribute("role", "button");
+    chip.tabIndex = 0;
+    chip.append(iconSvg("file", 18));
+    const name = document.createElement("span");
+    name.className = "cm-file-name";
+    name.textContent = this.name;
+    const size = document.createElement("span");
+    size.className = "cm-file-size";
+    chip.append(name, size);
+    const open = () => {
+      if (chip.dataset.mime === "application/pdf") window.open(attachmentUrl(this.id), "_blank");
+      else {
+        const a = document.createElement("a");
+        a.href = attachmentUrl(this.id);
+        a.download = chip.dataset.name ?? this.name;
+        a.click();
+      }
+    };
+    chip.addEventListener("click", open);
+    chip.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        open();
+      }
+    });
+    attachmentMeta(this.id).then(
+      (meta) => {
+        chip.classList.remove("loading");
+        chip.dataset.mime = meta.mime;
+        chip.dataset.name = meta.filename;
+        name.textContent = meta.filename;
+        size.textContent = humanSize(meta.size);
+        chip.replaceChildren(iconSvg(meta.mime === "application/pdf" ? "pdf" : "file", 18), name, size);
+      },
+      () => {
+        chip.classList.remove("loading");
+        chip.classList.add("missing");
+        size.textContent = "unavailable";
+      },
+    );
+    return chip;
+  }
+
+  ignoreEvent() {
+    return true;
+  }
+
+  get estimatedHeight() {
+    return 44;
+  }
+}
+
 /** A checklist item at exactly this indent: "- [ ] …", "* [x] …". */
 const sibling = (text: string, indent: string) => text.startsWith(indent) && /^[-*+]\s+\[[ xX]\]/.test(text.slice(indent.length));
 
@@ -423,6 +494,13 @@ function build(view: EditorView): { decorations: DecorationSet; atomic: Decorati
         embedLines.add(line.number);
         decos.push(embedLine.range(line.from));
         decos.push(Decoration.replace({ widget: new AttachmentWidget(m[2], m[1]) }).range(line.from, line.to));
+      } else {
+        const f = FILE.exec(line.text);
+        if (f && line.length) {
+          embedLines.add(line.number);
+          decos.push(embedLine.range(line.from));
+          decos.push(Decoration.replace({ widget: new FileWidget(f[2], f[1]) }).range(line.from, line.to));
+        }
       }
       pos = line.to + 1;
     }

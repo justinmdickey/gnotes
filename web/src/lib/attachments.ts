@@ -3,13 +3,24 @@ import { StateEffect, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, type ViewUpdate, WidgetType } from "@codemirror/view";
 import { api, ApiError, type AttachmentMeta } from "./api";
 import { toast } from "./ui.svelte";
+import { app } from "./store.svelte";
 
 /**
  * An embed line. It may carry a block mark (heading, quote, list) that a text style put
  * there; the embed still shows as the photo or player.
  */
 export const EMBED = /^\s*(?:#{1,6}\s+|>\s?|[-*+]\s+(?:\[[ xX]\]\s+)?|\d+[.)]\s+)?!\[([^\]\n]*)\]\(att:([0-9a-f-]{36})\)\s*$/;
+// A file link on its own line: `[name](att:<id>)`, no `!`. Photos and recordings keep the `!`.
+export const FILE = /^\s*(?:#{1,6}\s+|>\s?|[-*+]\s+(?:\[[ xX]\]\s+)?|\d+[.)]\s+)?\[([^\]\n]*)\]\(att:([0-9a-f-]{36})\)\s*$/;
 export const attachmentUrl = (id: string) => `/api/attachments/${id}`;
+
+/** A byte count as a human size, for a file chip and the over-limit toast. */
+export function humanSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
 
 const metas = new Map<string, Promise<AttachmentMeta>>();
 
@@ -102,6 +113,42 @@ export async function addImages(view: EditorView, noteId: string, files: File[],
   for (const file of files) {
     const att = await api.upload(noteId, await prepareImage(file));
     insertEmbed(view, att.id, "Photo", atEnd);
+  }
+}
+
+/**
+ * Puts a file link on its own line at the cursor (or at the end, when nobody is typing) and leaves
+ * the cursor on the line after it. A file is a plain `[name](att:id)`, no `!`.
+ */
+export function insertFile(view: EditorView, id: string, name: string, atEnd = false) {
+  const { state } = view;
+  const line = atEnd ? state.doc.line(state.doc.lines) : state.doc.lineAt(state.selection.main.head);
+  const link = `[${name.replace(/[[\]\n]/g, "")}](att:${id})`;
+  const empty = line.text.trim() === "" && line.number > 1;
+  const from = empty ? line.from : line.to;
+  const to = line.to;
+  const before = empty ? "" : "\n";
+  const nextLine = line.number < state.doc.lines ? state.doc.line(line.number + 1) : null;
+  const after = nextLine && nextLine.text.trim() === "" ? "" : "\n";
+  const insert = before + link + after;
+  const cursor = from + before.length + link.length + 1;
+  view.dispatch({
+    changes: { from, to, insert },
+    selection: { anchor: cursor },
+    scrollIntoView: true,
+  });
+}
+
+/** Uploads any file and puts its link on its own line; an over-limit file says so and is skipped. */
+export async function addFiles(view: EditorView, noteId: string, files: File[], atEnd = false) {
+  const limit = app.features.max_upload || 50 * 1024 * 1024;
+  for (const file of files) {
+    if (file.size > limit) {
+      toast(`${file.name} is over the ${humanSize(limit)} limit`);
+      continue;
+    }
+    const att = await api.upload(noteId, file);
+    insertFile(view, att.id, att.filename, atEnd);
   }
 }
 

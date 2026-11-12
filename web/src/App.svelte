@@ -7,7 +7,7 @@
   import Overlays from "./lib/Overlays.svelte";
   import StatusPage from "./lib/StatusPage.svelte";
   import { addableView, app, composeNote, goBack, importable, importNotes, parentView, readHash, startSession, twoPane, viewTitle } from "./lib/store.svelte";
-  import { fadeIn, media, page, standalone, toast } from "./lib/ui.svelte";
+  import { fadeIn, media, page, standalone } from "./lib/ui.svelte";
   import Ask from "./Ask.svelte";
   import Editor from "./Editor.svelte";
   import Join from "./Join.svelte";
@@ -125,8 +125,11 @@
 
   function forImport(e: DragEvent) {
     if (!app.user || !e.dataTransfer?.types.includes("Files")) return false;
-    const images = [...e.dataTransfer.items].some((i) => i.kind === "file" && i.type.startsWith("image/"));
-    return !(images && e.target instanceof Element && e.target.closest(".cm-editor"));
+    const items = [...e.dataTransfer.items].filter((i) => i.kind === "file");
+    const hasImportable = items.some((i) => importable(i.getAsFile() ?? new File([], "")));
+    const onEditor = e.target instanceof Element && e.target.closest(".cm-editor");
+    // Import when there's Markdown or a zip, or when it's not on a note (drop into the open folder).
+    return hasImportable || !onEditor;
   }
 
   function ondragover(e: DragEvent) {
@@ -141,13 +144,13 @@
   }
 
   function ondrop(e: DragEvent) {
-    if (!forImport(e)) return;
+    if (!app.user || !e.dataTransfer?.types.includes("Files")) return;
+    const files = [...e.dataTransfer!.files].filter(importable);
+    if (!files.length) return; // Not Markdown or a zip: let a drop on a note attach it instead.
     e.preventDefault();
     e.stopPropagation();
     dropping = false;
-    const files = [...e.dataTransfer!.files].filter(importable);
-    if (files.length) void importNotes(files, app.view);
-    else toast("Drop .md files or a .zip of them to import");
+    void importNotes(files, app.view);
   }
 
   // Wide screens: the sidebar's right edge drags to resize it. The width is remembered per browser.

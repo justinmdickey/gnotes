@@ -656,11 +656,63 @@ async fn attachments_follow_note_access() {
     assert_eq!(res.status(), 200);
     assert_eq!(upload(&bob, &note, "x.png", "image/png", png).await.status(), 403);
 
-    // Only images and audio; SVG could carry script.
-    let res = upload(&alice, &note, "x.svg", "image/svg+xml", b"<svg/>".to_vec()).await;
-    assert_eq!(res.status(), 400);
-    let res = upload(&alice, &note, "x.html", "text/html", b"<p>".to_vec()).await;
-    assert_eq!(res.status(), 400);
+    // Any type is allowed now; what a file is decides how the server sends it back.
+    assert!(upload(&alice, &note, "x.svg", "image/svg+xml", b"<svg/>".to_vec()).await.status().is_success());
+    assert!(upload(&alice, &note, "x.html", "text/html", b"<p>".to_vec()).await.status().is_success());
+}
+
+#[tokio::test]
+async fn any_file_attaches_and_serves_safely() {
+    let dir = TempDir::new().unwrap();
+    let server = start(&dir).await;
+    let alice = user(&server, "alice").await;
+    let bob = user(&server, "bob").await;
+    let note = alice.post("/notes", json!({})).await["id"].as_str().unwrap().to_owned();
+    let short = &note[note.len() - 8..];
+    let read = |path: &str| std::fs::read_to_string(dir.path().join("export").join(path)).unwrap();
+
+    // A PDF and an HTML file both upload; any type is allowed now.
+    let pdf = b"%PDF-1.4 a fake manual".to_vec();
+    let res = upload(&alice, &note, "manual.pdf", "application/pdf", pdf.clone()).await;
+    assert!(res.status().is_success(), "{}", res.status());
+    let pdf_id = res.json::<Value>().await.unwrap()["id"].as_str().unwrap().to_owned();
+    let html = b"<html><body>hi</body></html>".to_vec();
+    let res = upload(&alice, &note, "page.html", "text/html", html.clone()).await;
+    assert!(res.status().is_success(), "{}", res.status());
+    let html_id = res.json::<Value>().await.unwrap()["id"].as_str().unwrap().to_owned();
+
+    // A PDF opens in the browser's viewer: inline, but sandboxed so its scripts can't reach the app.
+    let res = alice.http.get(alice.url(&format!("/attachments/{pdf_id}"))).send().await.unwrap();
+    assert_eq!(res.headers()["content-type"], "application/pdf");
+    assert_eq!(res.headers()["content-security-policy"], "sandbox");
+    assert!(res.headers().get("content-disposition").is_none(), "a PDF is inline, not a download");
+    assert_eq!(res.bytes().await.unwrap().to_vec(), pdf);
+
+    // An HTML file comes back as a named download, so it never runs on the app's origin.
+    let res = alice.http.get(alice.url(&format!("/attachments/{html_id}"))).send().await.unwrap();
+    let disp = res.headers()["content-disposition"].to_str().unwrap().to_owned();
+    assert!(disp.starts_with("attachment;") && disp.contains("page.html"), "{disp}");
+    assert_eq!(res.headers()["x-content-type-options"], "nosniff");
+    assert_eq!(res.bytes().await.unwrap().to_vec(), html);
+
+    // A viewer can't upload.
+    alice
+        .post("/shares", json!({ "resource_type": "note", "resource_id": note, "username": "bob", "role": "viewer" }))
+        .await;
+    assert_eq!(upload(&bob, &note, "x.pdf", "application/pdf", pdf.clone()).await.status(), 403);
+
+    // The export copies the file next to the note and rewrites the link to a relative path.
+    let mut ws = alice.ws().await;
+    let doc = LoroDoc::new();
+    ws.join_and_sync(&note, None).await;
+    ws.send_frame(0x01, &note, &edit(&doc, 0, &format!("# Manual\n\n[manual.pdf](att:{pdf_id})\n"))).await;
+    let pdf_short = &pdf_id[pdf_id.len() - 8..];
+    let file = format!("alice/attachments/manual ({pdf_short}).pdf");
+    let html_file = format!("alice/attachments/page ({}).html", &html_id[html_id.len() - 8..]);
+    let copy = format!("alice/Manual ({short}).md");
+    export_settles(&dir, &[&file, &html_file, &copy]).await;
+    assert_eq!(std::fs::read(dir.path().join("export").join(&file)).unwrap(), pdf);
+    assert_eq!(read(&copy), format!("# Manual\n\n[manual.pdf](attachments/manual%20%28{pdf_short}%29.pdf)\n"));
 }
 
 async fn import(user: &User, notebook: Option<&str>, files: Vec<(&str, Vec<u8>)>) -> reqwest::Response {
@@ -1887,6 +1939,25 @@ async fn api_keys_act_as_their_user_within_their_scope() {
     let (status, body) = reader.call(reqwest::Method::POST, "/notes", Some(json!({ "text": "nope" }))).await;
     assert_eq!(status, 403, "{body}");
     assert!(body["message"].as_str().unwrap().contains("only read"));
+
+    // A key can attach a file to a note and get the link for it; a read key can't.
+    let note = writer.ok(reqwest::Method::POST, "/notes", Some(json!({ "text": "# Files" }))).await;
+    let note_id = note["id"].as_str().unwrap().to_owned();
+    let attach = |agent: &Agent, name: &str, mime: &str| {
+        let file = reqwest::multipart::Part::bytes(b"x".to_vec()).file_name(name.to_owned()).mime_str(mime).unwrap();
+        agent.http
+            .post(format!("http://{}/api/v1/notes/{note_id}/attachments", agent.base))
+            .bearer_auth(&agent.key)
+            .multipart(reqwest::multipart::Form::new().part("file", file))
+            .send()
+    };
+    let res = attach(&writer, "manual.pdf", "application/pdf").await.unwrap();
+    assert!(res.status().is_success(), "{}", res.status());
+    let att = res.json::<Value>().await.unwrap();
+    assert_eq!(att["filename"], "manual.pdf");
+    let att_id = att["id"].as_str().unwrap().to_owned();
+    assert_eq!(att["markdown"], format!("[manual.pdf](att:{att_id})"));
+    assert_eq!(attach(&reader, "manual.pdf", "application/pdf").await.unwrap().status(), 403);
 
     // Keys only open /api/v1, and the app's session doesn't open it.
     let bearer = |path: &str| {

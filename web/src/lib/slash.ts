@@ -16,6 +16,7 @@ interface SlashItem extends Completion {
 
 export interface SlashActions {
   photo: () => void;
+  file: () => void;
   record: () => void;
   /** Tidy Up the note with AI, and an AI Prompt block at the cursor; listed only while this says AI can. */
   tidy: () => void;
@@ -57,7 +58,7 @@ const AI = { name: "AI", rank: 2 };
 const TIDY = "Tidy Up";
 const PROMPT = "AI Prompt";
 /** Other words for the AI items: typing the start of one finds it too. */
-const ALIASES: Record<string, string[]> = { [TIDY]: ["clean up", "format", "improve"], [PROMPT]: ["ai", "prompt", "write"] };
+const ALIASES: Record<string, string[]> = { [TIDY]: ["clean up", "format", "improve"], [PROMPT]: ["ai", "prompt", "write"], File: ["attach", "attachment"] };
 
 /** The other word each AI item is found under for what was typed, when its own name doesn't start that way. */
 function aliasesFor(typed: string): Record<string, string> {
@@ -88,6 +89,7 @@ function items(actions: SlashActions): SlashItem[] {
     { label: "Kanban Board", icon: "board", apply: pick(insertBoard), section: ADD },
     { label: "Emoji", icon: "emoji", apply: pick(startEmoji), section: ADD },
     { label: "Photo", icon: "camera", apply: pick(actions.photo), section: ADD },
+    { label: "File", icon: "file", apply: pick(actions.file), section: ADD },
     { label: "Voice Memo", icon: "mic", apply: pick(actions.record), section: ADD },
     { label: PROMPT, icon: "sparkle", apply: pick(actions.prompt), section: AI },
     { label: TIDY, icon: "broom", apply: pick(actions.tidy), section: AI },

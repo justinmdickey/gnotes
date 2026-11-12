@@ -860,7 +860,7 @@ try {
   );
   const plain = await openNoteActions(alice);
   // This note has a ticked checklist item, so it also offers Hide from Tasks and Clear Done.
-  check(plain.join(",") === "Photo,Voice Memo,Hide from Tasks,Clear Done,Move to…,Move to Trash", `without AI, the note's actions are Photo, Voice Memo, its Tasks actions, Move to… and Move to Trash (${plain})`);
+  check(plain.join(",") === "Photo,Voice Memo,File,Hide from Tasks,Clear Done,Move to…,Move to Trash", `without AI, the note's actions are Photo, Voice Memo, File, its Tasks actions, Move to… and Move to Trash (${plain})`);
   await alice.keyboard.press("Escape");
   await alice.waitForFunction(() => !document.querySelector("[role=menuitem]"));
   check(await alice.evaluate(() => document.activeElement?.matches("button[aria-label='Note actions']")), "Escape closes the note's actions, back on their button");
@@ -998,7 +998,7 @@ try {
   await new Promise((r) => setTimeout(r, 600));
   const untidy = await markdown(alice);
   const withAI = await openNoteActions(alice);
-  check(withAI.join(",") === "Photo,Voice Memo,Summary,Edit with AI,Tidy Up,Hide from Tasks,Clear Done,Move to…,Move to Trash", `with AI, the note's actions add Summary, Edit with AI and Tidy Up (${withAI})`);
+  check(withAI.join(",") === "Photo,Voice Memo,File,Summary,Edit with AI,Tidy Up,Hide from Tasks,Clear Done,Move to…,Move to Trash", `with AI, the note's actions add Summary, Edit with AI and Tidy Up (${withAI})`);
   if (process.env.SHOTS) await (await new Promise((r) => setTimeout(r, 400)), alice.screenshot({ path: join(process.env.SHOTS, "desktop-note-actions.png") }));
   await alice.mouse.click(400, 300);
   await alice.waitForFunction(() => !document.querySelector("[role=menuitem]"));
@@ -2456,6 +2456,35 @@ try {
     await alice.emulateMediaFeatures([{ name: "prefers-color-scheme", value: "dark" }]);
     await shot("desktop-table-board-dark");
   }
+
+  // ---- File attachments (#53) ----
+  // A PDF dropped on a note becomes a file chip with its name and size; the server has the file.
+  const fileNoteId = await alice.evaluate(() => fetch("/api/notes", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }).then((r) => r.json()).then((n) => n.id));
+  await alice.evaluate((id) => (location.hash = `#/note/${id}`), fileNoteId);
+  await alice.waitForSelector(".cm-content[contenteditable=true]", { timeout: 5000 });
+  await new Promise((r) => setTimeout(r, 300));
+  await alice.evaluate(() => {
+    const dt = new DataTransfer();
+    dt.items.add(new File([new Uint8Array([0x25, 0x50, 0x44, 0x46])], "manual.pdf", { type: "application/pdf" }));
+    const at = document.querySelector(".cm-content");
+    at.dispatchEvent(new DragEvent("dragover", { dataTransfer: dt, bubbles: true, cancelable: true }));
+    at.dispatchEvent(new DragEvent("drop", { dataTransfer: dt, bubbles: true, cancelable: true }));
+  });
+  await alice.waitForSelector(".cm-file", { timeout: 5000 });
+  await alice.waitForFunction(() => (document.querySelector(".cm-file-size")?.textContent ?? "").trim() !== "", { timeout: 5000 });
+  const chip = await alice.evaluate(() => ({
+    name: document.querySelector(".cm-file-name")?.textContent,
+    size: document.querySelector(".cm-file-size")?.textContent,
+  }));
+  check(chip.name === "manual.pdf" && /B|KB|MB/.test(chip.size ?? ""), `a dropped PDF becomes a file chip with its name and size (${JSON.stringify(chip)})`);
+  const served = await alice.evaluate(async () => {
+    const m = (document.querySelector(".cm-content").cmTile.root.view.state.doc.toString().match(/att:([0-9a-f-]{36})/) ?? [])[1];
+    if (!m) return "no-link";
+    const r = await fetch(`/api/attachments/${m}`);
+    return r.ok ? `ok:${r.headers.get("content-security-policy")}` : `status:${r.status}`;
+  });
+  check(served === "ok:sandbox", `the server has the dropped file, served as a sandboxed PDF (${served})`);
+
   console.log("all checks passed");
 } finally {
   await browser?.close();

@@ -179,6 +179,37 @@ async function seed(page) {
   // Code blocks: one labeled, one left for the guesser.
   await write("#/", '# Snippets\nRun this first:\n```bash\nnpm run build\n```\nThen:\n```\n// say hi\nconst greet = (name) => `Hello ${name}`;\nconsole.log(greet("Ada"), 42);\n```\nAnd Lua:\n```\nlocal M = {}\nfunction M.setup(opts)\nfor k, v in pairs(opts) do print(k, v) end\nend\nreturn M\n```\nDone.');
   await write("#/", "# Old packing list\nsocks");
+  // A note with a photo and a file, so a shot shows a file chip next to a photo.
+  await page.evaluate((h) => (location.hash = h), "#/");
+  await settle(300);
+  await page.click(".pane.list header button[aria-label='New note']");
+  await page.waitForSelector(".cm-content[contenteditable=true]");
+  await page.keyboard.type("# Files\n");
+  await settle(400);
+  const attIds = await page.evaluate(async () => {
+    const noteId = location.hash.split("/note/")[1];
+    const up = (name, mime, file) => {
+      const f = new FormData();
+      f.append("note_id", noteId);
+      f.append("file", file, name);
+      return fetch("/api/attachments", { method: "POST", body: f }).then((r) => r.json());
+    };
+    // A real 120x90 image, so the photo embed is clearly visible in the shot.
+    const cv = document.createElement("canvas");
+    cv.width = 120;
+    cv.height = 90;
+    const ctx = cv.getContext("2d");
+    ctx.fillStyle = "#7a6cf5";
+    ctx.fillRect(0, 0, 120, 90);
+    const blob = await new Promise((r) => cv.toBlob(r, "image/png"));
+    const [photo, pdf] = await Promise.all([
+      up("photo.png", "image/png", new File([blob], "photo.png", { type: "image/png" })),
+      up("manual.pdf", "application/pdf", new File([new Uint8Array([37, 80, 68, 70])], "manual.pdf", { type: "application/pdf" })),
+    ]);
+    return [photo.id, pdf.id];
+  });
+  await page.keyboard.type(`![Photo](att:${attIds[0]})\n[manual.pdf](att:${attIds[1]})`);
+  await settle(600);
   await page.evaluate(() => document.activeElement?.blur());
   // The notes are embedded a few seconds after typing stops.
   if (flag("--ai")) {

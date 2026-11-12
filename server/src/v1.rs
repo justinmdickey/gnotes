@@ -7,7 +7,7 @@
 
 use axum::{
     Json, Router,
-    extract::{FromRequest, FromRequestParts, Path, Request, State},
+    extract::{FromRequest, FromRequestParts, Multipart, Path, Request, State},
     http::request::Parts,
     routing::{get, post},
 };
@@ -18,6 +18,7 @@ use uuid::Uuid;
 use crate::{
     AppState,
     api_keys::{KeyUser, Scope},
+    attachments::{clean_filename, store_file},
     error::{ApiResult, AppError},
     perms::{Role, note_role},
     rooms::{read_text, write_text},
@@ -41,6 +42,7 @@ pub fn router() -> Router<AppState> {
         .route("/notes", get(list_notes).post(create_note))
         .route("/notes/{id}", get(get_note).patch(update_note).delete(delete_note))
         .route("/notes/{id}/append", post(append))
+        .route("/notes/{id}/attachments", post(attach_file))
         .route("/search", get(search))
         .route("/tasks", get(list_tasks).post(add_task))
         .fallback(|| async { AppError::BadRequest("No such endpoint; see docs/API.md".into()) })
@@ -356,6 +358,48 @@ async fn append(State(state): State<AppState>, key: KeyUser, Path(id): Path<Stri
         return Err(AppError::BadRequest(format!("Notes hold at most {MAX_TEXT} bytes of text")));
     }
     Ok(Json(load_note(&state, &key.user.id, &id).await?))
+}
+
+#[derive(Serialize)]
+struct Attached {
+    id: String,
+    filename: String,
+    /// The Markdown to put in the note: `[filename](att:id)`.
+    markdown: String,
+}
+
+/// `POST /v1/notes/:id/attachments`: attaches a file (multipart `file`) to a note and answers its
+/// id, file name and the Markdown link for it. Any file type is allowed, up to 50 MB.
+async fn attach_file(
+    State(state): State<AppState>,
+    key: KeyUser,
+    Path(id): Path<String>,
+    mut form: Multipart,
+) -> ApiResult<Json<Attached>> {
+    let bad = |m: &str| AppError::BadRequest(m.into());
+    let id = parse_id(&id).ok_or(AppError::NotFound)?;
+    require_editor(&state, &key.user.id, &id).await?;
+    let mut file = None;
+    while let Some(field) = form.next_field().await.map_err(|e| bad(&e.body_text()))? {
+        if field.name() != Some("file") {
+            continue;
+        }
+        let mime = field
+            .content_type()
+            .unwrap_or("application/octet-stream")
+            .split(';')
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase();
+        let filename = clean_filename(field.file_name().unwrap_or(""));
+        let bytes = field.bytes().await.map_err(|e| bad(&e.body_text()))?.to_vec();
+        file = Some((mime, filename, bytes));
+    }
+    let (mime, filename, bytes) = file.ok_or_else(|| bad("Send the file as a multipart field named file"))?;
+    let att = store_file(&state, &id, &key.user.id, &mime, &filename, &bytes).await?;
+    let markdown = format!("[{}](att:{})", att.filename, att.id);
+    Ok(Json(Attached { id: att.id, filename: att.filename, markdown }))
 }
 
 /// `DELETE /v1/notes/:id`: moves a note you own to the trash, where it can be restored for 30 days.

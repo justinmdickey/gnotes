@@ -80,8 +80,9 @@ These copies are for backup and leaving the app. The SQL database and Loro snaps
 
 ### Attachments
 
-- Uploaded files are stored by content hash at `data/blobs/<sha256[0..2]>/<sha256>`.
-- Notes reference them as `![alt](att:<attachment id>)`. The PWA resolves `att:` to `/api/attachments/<id>`.
+- Uploaded files are stored by content hash at `data/blobs/<sha256[0..2]>/<sha256>`. Any file type is allowed; the 50 MB limit is the only gate.
+- Notes reference them as `![alt](att:<attachment id>)` for photos and recordings, or a plain `[name](att:<attachment id>)` for other files. The PWA resolves `att:` to `/api/attachments/<id>`.
+- The server sends images and recordings inline, a PDF inline but sandboxed (so its scripts can't reach the app), and anything else as a named download — so an uploaded HTML or SVG file never runs on the app's origin.
 - The plain Markdown copies rewrite `att:` links to relative `attachments/` paths.
 - Audio recordings use the same syntax. The editor shows an audio player for audio MIME types.
 - Every attachment request checks the requester's access to the note it belongs to.
@@ -92,7 +93,7 @@ These copies are for backup and leaving the app. The SQL database and Loro snaps
 
 - A `.zip` becomes a notebook named after its one top folder, or after the zip. Folders inside become notebooks; folders with no notes (e.g. `attachments/`) don't.
 - Loose `.md`/`.txt` files go straight into the target notebook.
-- `![alt](path)` and Obsidian's `![[path]]` to an image or recording in the zip become attachments. Paths resolve next to the note first, then by file name anywhere in the zip.
+- `![alt](path)`, Obsidian's `![[path]]`, and a plain `[name](path)` to a file in the zip become attachments, of any type. Paths resolve next to the note first, then by file name anywhere in the zip.
 - YAML front matter is dropped; its `title:` is kept. A note whose first line isn't a heading gets `# <file name>` on top, so the list shows a real title.
 - Notes keep the zip's modified times, so an import doesn't flood Recent. Hidden files and folders (`.obsidian`) are ignored; anything else unused is listed as skipped.
 - Content is written as a fresh Loro snapshot. Everything lands in one transaction, so a failed import leaves no half-made notebooks.

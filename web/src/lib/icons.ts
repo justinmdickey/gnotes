@@ -11,6 +11,10 @@ const stroked = {
   trash: "M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.7 8.5h5.6l.7-8.5",
   folder: "M2.25 3.25h4l1.5 1.75h6v7.75H2.25z",
   note: "M4 2.5h5.5l2.5 2.5v8.5H4zM9.5 2.5V5H12",
+  // A file: a page with a folded corner and a few content lines.
+  file: "M4 2.5h5.5l2.5 2.5v8.5H4zM9.5 2.5V5H12M6 9h4M6 11.5h3",
+  // A PDF: the same page with a "P" for the format.
+  pdf: "M4 2.5h5.5l2.5 2.5v8.5H4zM9.5 2.5V5H12M6.5 11.5V7.5a1.75 1.75 0 0 1 3.5 0v.5a1.75 1.75 0 0 1-1.75 1.75H6.5",
   people: "M6 7a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM2.5 13c0-2 1.5-3.5 3.5-3.5s3.5 1.5 3.5 3.5M10.5 7a1.7 1.7 0 1 0 0-3.4M11.5 9.5c1.3.3 2 1.6 2 3.5",
   logout: "M9.5 3h-6v10h6M7 8h6.5M11 5.5 13.5 8 11 10.5",
   more: "M7.6 3.5h.8M7.6 8h.8M7.6 12.5h.8",

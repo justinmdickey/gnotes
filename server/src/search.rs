@@ -19,15 +19,20 @@ const MAX_TERMS: usize = 16;
 const HIT_START: char = '\u{2}';
 const HIT_END: char = '\u{3}';
 
-/// `![label](att:…)` becomes its label, e.g. "Voice memo", wherever it sits in the line.
+/// `![label](att:…)` becomes its label and `[name](att:…)` its name (a file link's text is its
+/// file name), e.g. "manual.pdf", wherever it sits in the line, so a file's name is searchable.
 fn embeds_as_labels(line: &str) -> String {
     let mut out = String::new();
     let mut rest = line;
-    while let Some(start) = rest.find("![") {
-        let after = &rest[start + 2..];
-        let Some((label, tail)) = after.split_once("](att:") else { break };
+    while let Some(at) = rest.find("](att:") {
+        let before = &rest[..at];
+        let Some(bracket) = before.rfind('[') else { break };
+        let label = &before[bracket + 1..];
+        let tail = &rest[at + 6..];
         let Some(close) = tail.find(')') else { break };
-        out.push_str(&rest[..start]);
+        // Drop a leading `!` (an embed) so `![label](att:…)` and `[name](att:…)` both become the text.
+        let up_to = bracket.checked_sub(1).filter(|&i| before.get(i..i + 1) == Some("!")).unwrap_or(bracket);
+        out.push_str(&rest[..up_to]);
         out.push_str(label);
         rest = &tail[close + 1..];
     }

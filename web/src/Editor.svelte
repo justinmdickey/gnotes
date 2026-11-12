@@ -27,11 +27,11 @@
   import Fab from "./lib/Fab.svelte";
   import type { MenuItem } from "./lib/Menu.svelte";
   import StatusPage from "./lib/StatusPage.svelte";
-  import { app, colorFor, composeNote, goBack, navigate, pathOf, refreshTree, retitle, saveTree, trashNote, twoPane, viewTitle, type View } from "./lib/store.svelte";
+  import { app, colorFor, composeNote, goBack, importable, navigate, pathOf, refreshTree, retitle, saveTree, trashNote, twoPane, viewTitle, type View } from "./lib/store.svelte";
   import { bloom, media, scrollEdge } from "./lib/ui.svelte";
   import FormatBar from "./FormatBar.svelte";
   import Recorder from "./Recorder.svelte";
-  import { addImages, addRecording, recordingMarker, RecordingSpot } from "./lib/attachments";
+  import { addImages, addFiles, addRecording, recordingMarker, RecordingSpot } from "./lib/attachments";
   import type { LiveHandlers } from "./lib/live";
   import { toast } from "./lib/ui.svelte";
   import { ApiError } from "./lib/api";
@@ -67,6 +67,7 @@
   let moving = $state(false);
   let recording = $state(false);
   let photoInput: HTMLInputElement;
+  let fileInput: HTMLInputElement;
   /** Captured when an add button is pressed: not typing means "add to the end of the note". */
   let addAtEnd = false;
   let adding = $state(0);
@@ -377,6 +378,7 @@
       ? [
           { label: "Photo", icon: "camera" as const, onselect: pickPhoto },
           { label: "Voice Memo", icon: "mic" as const, onselect: startRecording },
+          { label: "File", icon: "file" as const, onselect: pickFile },
         ]
       : []),
     ...(app.features.summaries && loaded && !lost ? [{ label: summary ? "Summary" : "Summarize", icon: "note" as const, onselect: () => void openSummary() }] : []),
@@ -485,7 +487,7 @@
           jumpLine,
           linkClicks,
           codeBlocks,
-          slashMenu({ photo: () => pickPhoto(), record: () => startRecording(), tidy: () => void startTidy(), prompt: openAiPrompt, canAI: () => canAI }),
+          slashMenu({ photo: () => pickPhoto(), file: () => pickFile(), record: () => startRecording(), tidy: () => void startTidy(), prompt: openAiPrompt, canAI: () => canAI }),
           aiPrompt(promptActions),
           dragHandles,
           blame(doc, noteId, () => shared),
@@ -493,7 +495,7 @@
           tables,
           kanban,
           recordingMarker,
-          dropImages,
+          dropFiles,
           EditorView.lineWrapping,
           steps.keymap,
           keymap.of([...formatKeymap, ...defaultKeymap]),
@@ -695,6 +697,18 @@
     if (view && files.length) void withBusy(() => addImages(view!, noteId, files, addAtEnd));
   }
 
+  function pickFile() {
+    addAtEnd = !view?.hasFocus;
+    fileInput.click();
+  }
+
+  function onFiles(e: Event) {
+    const input = e.currentTarget as HTMLInputElement;
+    const files = [...(input.files ?? [])];
+    input.value = "";
+    if (view && files.length) void withBusy(() => addFiles(view!, noteId, files, addAtEnd));
+  }
+
   /** Where the recording in progress goes, picked when it starts and shown with a marker. */
   let spot: RecordingSpot | null = null;
   const liveHandlers: LiveHandlers = {
@@ -726,22 +740,28 @@
     spot = null;
   }
 
-  /** Pasted or dropped images upload straight into the note. */
-  const dropImages = EditorView.domEventHandlers({
+  /** Pasted or dropped files go into the note: images as photos, anything else as a file link. */
+  const dropFiles = EditorView.domEventHandlers({
     paste(e, v) {
-      const files = [...(e.clipboardData?.files ?? [])].filter((f) => f.type.startsWith("image/"));
+      const files = [...(e.clipboardData?.files ?? [])].filter((f) => !importable(f));
       if (!files.length || !canEdit) return false;
       e.preventDefault();
-      void withBusy(() => addImages(v, noteId, files));
+      const images = files.filter((f) => f.type.startsWith("image/"));
+      const others = files.filter((f) => !f.type.startsWith("image/"));
+      if (images.length) void withBusy(() => addImages(v, noteId, images));
+      if (others.length) void withBusy(() => addFiles(v, noteId, others));
       return true;
     },
     drop(e, v) {
-      const files = [...(e.dataTransfer?.files ?? [])].filter((f) => f.type.startsWith("image/"));
+      const files = [...(e.dataTransfer?.files ?? [])].filter((f) => !importable(f));
       if (!files.length || !canEdit) return false;
       e.preventDefault();
       const pos = v.posAtCoords({ x: e.clientX, y: e.clientY });
       if (pos !== null) v.dispatch({ selection: { anchor: pos } });
-      void withBusy(() => addImages(v, noteId, files));
+      const images = files.filter((f) => f.type.startsWith("image/"));
+      const others = files.filter((f) => !f.type.startsWith("image/"));
+      if (images.length) void withBusy(() => addImages(v, noteId, images));
+      if (others.length) void withBusy(() => addFiles(v, noteId, others));
       return true;
     },
   });
@@ -838,6 +858,7 @@
 </section>
 
 <input bind:this={photoInput} class="file" type="file" accept="image/*" multiple onchange={onPhotos} aria-hidden="true" tabindex="-1" />
+<input bind:this={fileInput} class="file" type="file" multiple onchange={onFiles} aria-hidden="true" tabindex="-1" />
 
 {#if adding}
   <div class="adding" transition:bloom><span class="spinner"></span>Adding…</div>
@@ -1117,6 +1138,41 @@
     border-radius: var(--radius-md);
     cursor: default;
     animation: rise 220ms var(--ease-out) both;
+  }
+
+  /* A file link on its own line: a chip with a type icon, the name and the size. */
+  .page :global(.cm-file) {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: fit-content;
+    max-width: 100%;
+    padding: 8px 12px;
+    border-radius: var(--radius-md);
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    cursor: pointer;
+    animation: rise 220ms var(--ease-out) both;
+  }
+  .page :global(.cm-file .icon) {
+    flex: none;
+    color: var(--dim-fg);
+  }
+  .page :global(.cm-file-name) {
+    font-size: var(--text-sm);
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .page :global(.cm-file-size) {
+    flex: none;
+    font-size: var(--text-xs);
+    color: var(--dim-fg);
+  }
+  .page :global(.cm-file.loading),
+  .page :global(.cm-file.missing) {
+    opacity: 0.65;
   }
 
   .page :global(.cm-attachment.is-image),

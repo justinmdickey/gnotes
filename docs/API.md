@@ -81,6 +81,15 @@ curl -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
   -d '{"text": "- 14:05 deploy done"}' $GNOTES/api/v1/notes/$ID/append
 ```
 
+## Attach a file
+
+Any file type, up to 50 MB. Send it as a multipart `file` field; the answer's `markdown` is the link to put in the note — a plain `[name](att:id)`, which the app draws as a chip and the server sends back as a download (or a sandboxed inline view for a PDF):
+
+```sh
+curl -H "Authorization: Bearer $KEY" -F "file=@manual.pdf" $GNOTES/api/v1/notes/$ID/attachments
+# { "id": "01a0…", "filename": "manual.pdf", "markdown": "[manual.pdf](att:01a0…)" }
+```
+
 ## Search
 
 `mode=words` (the default) finds notes with every word, as prefixes; matched words are wrapped in `**` in the snippet. `mode=meaning` finds notes about what you asked, even without its words. It needs Semantic Search set up in the admin's AI Services, and answers `409` otherwise.

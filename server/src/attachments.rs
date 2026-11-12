@@ -13,7 +13,6 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use tokio::io::AsyncWriteExt;
 use tower_http::services::ServeFile;
 
 use crate::{
@@ -30,9 +29,9 @@ pub const MAX_UPLOAD: usize = 50 * 1024 * 1024;
 
 #[derive(Serialize, sqlx::FromRow)]
 pub struct Attachment {
-    id: String,
+    pub(crate) id: String,
     note_id: String,
-    filename: String,
+    pub(crate) filename: String,
     mime: String,
     size: i64,
     #[serde(skip)]
@@ -43,10 +42,8 @@ pub(crate) fn blob_path(data_dir: &Path, sha: &str) -> PathBuf {
     data_dir.join("blobs").join(&sha[..2]).join(sha)
 }
 
-/// Only types the editor knows how to show; anything else would just be a download.
-pub(crate) fn allowed(mime: &str) -> bool {
-    mime.starts_with("image/") && mime != "image/svg+xml" || mime.starts_with("audio/")
-}
+/// Any file may be attached; the 50 MB limit is the only gate. What a file *is* decides how it's
+/// sent back (inline image, sandboxed PDF, or a named download) in `download`.
 
 pub(crate) fn clean_filename(name: &str) -> String {
     let base = name.rsplit(['/', '\\']).next().unwrap_or("").trim();
@@ -72,8 +69,71 @@ pub(crate) fn mime_for(filename: &str) -> Option<&'static str> {
         "wav" => "audio/wav",
         "webm" => "audio/webm",
         "flac" => "audio/flac",
+        "mid" | "midi" => "audio/midi",
+        "mp4" => "video/mp4",
+        "mov" => "video/quicktime",
+        "ogv" => "video/ogg",
+        "pdf" => "application/pdf",
+        "zip" => "application/zip",
+        "7z" => "application/x-7z-compressed",
+        "tar" => "application/x-tar",
+        "gz" => "application/gzip",
+        "txt" => "text/plain",
+        "csv" => "text/csv",
+        "html" | "htm" => "text/html",
+        "json" => "application/json",
+        "xml" => "application/xml",
+        "epub" => "application/epub+zip",
+        "doc" => "application/msword",
+        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "xls" => "application/vnd.ms-excel",
+        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "ppt" => "application/vnd.ms-powerpoint",
+        "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
         _ => return None,
     })
+}
+
+/// Stores a file for a note by content hash and records it; the attachment's link is
+/// `[filename](att:id)`. Any type is allowed; the 50 MB limit is the only gate.
+pub(crate) async fn store_file(
+    state: &AppState,
+    note_id: &str,
+    uploader_id: &str,
+    mime: &str,
+    filename: &str,
+    bytes: &[u8],
+) -> ApiResult<Attachment> {
+    if bytes.is_empty() {
+        return Err(AppError::BadRequest("The file is empty".into()));
+    }
+    if bytes.len() > MAX_UPLOAD {
+        return Err(AppError::BadRequest("Attachments can be up to 50 MB".into()));
+    }
+    let sha = store_blob(state, bytes).await?;
+    let att = Attachment {
+        id: new_id(),
+        note_id: note_id.to_owned(),
+        filename: clean_filename(filename),
+        mime: mime.to_owned(),
+        size: bytes.len() as i64,
+        sha256: sha,
+    };
+    sqlx::query(
+        "INSERT INTO attachments (id, note_id, uploader_id, filename, mime, size, sha256, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&att.id)
+    .bind(&att.note_id)
+    .bind(uploader_id)
+    .bind(&att.filename)
+    .bind(&att.mime)
+    .bind(att.size)
+    .bind(&att.sha256)
+    .bind(now_ms())
+    .execute(&state.db)
+    .await?;
+    Ok(att)
 }
 
 /// Stores bytes already in memory by content hash and returns the hash.
@@ -113,7 +173,7 @@ pub async fn upload(
 ) -> ApiResult<Json<Attachment>> {
     let bad = |m: &str| AppError::BadRequest(m.into());
     let mut note_id = None;
-    while let Some(mut field) = form.next_field().await.map_err(|e| bad(&e.body_text()))? {
+    while let Some(field) = form.next_field().await.map_err(|e| bad(&e.body_text()))? {
         match field.name() {
             Some("note_id") => {
                 let text = field.text().await.map_err(|e| bad(&e.body_text()))?;
@@ -132,65 +192,9 @@ pub async fn upload(
                     .unwrap_or_default()
                     .trim()
                     .to_ascii_lowercase();
-                if !allowed(&mime) {
-                    return Err(bad("Only images and audio can be attached"));
-                }
                 let filename = clean_filename(field.file_name().unwrap_or(""));
-
-                let tmp_dir = state.config.data_dir.join("blobs").join("tmp");
-                tokio::fs::create_dir_all(&tmp_dir).await?;
-                let tmp = tmp_dir.join(new_id());
-                let mut out = tokio::fs::File::create(&tmp).await?;
-                let mut hasher = Sha256::new();
-                let mut size = 0usize;
-                let written: ApiResult<()> = async {
-                    while let Some(chunk) = field.chunk().await.map_err(|e| bad(&e.body_text()))? {
-                        size += chunk.len();
-                        if size > MAX_UPLOAD {
-                            return Err(bad("Attachments can be up to 50 MB"));
-                        }
-                        hasher.update(&chunk);
-                        out.write_all(&chunk).await?;
-                    }
-                    out.flush().await?;
-                    Ok(())
-                }
-                .await;
-                drop(out);
-                if let Err(e) = written {
-                    let _ = tokio::fs::remove_file(&tmp).await;
-                    return Err(e);
-                }
-                if size == 0 {
-                    let _ = tokio::fs::remove_file(&tmp).await;
-                    return Err(bad("The file is empty"));
-                }
-
-                let sha: String = hasher.finalize().iter().map(|b| format!("{b:02x}")).collect();
-                let dest = blob_path(&state.config.data_dir, &sha);
-                tokio::fs::create_dir_all(dest.parent().unwrap()).await?;
-                if tokio::fs::try_exists(&dest).await? {
-                    tokio::fs::remove_file(&tmp).await?;
-                } else {
-                    tokio::fs::rename(&tmp, &dest).await?;
-                }
-
-                let att = Attachment { id: new_id(), note_id, filename, mime, size: size as i64, sha256: sha };
-                sqlx::query(
-                    "INSERT INTO attachments (id, note_id, uploader_id, filename, mime, size, sha256, created_at)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                )
-                .bind(&att.id)
-                .bind(&att.note_id)
-                .bind(&me.id)
-                .bind(&att.filename)
-                .bind(&att.mime)
-                .bind(att.size)
-                .bind(&att.sha256)
-                .bind(now_ms())
-                .execute(&state.db)
-                .await?;
-                return Ok(Json(att));
+                let bytes = field.bytes().await.map_err(|e| bad(&e.body_text()))?.to_vec();
+                return Ok(Json(store_file(&state, &note_id, &me.id, &mime, &filename, &bytes).await?));
             }
             _ => {}
         }
@@ -226,6 +230,17 @@ pub async fn download(
     // An attachment id always points at the same bytes.
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=31536000, immutable"));
     headers.insert("x-content-type-options", HeaderValue::from_static("nosniff"));
+    // What the browser does with it: an image or recording shows inline; a PDF opens in the viewer,
+    // sandboxed, so its scripts can't reach the app; anything else is a named download, so an
+    // uploaded HTML or SVG file never runs on the app's origin.
+    let inline_media = att.mime.starts_with("image/") && att.mime != "image/svg+xml" || att.mime.starts_with("audio/");
+    if att.mime == "application/pdf" {
+        headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("sandbox"));
+    } else if !inline_media {
+        let name: String = att.filename.chars().filter(|c| c.is_ascii() && *c != '"' && *c != '\\').collect();
+        let name = if name.is_empty() { "download".to_owned() } else { name };
+        headers.insert(header::CONTENT_DISPOSITION, format!("attachment; filename=\"{name}\"").parse().unwrap());
+    }
     Ok(res.into_response())
 }
 

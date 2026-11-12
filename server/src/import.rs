@@ -13,7 +13,7 @@ use serde::Serialize;
 
 use crate::{
     AppState,
-    attachments::{allowed, clean_filename, mime_for, store_blob},
+    attachments::{clean_filename, mime_for, store_blob},
     auth::CurrentUser,
     error::{ApiResult, AppError},
     perms::Role,
@@ -75,7 +75,7 @@ pub struct ImportResult {
     notes: usize,
     notebooks: usize,
     attachments: usize,
-    /// Files that weren't Markdown or an image or recording a note links to.
+    /// Files that weren't Markdown a note links to.
     skipped: Vec<String>,
     /// The notebook the first zip became, so the app can open it.
     notebook_id: Option<String>,
@@ -178,51 +178,67 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// Rewrites `![alt](path)` and Obsidian's `![[path|alt]]` to `![alt](att:<id>)` when the file is in the upload.
-/// `link` returns the attachment id for a linked file, or None to leave the link alone.
+/// Rewrites `![alt](path)`, Obsidian's `![[path|alt]]`, and a plain `[name](path)` to `…(att:<id>)`
+/// when the file is in the upload. `link` returns the attachment id for a linked file, or None to
+/// leave the link alone (so links to other notes and external URLs are untouched).
 fn rewrite_links(body: &str, link: &mut impl FnMut(&str) -> Option<String>) -> String {
     let mut out = String::with_capacity(body.len());
     let mut rest = body;
-    while let Some(start) = rest.find("![") {
-        out.push_str(&rest[..start]);
-        let after = &rest[start + 2..];
-        let replaced = if let Some(inner) = after.strip_prefix('[') {
-            inner.find("]]").and_then(|end| {
-                let (target, alt) = inner[..end].split_once('|').unwrap_or((&inner[..end], ""));
-                // Obsidian's "|300" is a width, not a caption.
-                let alt = if alt.chars().all(|c| c.is_ascii_digit() || c == 'x') { "" } else { alt };
-                let id = link(target.trim())?;
-                Some((format!("![{alt}](att:{id})"), 1 + end + 2))
-            })
-        } else {
-            after.find("](").and_then(|mid| {
-                let alt = &after[..mid];
-                let close = after[mid + 2..].find(')')?;
-                let raw = after[mid + 2..mid + 2 + close].trim();
-                let target = match raw.strip_prefix('<') {
-                    Some(r) => r.split_once('>').map_or(r, |(t, _)| t),
-                    None => raw.split_once(" \"").map_or(raw, |(t, _)| t),
-                };
-                if alt.contains('\n') || target.contains("://") || target.starts_with("att:") || target.starts_with("data:") {
-                    return None;
-                }
-                let id = link(&percent_decode(target))?;
-                Some((format!("![{alt}](att:{id})"), mid + 2 + close + 1))
-            })
-        };
-        match replaced {
+    while let Some(b) = rest.find('[') {
+        // A `!` right before the `[` makes it an embed; the replacement keeps or drops it to match.
+        let is_embed = b > 0 && rest.as_bytes()[b - 1] == b'!';
+        let content = &rest[b + 1..];
+        match link_at(content, link, is_embed) {
             Some((text, used)) => {
+                out.push_str(&rest[..if is_embed { b - 1 } else { b }]);
                 out.push_str(&text);
-                rest = &after[used..];
+                rest = &rest[b + 1 + used..];
             }
             None => {
-                out.push_str("![");
-                rest = after;
+                out.push_str(&rest[..b + 1]);
+                rest = &rest[b + 1..];
             }
         }
     }
     out.push_str(rest);
     out
+}
+
+/// One link's worth of `content` (the text after its opening `[`): the Obsidian `[[path|alt]]` form
+/// for embeds, or the `[alt](target)` form for both. Returns the replacement and how much of
+/// `content` it consumes, or None to leave the link alone.
+fn link_at<'a>(
+    content: &'a str,
+    link: &mut impl FnMut(&str) -> Option<String>,
+    is_embed: bool,
+) -> Option<(String, usize)> {
+    if is_embed {
+        if let Some(inner) = content.strip_prefix('[') {
+            if let Some(end) = inner.find("]]") {
+                let (target, alt) = inner[..end].split_once('|').unwrap_or((&inner[..end], ""));
+                // Obsidian's "|300" is a width, not a caption.
+                let alt = if alt.chars().all(|c| c.is_ascii_digit() || c == 'x') { "" } else { alt };
+                if let Some(id) = link(target.trim()) {
+                    return Some((format!("![{alt}](att:{id})"), 1 + end + 2));
+                }
+            }
+        }
+    }
+    content.find("](").and_then(|mid| {
+        let alt = &content[..mid];
+        let close = content[mid + 2..].find(')')?;
+        let raw = content[mid + 2..mid + 2 + close].trim();
+        let target = match raw.strip_prefix('<') {
+            Some(r) => r.split_once('>').map_or(r, |(t, _)| t),
+            None => raw.split_once(" \"").map_or(raw, |(t, _)| t),
+        };
+        if alt.contains('\n') || target.is_empty() || target.contains("://") || target.starts_with("att:") || target.starts_with("data:") {
+            return None;
+        }
+        let id = link(&percent_decode(target))?;
+        let bang = if is_embed { "!" } else { "" };
+        Some((format!("{bang}[{alt}](att:{id})"), mid + 2 + close + 1))
+    })
 }
 
 /// The note's Markdown: front matter dropped, a title line added when the file has none.
@@ -327,10 +343,6 @@ pub async fn import(
             let mut linked: HashMap<String, String> = HashMap::new();
             let body = note_body(doc, &mut |target| {
                 let path = batch.resolve(&doc.dir, target)?;
-                let mime = mime_for(&path)?;
-                if !allowed(mime) {
-                    return None;
-                }
                 Some(linked.entry(path).or_insert_with(new_id).clone())
             });
             let (title, preview) = summarize(&body);
@@ -364,7 +376,7 @@ pub async fn import(
                 .bind(&note_id)
                 .bind(&me.id)
                 .bind(&filename)
-                .bind(mime_for(&path))
+                .bind(mime_for(&path).unwrap_or("application/octet-stream"))
                 .bind(bytes.len() as i64)
                 .bind(&sha)
                 .bind(now)
@@ -392,7 +404,11 @@ mod tests {
 
     fn body(stem: &str, text: &str) -> String {
         let doc = Doc { dir: Vec::new(), stem: stem.into(), text: text.into(), modified: None };
-        note_body(&doc, &mut |t| (t == "img.png").then(|| "ID".to_owned()))
+        note_body(&doc, &mut |t| match t {
+            "img.png" => Some("ID".to_owned()),
+            "manual.pdf" => Some("PDF".to_owned()),
+            _ => None,
+        })
     }
 
     #[test]
@@ -408,5 +424,7 @@ mod tests {
     fn links_to_files_in_the_upload_become_attachments() {
         assert_eq!(body("a", "# a\n![cat](img.png) ![[img.png|300]] ![x](missing.png)"), "# a\n![cat](att:ID) ![](att:ID) ![x](missing.png)");
         assert_eq!(body("a", "# a\n![](<img.png>) ![](https://x/img.png)"), "# a\n![](att:ID) ![](https://x/img.png)");
+        // A plain file link becomes an attachment too; a link to a note or a URL stays alone.
+        assert_eq!(body("a", "# a\n[manual.pdf](manual.pdf) [Other](Other) [site](https://x)"), "# a\n[manual.pdf](att:PDF) [Other](Other) [site](https://x)");
     }
 }
