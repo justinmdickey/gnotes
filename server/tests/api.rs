@@ -2365,6 +2365,43 @@ async fn scribe_falls_back_when_the_service_rejects_tools() {
     assert!(prompts.last().unwrap().get("tools").is_none(), "the fallback doesn't offer tools");
 }
 
+#[tokio::test]
+async fn note_snapshots_only_visible_and_unchanged() {
+    let dir = TempDir::new().unwrap();
+    let server = start(&dir).await;
+    auth::create_user(&server.state.db, "root", "", "password123", true).await.unwrap();
+    let alice = user(&server, "alice").await;
+    let bob = user(&server, "bob").await;
+
+    // Alice's note with content, Bob's note shared with Alice, and Bob's note that isn't.
+    let mine = alice.post("/notes", json!({})).await["id"].as_str().unwrap().to_owned();
+    let mut ws = alice.ws().await;
+    let (_, vv, _) = ws.join_and_sync(&mine, None).await;
+    ws.send_frame(0x01, &mine, &edit(&LoroDoc::new(), 0, "# Mine\nsecret word")).await;
+    let (_, vv, _) = ws.join_and_sync(&mine, Some(&vv)).await;
+    let shared = bob.post("/notes", json!({})).await["id"].as_str().unwrap().to_owned();
+    let hidden = bob.post("/notes", json!({})).await["id"].as_str().unwrap().to_owned();
+    bob.post("/shares", json!({ "resource_type": "note", "resource_id": shared, "username": "alice", "role": "viewer" })).await;
+
+    // A fresh ask gets the visible notes, with data; the unshared one is never sent.
+    let res = alice.post("/notes/snapshots", json!({ "have": { mine.as_str(): "", shared.as_str(): "", hidden.as_str(): "" } })).await;
+    let ids = res["notes"].as_array().unwrap().iter().map(|n| n["id"].clone()).collect::<Vec<_>>();
+    assert_eq!(ids.len(), 2, "{res}");
+    assert!(ids.contains(&json!(mine)) && ids.contains(&json!(shared)), "{res}");
+    assert!(res["rest"].as_array().unwrap().is_empty(), "{res}");
+
+    // Asked for with its own version, a note is left out; the other still comes.
+    let res = alice
+        .post("/notes/snapshots", json!({ "have": { mine.as_str(): STANDARD.encode(vv.encode().as_slice()), shared.as_str(): "" } }))
+        .await;
+    let ids = res["notes"].as_array().unwrap().iter().map(|n| n["id"].clone()).collect::<Vec<_>>();
+    assert_eq!(ids, vec![json!(shared)], "{res}");
+
+    // Bob can't ask for Alice's note either.
+    let res = bob.post("/notes/snapshots", json!({ "have": { mine.as_str(): "" } })).await;
+    assert!(res["notes"].as_array().unwrap().is_empty(), "{res}");
+}
+
 /// A note's text straight from the server, the way the room keeps it.
 async fn note_text(server: &Server, note: &str) -> String {
     let id = uuid::Uuid::parse_str(note).unwrap();

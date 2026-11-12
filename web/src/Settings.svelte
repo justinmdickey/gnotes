@@ -284,7 +284,7 @@
           <button onclick={() => run(api.logoutOthers, "Other devices were signed out")}>Log Out Others</button>
         </li>
         <li>
-          <span class="label">This device</span>
+          <span class="label">This device<span class="dim sub">{app.notesSaved.saving ? `Saving notes… ${app.notesSaved.done} of ${app.notesSaved.total}` : `All ${app.notesSaved.total} notes saved on this device`}</span></span>
           <button class="destructive" onclick={endSession}><Icon name="logout" /> Log Out</button>
         </li>
       </ul>

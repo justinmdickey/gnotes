@@ -335,6 +335,9 @@ export const api = {
   updateMe: (display_name: string) => request<User>("PATCH", "/me", { display_name }),
   /** What Scribe may do with your notes. */
   setScribeAccess: (access: User["scribe_access"]) => request<User>("PATCH", "/me/scribe", { access }),
+  /** The note data this device's copies lack, for the ids asked about; `have` maps an id to the base64 version vector it has (empty for none). The reply holds a page; `rest` is what to ask for again. */
+  noteSnapshots: (have: Record<string, string>) =>
+    request<{ notes: { id: string; data: string }[]; rest: string[] }>("POST", "/notes/snapshots", { have }),
   /** Takes one of Scribe's changes back (an `action` event's data). */
   undoAskAction: (action: AskAction) => request("POST", "/ask/undo", { action }),
   changePassword: (current: string, next: string) => request("POST", "/me/password", { current, new: next }),

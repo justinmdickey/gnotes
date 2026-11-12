@@ -189,6 +189,7 @@ pub fn router(state: AppState) -> Router {
         .route("/notebooks/{id}", patch(tree::update_notebook).delete(tree::delete_notebook))
         .route("/notebooks/{id}/shares", get(shares::list_notebook_shares))
         .route("/notes", post(tree::create_note))
+        .route("/notes/snapshots", post(tree::note_snapshots))
         .route("/notes/{id}", patch(tree::update_note).delete(tree::delete_note))
         .route("/notes/{id}/shares", get(shares::list_note_shares))
         .route("/trash", get(tree::get_trash).delete(tree::empty_trash))

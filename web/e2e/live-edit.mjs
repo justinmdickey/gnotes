@@ -5,6 +5,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
+import net from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import puppeteer from "puppeteer-core";
@@ -174,6 +175,40 @@ async function waitForServer() {
   throw new Error("server didn't start");
 }
 
+// A pass-through to the server, on its own port: Alice's page talks to the server through it, so
+// the e2e can take just her offline (drop its connections) while the others keep reaching the
+// server. Chrome's offline emulation alone can't close an open WebSocket, so this is the outage.
+const port2 = port + 1000;
+const base2 = `http://127.0.0.1:${port2}`;
+let passthroughUp = true;
+const passthroughSocks = new Set();
+const passthrough = net.createServer((sock) => {
+  if (!passthroughUp) return sock.destroy();
+  const upstream = net.connect(port, "127.0.0.1");
+  const pair = [sock, upstream];
+  passthroughSocks.add(pair);
+  const kill = (why) => {
+    if (!passthroughSocks.has(pair)) return;
+    passthroughSocks.delete(pair);
+    sock.destroy();
+    upstream.destroy();
+  };
+  sock.on("close", () => kill("sock-close"));
+  sock.on("error", (e) => kill("sock-error:" + e.code));
+  upstream.on("close", () => kill("up-close"));
+  upstream.on("error", (e) => kill("up-error:" + e.code));
+  sock.pipe(upstream);
+  upstream.pipe(sock);
+});
+passthrough.listen(port2, "127.0.0.1");
+function aliceOffline() {
+  passthroughUp = false;
+  for (const pair of passthroughSocks) pair[0].destroy();
+}
+function aliceOnline() {
+  passthroughUp = true;
+}
+
 function check(cond, msg) {
   if (!cond) throw new Error(`FAILED: ${msg}`);
   console.log(`ok - ${msg}`);
@@ -243,7 +278,7 @@ try {
   const alice = await (await browser.createBrowserContext()).newPage();
   await alice.setViewport({ width: 1280, height: 800 });
   alice.on("pageerror", (e) => console.error("[alice] page error:", e.message));
-  await alice.goto(base);
+  await alice.goto(base2);
   await alice.waitForSelector("input[name=name]");
   await alice.type("input[name=name]", "Alice");
   check((await alice.$eval("input[name=username]", (el) => el.value)) === "alice", "first-run setup suggests a username from the name");
@@ -549,7 +584,9 @@ try {
   check((await markdown(alice)).includes("## To do\n\n## Doing\n- Butter\n\n## Done\n- Bread\n```"), "dragging a card to another column moves its line there");
   await bob.waitForFunction(() => document.querySelector(".cm-kanban-col[data-col='2'] .cm-kanban-text")?.textContent === "Bread", { timeout: 5000 });
   check(await bob.evaluate(() => !document.querySelector(".cm-kanban-widget [contenteditable]") && !document.querySelector(".cm-kanban-add")), "a viewer sees the card move live, without editing tools");
-  for (const p of [alice, bob]) await p.goBack();
+  // Back to the note the section started from, fully open (its role arrives with the join).
+  for (const p of [alice, bob]) await p.click("nav .note-row ::-p-text(Groceries)");
+  await alice.waitForSelector("button[aria-label='Share']");
   for (const p of [alice, bob]) await p.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("jam"));
   // ---- end of tables and kanban boards ----
 
@@ -566,7 +603,7 @@ try {
   const link = await alice.waitForSelector("dialog input.link").then((el) => el.evaluate((i) => i.value));
   await alice.click("dialog .actions button");
   await closed(alice);
-  check(link.startsWith(`${base}/join/`), "invite link created");
+  check(link.startsWith(`${base2}/join/`), "invite link created");
   const carol = await (await browser.createBrowserContext()).newPage();
   await carol.setViewport({ width: 390, height: 844 });
   await carol.goto(link);
@@ -574,6 +611,9 @@ try {
   await carol.type("input[name=name]", "Carol");
   await carol.type("input[name=password]", "password123");
   await carol.click("button[type=submit]");
+  await carol.waitForSelector("nav");
+  // The link carried her in through Alice's port; onto the server's own, so Alice's outages leave her online.
+  await carol.goto(`${base}/#/`);
   await carol.waitForSelector("nav");
   await carol.evaluate(() => [...document.querySelectorAll(".tabbar button")].find((b) => b.textContent.includes("Shared")).click());
   await carol.waitForFunction(() => [...document.querySelectorAll("li button")].some((b) => b.textContent.includes("Groceries")));
@@ -676,6 +716,112 @@ try {
     await fetch(`/api/trash/note/${id}`, { method: "DELETE" });
   }, offlineNote);
   // ---- end of offline ----
+
+  // ---- Every note offline (#52): a pass saves the whole tree; a never-opened note opens, searches and ticks offline. ----
+  const aliceId = await alice.evaluate(async () => (await fetch("/api/me").then((r) => r.json())).id);
+  const hasCopy = (uid, nid) =>
+    new Promise((resolve) => {
+      const q = indexedDB.open(`gnotes-${uid}`, 1);
+      q.onsuccess = () => {
+        const req = q.result.transaction("notes", "readonly").objectStore("notes").getAllKeys();
+        req.onsuccess = () => resolve(req.result.includes(nid));
+      };
+    });
+  // Carol (phone) makes a note with a task and a word in its body, and shares it with Alice.
+  await carol.evaluate(() => document.activeElement?.blur());
+  await carol.evaluate(() => [...document.querySelectorAll(".tabbar button")].find((b) => b.textContent.includes("Notes")).click());
+  await carol.evaluate(() => document.querySelector(".tabbar button[aria-label='New note']").click());
+  await carol.waitForSelector(".cm-content[contenteditable=true]");
+  await new Promise((r) => setTimeout(r, 1000)); // the old note's editor slides away first
+  await carol.click(".cm-content");
+  await carol.keyboard.type("# Offline pantry\nwalnuts\n- [ ] buy walnuts");
+  await carol.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("buy walnuts"), { timeout: 5000 });
+  // The pass fetches from the server, so wait for the server to have the whole line before sharing.
+  await carol.waitForFunction(async () => (await fetch("/api/tasks").then((r) => r.json())).tasks.some((t) => t.text === "buy walnuts"), { timeout: 10000, polling: 500 });
+  const sharedNote = await carol.evaluate(() => location.hash.match(/note\/([0-9a-f-]{36})/)[1]);
+  await carol.evaluate(() => document.activeElement?.blur());
+  await carol.waitForSelector("button[aria-label='Share']", { timeout: 5000 });
+  await carol.evaluate(() => document.querySelector("button[aria-label='Share']").click());
+  await carol.waitForSelector("dialog button.add");
+  await carol.evaluate(() => [...document.querySelectorAll("dialog .boxed li")].find((li) => li.textContent.includes("Alice")).querySelector("button.add").click());
+  await carol.waitForFunction(() => [...document.querySelectorAll("dialog .boxed .who")].some((w) => w.textContent.includes("Alice")), { timeout: 5000 });
+  await carol.evaluate(() => document.querySelector("dialog .actions button").click());
+  await closed(carol);
+  check(true, "carol shared her note with alice");
+  // Alice's pass saves it: a note never opened on this device ends up on it.
+  await alice.waitForFunction(hasCopy, { timeout: 60000, polling: 1000 }, aliceId, sharedNote);
+  check(true, "the pass saves every note: a note never opened on this device is on it");
+  // The Tasks list, seen online, has the new task for the offline tick.
+  await alice.click("nav .row ::-p-text(Tasks)");
+  await alice.waitForFunction(() => [...document.querySelectorAll(".pane.list .task .text")].some((t) => t.textContent === "buy walnuts"), { timeout: 10000 });
+  // Offline: a never-opened note opens with its text.
+  aliceOffline();
+  await alice.setOfflineMode(true);
+  await alice.waitForFunction(() => document.querySelector("nav footer")?.textContent.includes("Offline"), { timeout: 5000 });
+  await alice.click("nav .row ::-p-text(Shared)");
+  await alice.waitForFunction(() => [...document.querySelectorAll(".pane.list .note")].some((b) => b.textContent.includes("Offline pantry")), { timeout: 5000 });
+  await alice.evaluate(() => [...document.querySelectorAll(".pane.list .note")].find((b) => b.textContent.includes("Offline pantry")).click());
+  await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("walnuts"), { timeout: 10000 });
+  check(true, "offline, a note never opened on this device opens with its text");
+  // The list's search finds it by a word in its body.
+  await alice.click("nav .row ::-p-text(Shared)");
+  await alice.type(".pane.list .search input", "walnuts");
+  await alice.waitForFunction(() => [...document.querySelectorAll(".pane.list .note")].some((c) => c.textContent.includes("Offline pantry")), { timeout: 5000 });
+  check(true, "offline, the list's search finds a note by a word in its body");
+  await alice.click(".pane.list .search .clear");
+  // One of its tasks ticks offline, and syncs on reconnect.
+  await alice.click("nav .row ::-p-text(Tasks)");
+  await alice.waitForFunction(() => [...document.querySelectorAll(".pane.list .task")].some((t) => t.querySelector(".text")?.textContent === "buy walnuts" && t.querySelector(".box")?.getAttribute("aria-checked") === "false"), { timeout: 5000 });
+  await alice.evaluate(() => [...document.querySelectorAll(".pane.list .task")].find((t) => t.querySelector(".text").textContent === "buy walnuts").querySelector(".box").click());
+  await alice.waitForFunction(() => [...document.querySelectorAll(".pane.list .task")].some((t) => t.querySelector(".text")?.textContent === "buy walnuts" && t.querySelector(".box")?.getAttribute("aria-checked") === "true"), { timeout: 5000 });
+  check(true, "offline, a task in a note the pass saved checks off from Tasks");
+  aliceOnline();
+  await alice.setOfflineMode(false);
+  await alice.waitForFunction(async () => (await fetch("/api/tasks").then((r) => r.json())).tasks.some((t) => t.text === "buy walnuts" && t.done), { timeout: 30000, polling: 500 });
+  check(true, "back online, the ticked task is on the server");
+  // A note unshared while offline is gone from the device after reconnect.
+  aliceOffline();
+  await alice.setOfflineMode(true);
+  await alice.waitForFunction(() => document.querySelector("nav footer")?.textContent.includes("Offline"), { timeout: 5000 });
+  await carol.evaluate(() => document.activeElement?.blur());
+  await carol.waitForSelector("button[aria-label='Share']", { timeout: 5000 });
+  await carol.evaluate(() => document.querySelector("button[aria-label='Share']").click());
+  await carol.waitForSelector("button[aria-label='Remove Alice']");
+  await carol.evaluate(() => document.querySelector("button[aria-label='Remove Alice']").click());
+  await carol.evaluate(() => document.querySelector("dialog .actions button").click());
+  await closed(carol);
+  aliceOnline();
+  await alice.setOfflineMode(false);
+  // The pass that runs on reconnect drops the copy of the note she can no longer see.
+  await alice.waitForFunction(
+    async (uid, nid) => {
+      return await new Promise((resolve) => {
+        const q = indexedDB.open(`gnotes-${uid}`, 1);
+        q.onsuccess = () => {
+          const req = q.result.transaction("notes", "readonly").objectStore("notes").getKey(nid);
+          req.onsuccess = () => resolve(!req.result);
+          req.onerror = () => resolve(false);
+        };
+        q.onerror = () => resolve(false);
+      });
+    },
+    { timeout: 60000, polling: 1000 },
+    aliceId,
+    sharedNote,
+  );
+  check(true, "a note unshared while offline is gone from the device after reconnect");
+  // Clean up the shared note.
+  await carol.evaluate(async (id) => {
+    await fetch(`/api/notes/${id}`, { method: "DELETE" });
+    await fetch(`/api/trash/note/${id}`, { method: "DELETE" });
+  }, sharedNote);
+  // Back to the note the later checks start from.
+  await alice.click("nav .note-row ::-p-text(Groceries)");
+  await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("bread"));
+  // Carol too: the live checks that follow watch her copy of it.
+  await carol.evaluate(() => [...document.querySelectorAll(".tabbar button")].find((b) => b.textContent.includes("Shared")).click());
+  await carol.evaluate(() => [...document.querySelectorAll("li button")].find((b) => b.textContent.includes("Groceries")).click());
+  await carol.waitForFunction(() => document.querySelector(".cm-content")?.cmTile.root.view.state.doc.toString().includes("bread"), { timeout: 10000 });
 
   // Beside the text is still the editor: a drag that starts out in the left margin selects from the line's start.
   const title = await (await alice.$(".cm-line")).boundingBox();
@@ -1085,7 +1231,7 @@ try {
   await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("cheese"));
 
   // Scribe acts at the level chosen in Account. At Read only, the same question answers without acting: no card, no note.
-  await alice.goto(`${base}/#/settings`);
+  await alice.goto(`${base2}/#/settings`);
   await alice.waitForSelector(".settings-layer input[name=scribe][value=read]");
   await alice.click(".settings-layer input[name=scribe][value=read]");
   await alice.waitForFunction(() => document.body.innerText.includes("Scribe saved"));
@@ -1102,7 +1248,7 @@ try {
   );
   if (process.env.SHOTS) await alice.screenshot({ path: join(process.env.SHOTS, "desktop-scribe-read.png") });
   // At Add, the same question makes the note, with a card to undo it.
-  await alice.goto(`${base}/#/settings`);
+  await alice.goto(`${base2}/#/settings`);
   await alice.click(".settings-layer input[name=scribe][value=add]");
   await alice.waitForFunction(() => document.body.innerText.includes("Scribe saved"));
   await alice.click(".settings-layer .back");
@@ -1776,7 +1922,7 @@ try {
     await shot("phone-editor");
     check(await alice.evaluate(() => !document.querySelector(".editor header .title.shown")), "on a phone the headerbar leaves the title to the note's first line");
     const noteUrl = alice.url();
-    await alice.goto(`${base}/#/settings`);
+    await alice.goto(`${base2}/#/settings`);
     await alice.waitForSelector("button[aria-label='Manage Bob']");
     await shot("phone-settings");
     await alice.evaluate(() => document.querySelector(".stt").scrollIntoView({ block: "center" }));
@@ -2314,6 +2460,7 @@ try {
 } finally {
   await browser?.close();
   server.kill();
+  passthrough.close();
   whisper.close();
   realtime.close();
   rmSync(data, { recursive: true, force: true });

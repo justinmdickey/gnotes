@@ -1,5 +1,5 @@
 import { api, ApiError, type TaskItem } from "./api";
-import { cache, tickOffline, unreachable } from "./offline";
+import { cache, flush, tickOffline, unreachable } from "./offline";
 import { app } from "./store.svelte";
 import { toast } from "./ui.svelte";
 
@@ -68,6 +68,8 @@ export async function setDone(task: TaskItem, done: boolean): Promise<boolean> {
   const offline = async () => {
     if (await tickOffline(task, done)) {
       if (tasks.items) void cache.saveTasks($state.snapshot(tasks.items));
+      // Back online while it was being saved: the reconnect's flush may have run before it was dirty.
+      if (app.status === "online") void flush();
       return true;
     }
     if (item) item.done = !done;

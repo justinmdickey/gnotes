@@ -43,6 +43,8 @@ export const app = $state({
   jump: null as { note: string; line: number } | null,
   /** Why the user was sent back to the login screen, if it wasn't their choice. */
   signedOutReason: "" as string,
+  /** The pass that saves every note on this device: how far it is. */
+  notesSaved: { done: 0, total: 0, saving: false } as { done: number; total: number; saving: boolean },
 });
 
 /** Wide screens use two panes: the sidebar tree, and either the current page (a folder, Recent, Shared) or the open note. */
@@ -145,9 +147,14 @@ export async function importNotes(files: File[], view: View = { kind: "root" }) 
 
 let refreshing: Promise<void> | null = null;
 let stale = false;
+let afterTree: (() => void)[] = [];
 
-/** Coalesces bursts of tree_changed, but always refetches once more if a change landed mid-request. */
-export function refreshTree(): Promise<void> {
+/**
+ * Coalesces bursts of tree_changed, but always refetches once more if a change landed mid-request.
+ * `after` runs once the settled tree (including any refetch) is in place.
+ */
+export function refreshTree(after?: () => void): Promise<void> {
+  if (after) afterTree.push(after);
   if (refreshing) {
     stale = true;
     return refreshing;
@@ -164,25 +171,41 @@ export function refreshTree(): Promise<void> {
     .catch((e) => console.warn("tree refresh failed", e))
     .finally(() => {
       refreshing = null;
-      if (stale) void refreshTree();
+      if (stale) {
+        // The refetch settles the tree; the afters wait for it, still queued.
+        void refreshTree();
+      } else {
+        const fns = afterTree;
+        afterTree = [];
+        for (const f of fns) f();
+      }
     });
   return refreshing;
+}
+
+/** The note ids of the tree, for the pass that saves every note on this device. */
+function treeNoteIds() {
+  return app.tree.notes.map((n) => n.id);
 }
 
 export function startSession(user: User) {
   app.user = user;
   openCache(user);
+  void cache.loadTexts();
   // The saved tree shows at once, and is all there is with no network.
   void cache.tree().then((t) => {
     if (t && app.user?.id === user.id && !app.tree.notebooks.length && !app.tree.notes.length) app.tree = t;
   });
   void loadQueue();
-  sync.onTreeChanged = () => void refreshTree();
+  sync.onTreeChanged = () => void refreshTree(() => sync.saveAll(treeNoteIds));
   sync.onTasksChanged = () => void refreshTasks();
+  sync.onNotesSaved = (done, total, saving) => {
+    app.notesSaved = { done, total, saving };
+  };
   sync.onStatus = (s) => {
     app.status = s;
     if (s === "online") {
-      void flush().then(() => refreshTree());
+      void flush().then(() => refreshTree(() => sync.saveAll(treeNoteIds)));
       // Fetched again after opening offline, when the first try failed.
       api.features().then((f) => (app.features = f), () => {});
     }
@@ -200,6 +223,7 @@ export function startSession(user: User) {
     }
   };
   sync.connect();
+  sync.saveAll(treeNoteIds);
   void refreshTree();
   readHash();
 }
@@ -387,13 +411,13 @@ export function colorFor(userId: string): string {
 export async function trashNote(id: string) {
   await api.deleteNote(id);
   if (app.noteId === id) goBack();
-  toast("Note moved to trash", { label: "Undo", run: () => void api.restore("note", id).then(refreshTree) });
+  toast("Note moved to trash", { label: "Undo", run: () => void api.restore("note", id).then(() => refreshTree()) });
 }
 
 export async function trashNotebook(id: string, name: string) {
   await api.deleteNotebook(id);
   if (app.view.kind === "notebook" && app.view.id === id) navigate(parentView(app.view), null, true);
-  toast(`“${name}” moved to trash`, { label: "Undo", run: () => void api.restore("notebook", id).then(refreshTree) });
+  toast(`“${name}” moved to trash`, { label: "Undo", run: () => void api.restore("notebook", id).then(() => refreshTree()) });
 }
 
 /** A note or notebook being dragged onto a sidebar folder (desktop only). */
@@ -429,7 +453,7 @@ export async function moveTo(item: Movable, target: string | null): Promise<bool
     await send(target);
     await refreshTree();
     const label = target ? (app.tree.notebooks.find((n) => n.id === target)?.name ?? "notebook") : "Notes";
-    toast(`Moved to ${label}`, { label: "Undo", run: () => void send(from).then(refreshTree) });
+    toast(`Moved to ${label}`, { label: "Undo", run: () => void send(from).then(() => refreshTree()) });
     return true;
   } catch (err) {
     toast(err instanceof ApiError ? err.message : "Couldn't move it");

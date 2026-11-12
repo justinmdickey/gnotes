@@ -1,13 +1,19 @@
 //! Notebooks, note metadata and trash. Note content lives in rooms.rs.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use axum::{
     Json,
     extract::{Path, Query, State},
 };
+use base64::{
+    Engine,
+    engine::general_purpose::STANDARD,
+};
+use loro::{ExportMode, LoroDoc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use uuid::Uuid;
 
 use crate::{
     AppState,
@@ -72,6 +78,128 @@ type NoteRow = (String, Option<String>, String, String, String, i64, bool);
 
 pub async fn get_tree(State(state): State<AppState>, CurrentUser(me): CurrentUser) -> ApiResult<Json<Tree>> {
     Ok(Json(load_tree(&state, &me).await?))
+}
+
+/// The ids of every note `me` can see right now, the same set /tree shows.
+pub(crate) async fn visible_note_ids(state: &AppState, me: &User) -> ApiResult<BTreeSet<String>> {
+    let db = &state.db;
+    let mut ids: BTreeSet<String> = sqlx::query_scalar("SELECT id FROM notes WHERE owner_id = ? AND deleted_at IS NULL")
+        .bind(&me.id)
+        .fetch_all(db)
+        .await?
+        .into_iter()
+        .collect();
+    // Notes inside a visible shared notebook, the same reach as /tree's.
+    let shared_notebooks: Vec<String> = sqlx::query_scalar(
+        "WITH RECURSIVE sub(id) AS (
+            SELECT s.resource_id FROM shares s JOIN notebooks nb ON nb.id = s.resource_id
+            WHERE s.user_id = ?1 AND s.resource_type = 'notebook'
+              AND nb.deleted_at IS NULL AND nb.owner_id != ?1
+            UNION
+            SELECT n.id FROM notebooks n JOIN sub ON n.parent_id = sub.id
+            WHERE n.deleted_at IS NULL
+         )
+         SELECT sub.id FROM sub",
+    )
+    .bind(&me.id)
+    .fetch_all(db)
+    .await?;
+    if !shared_notebooks.is_empty() {
+        let in_notebooks: Vec<String> = sqlx::query_scalar(
+            "SELECT n.id FROM notes n
+             WHERE n.deleted_at IS NULL AND n.owner_id != ?
+               AND n.notebook_id IN (SELECT value FROM json_each(?))",
+        )
+        .bind(&me.id)
+        .bind(serde_json::to_string(&shared_notebooks)?)
+        .fetch_all(db)
+        .await?;
+        ids.extend(in_notebooks);
+    }
+    let direct: Vec<String> = sqlx::query_scalar(
+        "SELECT n.id FROM shares s JOIN notes n ON n.id = s.resource_id
+         WHERE s.user_id = ?1 AND s.resource_type = 'note' AND n.deleted_at IS NULL AND n.owner_id != ?1",
+    )
+    .bind(&me.id)
+    .fetch_all(db)
+    .await?;
+    ids.extend(direct);
+    Ok(ids)
+}
+
+/// `POST /notes/snapshots {"have": {"<id>": "<base64 version vector>"}}`: what this device's
+/// copies lack, for the notes asked about, the same visibility as /tree. A note the caller has
+/// up to date is left out of the reply. The reply holds as many as fit in a few MB; the asked
+/// ids it didn't get to come back in `rest` to ask for again.
+#[derive(Deserialize)]
+pub struct SnapshotsBody {
+    #[serde(default)]
+    have: BTreeMap<String, String>,
+}
+
+#[derive(Serialize)]
+pub struct SnapshotNote {
+    pub(crate) id: String,
+    pub(crate) data: String,
+}
+
+#[derive(Serialize)]
+pub struct SnapshotsReply {
+    pub(crate) notes: Vec<SnapshotNote>,
+    pub(crate) rest: Vec<String>,
+}
+
+/// The reply's ceiling, in bytes of encoded data.
+const SNAPSHOT_PAGE: usize = 2_000_000;
+
+pub async fn note_snapshots(
+    State(state): State<AppState>,
+    CurrentUser(me): CurrentUser,
+    Json(body): Json<SnapshotsBody>,
+) -> ApiResult<Json<SnapshotsReply>> {
+    let visible = visible_note_ids(&state, &me).await?;
+    let mut notes = Vec::new();
+    let mut rest = Vec::new();
+    let mut size = 0;
+    for (id, have) in &body.have {
+        let Ok(uuid) = Uuid::parse_str(id) else {
+            continue;
+        };
+        if !visible.contains(id) {
+            continue;
+        }
+        // What the server has of the note: an open room's doc, else the saved snapshot, else blank.
+        let have_bytes = Some(have.as_str()).filter(|s| !s.is_empty()).and_then(|s| STANDARD.decode(s).ok());
+        let (data, version) = match state.rooms.get(&uuid).await {
+            Some(room) => room.export_since(have_bytes.as_deref()).await?,
+            None => {
+                let row: Option<(Vec<u8>, Vec<u8>)> =
+                    sqlx::query_as("SELECT snapshot, version FROM note_snapshots WHERE note_id = ?")
+                        .bind(id)
+                        .fetch_optional(&state.db)
+                        .await?;
+                match row {
+                    Some((snapshot, version)) => (snapshot, version),
+                    None => {
+                        let doc = LoroDoc::new();
+                        (doc.export(ExportMode::Snapshot).unwrap(), doc.oplog_vv().encode())
+                    }
+                }
+            }
+        };
+        // Up to date: the caller's version is the note's.
+        if have.as_str() == STANDARD.encode(&version) {
+            continue;
+        }
+        let data = STANDARD.encode(&data);
+        if size + data.len() > SNAPSHOT_PAGE {
+            rest.push(id.clone());
+            continue;
+        }
+        size += data.len();
+        notes.push(SnapshotNote { id: id.clone(), data });
+    }
+    Ok(Json(SnapshotsReply { notes, rest }))
 }
 
 /// Every notebook and note `me` can see, with their role on each.

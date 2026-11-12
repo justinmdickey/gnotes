@@ -5,7 +5,7 @@ import { LoroDoc, type VersionVector } from "loro-crdt";
 import { api, ApiError, type TaskItem, type Tree, type User } from "./api";
 import { sync, type NoteHandler } from "./sync";
 
-const STORES = ["notes", "dirty", "pending", "kv"] as const;
+const STORES = ["notes", "versions", "dirty", "pending", "kv", "texts"] as const;
 type Store = (typeof STORES)[number];
 
 let db: Promise<IDBDatabase | null> = Promise.resolve(null);
@@ -53,10 +53,13 @@ export async function closeCache(wipe: boolean) {
   db = Promise.resolve(null);
   dbName = "";
   open?.close();
-  if (wipe && name) {
-    try {
-      indexedDB.deleteDatabase(name);
-    } catch {}
+  if (wipe) {
+    texts.clear();
+    if (name) {
+      try {
+        indexedDB.deleteDatabase(name);
+      } catch {}
+    }
   }
 }
 
@@ -84,7 +87,10 @@ const keys = (store: Store) => run<IDBValidKey[]>(store, "readonly", (s) => s.ge
 export const cache = {
   /** A note's last saved snapshot; it carries its own version vector. */
   note: (id: string) => get<Uint8Array>("notes", id),
-  saveNote: (id: string, doc: LoroDoc) => put("notes", id, doc.export({ mode: "snapshot" })),
+  saveNote: (id: string, doc: LoroDoc) =>
+    Promise.all([put("notes", id, doc.export({ mode: "snapshot" })), put("versions", id, doc.oplogVersion().encode())]),
+  /** The version vector of the saved copy, for asking the server what's new. */
+  noteVersion: (id: string) => get<Uint8Array>("versions", id),
   tree: () => get<Tree>("kv", "tree"),
   saveTree: (tree: Tree) => put("kv", "tree", tree),
   tasks: () => get<TaskItem[]>("kv", "tasks"),
@@ -92,15 +98,88 @@ export const cache = {
   /** Marks a note as having edits the server may not have. */
   markDirty: (id: string) => put("dirty", id, true),
   clearDirty: (id: string) => del("dirty", id),
+  dirtyIds: () => keys("dirty"),
   /** The notes with a copy on this device. */
   noteIds: () => keys("notes"),
   /** Drops a note's copy: it was thrown away, or isn't yours to see anymore. */
-  forget: (id: string) => Promise.all([del("notes", id), del("dirty", id)]),
+  forget: (id: string) => {
+    forgetText(id);
+    return Promise.all([del("notes", id), del("versions", id), del("dirty", id), del("texts", id)]);
+  },
+  /** The saved plain text, so a search with no server still finds it after a reload. */
+  saveText: (id: string, text: string) => put("texts", id, text),
+  loadTexts: () =>
+    db.then(
+      (d) =>
+        new Promise<void>((resolve) => {
+          if (!d) return resolve();
+          texts.clear();
+          try {
+            const req = d.transaction("texts", "readonly").objectStore("texts").openCursor();
+            req.onsuccess = () => {
+              const cur = req.result;
+              if (cur) {
+                texts.set(cur.key as string, cur.value as string);
+                cur.continue();
+              } else resolve();
+            };
+            req.onerror = () => resolve();
+          } catch {
+            resolve();
+          }
+        }),
+    ),
 };
 
 /** Whether an error means the server couldn't be reached (no network, or a proxy saying it's down). */
 export function unreachable(err: unknown): boolean {
   return !(err instanceof ApiError) || err.status >= 500;
+}
+
+// The plain text of the notes saved on this device, for search with no server. Kept in memory;
+// the pass that saves notes fills it, and a note's copy going away takes its text with it.
+const texts = new Map<string, string>();
+
+export function savedText(id: string): string | undefined {
+  return texts.get(id);
+}
+
+export function rememberText(id: string, text: string) {
+  texts.set(id, text);
+  void cache.saveText(id, text);
+}
+
+export function forgetText(id: string) {
+  texts.delete(id);
+}
+
+/**
+ * The note as search reads it: no block marks, emphasis, code fences or attachment links, the way
+ * the server's /search reads it, so the words typed are still the words found.
+ */
+export function plainText(body: string): string {
+  const lines: string[] = [];
+  let code = false;
+  for (let raw of body.split("\n")) {
+    let l = raw.trim();
+    if (l.startsWith("```")) {
+      code = !code;
+      continue;
+    }
+    if (code) continue;
+    l = l.replace(/^#+\s*/, "").replace(/^>\s*/, "");
+    for (const marker of ["- [ ] ", "- [x] ", "- [X] ", "* ", "- ", "+ "]) {
+      if (l.startsWith(marker)) {
+        l = l.slice(marker.length);
+        break;
+      }
+    }
+    // ![label](att:…) becomes its label, wherever it sits in the line.
+    l = l.replace(/!\[([^]]*)\]\(att:[^)]*\)/g, "$1");
+    l = l.replace(/\*\*|~~|`|\[\[|\]\]/g, "");
+    if (l.trim()) lines.push(l.trim());
+  }
+  return lines.join("\n");
 }
 
 /** A time-ordered UUIDv7, so a note made offline already has the id the server will keep. */
@@ -157,6 +236,7 @@ const open = new Set<string>();
 export const editing = {
   add: (id: string) => open.add(id),
   delete: (id: string) => open.delete(id),
+  has: (id: string) => open.has(id),
 };
 
 /**
@@ -178,8 +258,10 @@ export async function tickOffline(task: TaskItem, done: boolean): Promise<boolea
   lines[task.line] = `${box[1]}${done ? "x" : " "}${box[2]}`;
   body.update(lines.join("\n"));
   doc.commit();
-  await cache.saveNote(task.note, doc);
+  // Mark dirty before the content lands, so a concurrent background pass that re-reads the dirty
+  // set sees it and skips the note instead of overwriting the tick with the server's copy.
   await cache.markDirty(task.note);
+  await cache.saveNote(task.note, doc);
   return true;
 }
 
@@ -198,14 +280,16 @@ export async function flush(): Promise<void> {
   flushing = true;
   again = false;
   try {
-    for (const id of await keys("pending")) {
+    const pendingIds = await keys("pending");
+    for (const id of pendingIds) {
       const queued = await get<{ notebook_id: string | null }>("pending", id);
       if (!(await create(id, queued?.notebook_id ?? null))) return;
       await del("pending", id);
       waiting.get(id)?.resolve();
       waiting.delete(id);
     }
-    for (const id of await keys("dirty")) {
+    const dirtyIds = await keys("dirty");
+    for (const id of dirtyIds) {
       if (!open.has(id)) await upload(id);
     }
   } finally {
@@ -247,10 +331,11 @@ function upload(id: string): Promise<void> {
       const doc = new LoroDoc();
       doc.import(saved);
       let pushed = false;
+      let lost = false;
       const finish = () => {
         clearTimeout(timer);
         sync.close(id, handler);
-        if (open.has(id)) return done();
+        if (open.has(id) || lost) return done();
         void cache.saveNote(id, doc).then(() => done());
       };
       // Gives up quietly if the connection drops; the next reconnect tries again.
@@ -271,7 +356,9 @@ function upload(id: string): Promise<void> {
         presence() {},
         role() {},
         lost() {
-          void cache.clearDirty(id);
+          // The note is gone or no longer shared here: the edits can't go up, so the copy goes too.
+          lost = true;
+          void cache.forget(id);
           finish();
         },
         outOfSync: () => sync.rejoin(id),

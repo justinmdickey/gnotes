@@ -1,6 +1,7 @@
 // One websocket for every open note. Protocol: "Websocket protocol" in docs/DESIGN.md.
-import { VersionVector } from "loro-crdt";
-import type { Role } from "./api";
+import { LoroDoc, VersionVector } from "loro-crdt";
+import { api, type Role } from "./api";
+import { cache, editing, isQueued, plainText, rememberText, unreachable } from "./offline";
 
 const KIND_UPDATE = 0x01;
 const KIND_PRESENCE = 0x02;
@@ -53,6 +54,11 @@ export class SyncClient {
   /** A note's tasks changed somewhere: the Tasks list refetches if it's showing. */
   onTasksChanged = () => {};
   onStatus = (_: Status) => {};
+  /** The pass that saves every note on this device: how far it is. */
+  onNotesSaved = (_done: number, _total: number, _saving: boolean) => {};
+
+  private savingAll = false;
+  private saveAgain = false;
 
   constructor() {
     // A phone back in signal, or a tab brought back, tries right away instead of waiting out the backoff.
@@ -123,6 +129,77 @@ export class SyncClient {
   rejoin(id: string) {
     const h = this.notes.get(id);
     if (h) this.sendJoin(id, h);
+  }
+
+  /**
+   * Keeps every note in the tree saved on this device: a background pass, a few notes at a time,
+   * that asks the server for what each saved copy lacks, drops copies of notes gone from the
+   * tree, and never touches a note being edited or with unsent edits. Re-queued while running.
+   */
+  saveAll(ids: () => string[]) {
+    if (this.savingAll) {
+      this.saveAgain = true;
+      return;
+    }
+    this.savingAll = true;
+    this.onNotesSaved(0, 0, true);
+    void this.runSave(ids).finally(() => {
+      this.savingAll = false;
+      if (this.saveAgain) {
+        this.saveAgain = false;
+        this.saveAll(ids);
+      }
+    });
+  }
+
+  private async runSave(ids: () => string[]) {
+    for (;;) {
+      this.saveAgain = false;
+      if (this.status !== "online") return;
+      const treeIds = new Set(ids());
+      const dirty = new Set(await cache.dirtyIds());
+      // Notes gone from the tree: drop their copies, unless they still have unsent edits (a
+      // flush on reconnect decides those) or an editor owns them.
+      for (const id of await cache.noteIds()) {
+        if (!treeIds.has(id) && !dirty.has(id) && !editing.has(id) && !isQueued(id)) {
+          await cache.forget(id);
+        }
+      }
+      let batch = [...treeIds].filter((id) => !editing.has(id) && !isQueued(id) && !dirty.has(id));
+      let done = 0;
+      while (batch.length) {
+        const chunk = batch.splice(0, 20);
+        // Re-read the dirty set per chunk: a tick made offline since the pass began must not be
+        // overwritten by the server's copy, so skip anything now dirty or under an editor.
+        const dirtyNow = new Set(await cache.dirtyIds());
+        const have: Record<string, string> = {};
+        for (const id of chunk) {
+          if (dirtyNow.has(id) || editing.has(id)) continue;
+          const v = await cache.noteVersion(id);
+          have[id] = v ? b64(v) : "";
+        }
+        let resp: { notes: { id: string; data: string }[]; rest: string[] };
+        try {
+          resp = await api.noteSnapshots(have);
+        } catch (err) {
+          if (unreachable(err)) return;
+          return;
+        }
+        for (const n of resp.notes) {
+          // Skip a note that went dirty or got an editor while the snapshot was in flight.
+          if (dirtyNow.has(n.id) || editing.has(n.id)) continue;
+          const doc = new LoroDoc();
+          doc.import(unb64(n.data));
+          await cache.saveNote(n.id, doc);
+          rememberText(n.id, plainText(doc.getText("body").toString()));
+          done++;
+        }
+        batch = resp.rest.concat(batch);
+        this.onNotesSaved(done, treeIds.size, true);
+      }
+      this.onNotesSaved(treeIds.size, treeIds.size, false);
+      if (!this.saveAgain) return;
+    }
   }
 
   /** Dropped while offline (returns false); the rejoin after reconnecting uploads whatever the server is missing. */
