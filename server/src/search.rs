@@ -115,22 +115,64 @@ pub fn fts_any(terms: &[String]) -> Option<String> {
     (!terms.is_empty()).then(|| terms.iter().map(|t| format!("\"{t}\"*")).collect::<Vec<_>>().join(" OR "))
 }
 
-/// Stores a note's current text for search. Called on every edit and for imported notes.
-/// The title is kept apart so snippets show the rest of the note, not the title again.
-pub async fn index<'c>(db: impl sqlx::SqliteExecutor<'c>, note: &str, body: &str) -> sqlx::Result<()> {
-    let text = plain_text(body);
-    let (title, rest) = text.split_once('\n').unwrap_or((&text, ""));
+/// Stores a note's current text for search, including the text of the PDFs it links (migration
+/// 0015). Called on every edit and for imported notes; the title is kept apart so snippets show
+/// the rest of the note, not the title again.
+pub async fn index(state: &AppState, note: &str, body: &str) -> sqlx::Result<()> {
+    let own = plain_text(body);
+    let (title, own_rest) = own.split_once('\n').unwrap_or((&own, ""));
+    let refs = att_refs(body);
+    // The text of the linked PDFs, appended after the note's own text, so FTS, embeddings and
+    // Ask read it with no changes of their own.
+    let texts: Vec<(String, String)> = if refs.is_empty() {
+        vec![]
+    } else {
+        sqlx::query_as::<_, (String, String)>(
+            "SELECT a.filename, t.text FROM attachment_text t
+             JOIN attachments a ON a.id = t.attachment_id
+             WHERE a.id IN (SELECT value FROM json_each(?))",
+        )
+        .bind(serde_json::to_string(&refs).unwrap_or_default())
+        .fetch_all(&state.db)
+        .await?
+    };
+    let mut rest = own_rest.to_owned();
+    let mut spans: Vec<(String, i64, i64)> = Vec::new();
+    for (filename, text) in &texts {
+        rest.push('\n');
+        let start = rest.len() as i64;
+        rest.push_str(text);
+        let end = rest.len() as i64;
+        spans.push((filename.clone(), start, end));
+    }
     sqlx::query(
-        "INSERT INTO note_text (note_id, title, body) VALUES (?, ?, ?)
-         ON CONFLICT (note_id) DO UPDATE SET title = excluded.title, body = excluded.body
-         WHERE note_text.title != excluded.title OR note_text.body != excluded.body",
+        "INSERT INTO note_text (note_id, title, body, pdf_spans, att_refs) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT (note_id) DO UPDATE SET title = excluded.title, body = excluded.body,
+             pdf_spans = excluded.pdf_spans, att_refs = excluded.att_refs
+         WHERE note_text.title != excluded.title OR note_text.body != excluded.body
+            OR note_text.pdf_spans IS NOT excluded.pdf_spans OR note_text.att_refs IS NOT excluded.att_refs",
     )
     .bind(note)
     .bind(title)
-    .bind(rest)
-    .execute(db)
+    .bind(&rest)
+    .bind(serde_json::to_string(&spans).unwrap_or_default())
+    .bind(serde_json::to_string(&refs).unwrap_or_default())
+    .execute(&state.db)
     .await?;
     Ok(())
+}
+
+/// The attachment ids a note's body links to (`att:…`), for PDF text and re-indexing.
+fn att_refs(body: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for m in body.match_indices("att:") {
+        let rest = &body[m.0 + 4..];
+        let id: String = rest.chars().take_while(|c| c.is_ascii_hexdigit() || *c == '-').collect();
+        if id.len() == 36 && !out.contains(&id) {
+            out.push(id);
+        }
+    }
+    out
 }
 
 /// Indexes notes that have no search text yet: everything written before search existed,
@@ -145,7 +187,7 @@ pub async fn backfill(state: &AppState) -> anyhow::Result<()> {
             Err(e) => Err(e.into()),
         };
         match body {
-            Ok(body) => index(&state.db, id, &body).await?,
+            Ok(body) => index(state, id, &body).await?,
             Err(e) => tracing::error!("indexing note {id} for search: {e:#}"),
         }
     }
@@ -194,6 +236,9 @@ pub struct SearchResult {
     pub snippet: Vec<Segment>,
     /// Which search found it: "text" here, "meaning" from semantic search (semantic.rs).
     pub source: &'static str,
+    /// The attached PDF the snippet came from, when the match is in its text.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -229,9 +274,10 @@ pub async fn search(
 /// Notes the user can see with every word of `q`, best first, at most `limit`.
 pub(crate) async fn by_words(state: &AppState, user: &str, q: &str, limit: i64) -> sqlx::Result<Vec<SearchResult>> {
     let Some(query) = fts_query(q) else { return Ok(vec![]) };
-    let rows: Vec<(String, String, String)> = sqlx::query_as(concat!(
+    let terms = query_terms(q);
+    let rows: Vec<(String, String, String, String, Option<String>)> = sqlx::query_as(concat!(
         visible_notes!(),
-        "SELECT n.id, n.title, snippet(note_search, 1, char(2), char(3), '…', 12)
+        "SELECT n.id, n.title, snippet(note_search, 1, char(2), char(3), '…', 12), t.body, t.pdf_spans
          FROM note_search
          JOIN note_text t ON t.id = note_search.rowid
          JOIN notes n ON n.id = t.note_id
@@ -244,16 +290,20 @@ pub(crate) async fn by_words(state: &AppState, user: &str, q: &str, limit: i64) 
     .bind(limit)
     .fetch_all(&state.db)
     .await?;
-    Ok(rows.into_iter().map(|(note, title, snippet)| SearchResult { note, title, snippet: segments(&snippet), source: "text" }).collect())
+    Ok(rows.into_iter().map(|(note, title, snippet, body, pdf_spans)| {
+        let spans = parse_spans(&pdf_spans);
+        let file = attribute_file(&body, &spans, &terms);
+        SearchResult { note, title, snippet: segments(&snippet), source: "text", file }
+    }).collect())
 }
 
 /// Notes the user can see whose text has any of `terms`, best first, at most `limit`, each with
 /// a snippet around the words found. For Ask (semantic.rs), which mixes these with meaning matches.
 pub async fn any_terms(state: &AppState, user: &str, terms: &[String], limit: i64) -> sqlx::Result<Vec<SearchResult>> {
     let Some(query) = fts_any(terms) else { return Ok(vec![]) };
-    let rows: Vec<(String, String, String)> = sqlx::query_as(concat!(
+    let rows: Vec<(String, String, String, String, Option<String>)> = sqlx::query_as(concat!(
         visible_notes!(),
-        "SELECT n.id, n.title, snippet(note_search, 1, char(2), char(3), '…', 16)
+        "SELECT n.id, n.title, snippet(note_search, 1, char(2), char(3), '…', 16), t.body, t.pdf_spans
          FROM note_search
          JOIN note_text t ON t.id = note_search.rowid
          JOIN notes n ON n.id = t.note_id
@@ -266,7 +316,45 @@ pub async fn any_terms(state: &AppState, user: &str, terms: &[String], limit: i6
     .bind(limit)
     .fetch_all(&state.db)
     .await?;
-    Ok(rows.into_iter().map(|(note, title, snippet)| SearchResult { note, title, snippet: segments(&snippet), source: "text" }).collect())
+    let lower: Vec<String> = terms.iter().map(|t| t.to_lowercase()).collect();
+    Ok(rows.into_iter().map(|(note, title, snippet, body, pdf_spans)| {
+        let spans = parse_spans(&pdf_spans);
+        let file = attribute_file(&body, &spans, &lower);
+        SearchResult { note, title, snippet: segments(&snippet), source: "text", file }
+    }).collect())
+}
+
+/// The words of a search, lowercased, for attributing a snippet to a linked PDF.
+fn query_terms(q: &str) -> Vec<String> {
+    q.split(|c: char| !c.is_alphanumeric()).filter(|t| !t.is_empty()).take(MAX_TERMS).map(|t| t.to_lowercase()).collect()
+}
+
+/// The (filename, start, end) spans a note's search text carries for its linked PDFs.
+fn parse_spans(json: &Option<String>) -> Vec<(String, i64, i64)> {
+    json.as_deref().and_then(|j| serde_json::from_str(j).ok()).unwrap_or_default()
+}
+
+/// The attached PDF a match came from: a word that's in a linked PDF's text but not in the note's
+/// own text. `None` when the match is in the note's own text, or there are no linked PDFs.
+fn attribute_file(rest: &str, spans: &[(String, i64, i64)], terms: &[String]) -> Option<String> {
+    if spans.is_empty() {
+        return None;
+    }
+    let own_end = spans.first().map(|s| s.1).unwrap_or(rest.len() as i64) as usize;
+    let own = rest.get(..own_end.min(rest.len())).unwrap_or("");
+    let own_lower = own.to_lowercase();
+    for t in terms {
+        if t.is_empty() || own_lower.contains(t) {
+            continue; // in the note's own text, so not PDF-specific
+        }
+        for (name, start, end) in spans {
+            let (s, e) = (*start as usize, *end as usize);
+            if s <= e && e <= rest.len() && rest[s..e].to_lowercase().contains(t) {
+                return Some(name.clone());
+            }
+        }
+    }
+    None
 }
 
 #[cfg(test)]

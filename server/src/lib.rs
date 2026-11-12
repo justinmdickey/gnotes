@@ -11,6 +11,7 @@ pub mod export;
 pub mod import;
 pub mod invites;
 pub mod live;
+pub mod pdftext;
 pub mod perms;
 pub mod rooms;
 pub mod search;
@@ -274,6 +275,7 @@ pub async fn build(config: Config) -> anyhow::Result<AppState> {
     };
     search::backfill(&state).await?;
     tasks::backfill(&state).await?;
+    pdftext::backfill(&state).await?;
     Ok(state)
 }
 

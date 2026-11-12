@@ -398,6 +398,7 @@ async fn attach_file(
     }
     let (mime, filename, bytes) = file.ok_or_else(|| bad("Send the file as a multipart field named file"))?;
     let att = store_file(&state, &id, &key.user.id, &mime, &filename, &bytes).await?;
+    crate::attachments::maybe_extract(&state, &att, &bytes);
     let markdown = format!("[{}](att:{})", att.filename, att.id);
     Ok(Json(Attached { id: att.id, filename: att.filename, markdown }))
 }

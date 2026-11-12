@@ -4,6 +4,28 @@
 import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
+
+// A minimal single-page PDF with a text layer (a valid xref), for the PDF-text check.
+function makePdf(text) {
+  const objects = [];
+  objects[1] = "<< /Type /Catalog /Pages 2 0 R >>";
+  objects[2] = "<< /Type /Pages /Kids [3 0 R] /Count 1 >>";
+  objects[3] = "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>";
+  const stream = `BT /F1 24 Tf 72 720 Td (${text}) Tj ET`;
+  objects[4] = `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`;
+  objects[5] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>";
+  let pdf = "%PDF-1.4\n";
+  const offsets = [0];
+  for (let i = 1; i <= 5; i++) {
+    offsets[i] = pdf.length;
+    pdf += `${i} 0 obj\n${objects[i]}\nendobj\n`;
+  }
+  const xrefPos = pdf.length;
+  pdf += "xref\n0 6\n0000000000 65535 f \n";
+  for (let i = 1; i <= 5; i++) pdf += `${String(offsets[i]).padStart(10, "0")} 00000 n \n`;
+  pdf += `trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xrefPos}\n%%EOF\n`;
+  return new TextEncoder().encode(pdf);
+}
 import { createServer } from "node:http";
 import net from "node:net";
 import { tmpdir } from "node:os";
@@ -2484,6 +2506,36 @@ try {
     return r.ok ? `ok:${r.headers.get("content-security-policy")}` : `status:${r.status}`;
   });
   check(served === "ok:sandbox", `the server has the dropped file, served as a sandboxed PDF (${served})`);
+
+  // ---- PDF text in search (#54) ----
+  // A PDF's text is searchable; a snippet that comes from it names the file.
+  const pdfNoteId = await alice.evaluate(() => fetch("/api/notes", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }).then((r) => r.json()).then((n) => n.id));
+  const pdfAtt = await alice.evaluate(async (id, bytes, name) => {
+    const f = new FormData();
+    f.append("note_id", id);
+    f.append("file", new File([new Uint8Array(bytes)], name, { type: "application/pdf" }));
+    return (await fetch("/api/attachments", { method: "POST", body: f })).json();
+  }, pdfNoteId, Array.from(makePdf("The dishwasher warranty lasts two years.")), "manual.pdf");
+  await alice.evaluate((id) => (location.hash = `#/note/${id}`), pdfNoteId);
+  await alice.waitForSelector(".cm-content[contenteditable=true]", { timeout: 5000 });
+  await new Promise((r) => setTimeout(r, 300));
+  await alice.evaluate(() => document.querySelector(".cm-content")?.focus());
+  await alice.keyboard.type(`[manual.pdf](att:${pdfAtt.id})`);
+  // Wait for the background extraction and re-index: the note is found by a word only in the PDF.
+  await alice.waitForFunction(
+    async (id) => ((await (await fetch(`/api/search?q=warranty`)).json()).results ?? []).some((x) => x.note === id),
+    { timeout: 15000 },
+    pdfNoteId,
+  );
+  await alice.evaluate(() => (location.hash = "#/all"));
+  await alice.waitForSelector(".pane.list .search input", { visible: true });
+  await alice.type(".pane.list .search input", "warranty");
+  await alice.waitForFunction(
+    () => [...document.querySelectorAll(".pane.list .note")].some((b) => b.querySelector(".file-from")?.textContent?.includes("manual.pdf")),
+    { timeout: 5000 },
+  );
+  check(true, "a search that matches a PDF's text names the file before the snippet");
+  await alice.click(".pane.list .search .clear");
 
   console.log("all checks passed");
 } finally {

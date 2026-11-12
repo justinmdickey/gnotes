@@ -163,6 +163,8 @@ export interface SearchResult {
   snippet: SnippetPart[];
   /** Which search found it: "text" (full-text) or "meaning" (semantic search, whose snippet has no hits). */
   source: string;
+  /** The attached PDF the snippet came from, when the match is in its text. */
+  file?: string;
 }
 
 /** One message of an Ask conversation. */

@@ -431,7 +431,7 @@ pub(crate) async fn by_meaning(state: &AppState, user: &str, q: &str, limit: usi
         .into_iter()
         .filter(|m| m.score >= best - SPREAD && seen.insert(m.note.clone()))
         .take(limit)
-        .map(|m| SearchResult { note: m.note, title: m.title, snippet: vec![Segment { text: excerpt(&m.text), hit: false }], source: "meaning" })
+        .map(|m| SearchResult { note: m.note, title: m.title, snippet: vec![Segment { text: excerpt(&m.text), hit: false }], source: "meaning", file: None })
         .collect();
     Ok(Some(results))
 }

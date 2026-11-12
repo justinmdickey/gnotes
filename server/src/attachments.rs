@@ -51,6 +51,11 @@ pub(crate) fn clean_filename(name: &str) -> String {
     if cleaned.is_empty() { "attachment".into() } else { cleaned }
 }
 
+/// Whether a file is a PDF, by its MIME type or name, for text extraction.
+pub(crate) fn is_pdf(mime: &str, filename: &str) -> bool {
+    mime == "application/pdf" || filename.to_ascii_lowercase().ends_with(".pdf")
+}
+
 /// The MIME type for a file name, for files that arrive without one (e.g. inside a zip).
 pub(crate) fn mime_for(filename: &str) -> Option<&'static str> {
     let ext = filename.rsplit_once('.')?.1.to_ascii_lowercase();
@@ -165,6 +170,13 @@ async fn find(state: &AppState, user_id: &str, id: &str, min: Role) -> ApiResult
     Ok(att)
 }
 
+/// Kicks off background text extraction for a freshly uploaded PDF; never blocks or fails the upload.
+pub(crate) fn maybe_extract(state: &AppState, att: &Attachment, bytes: &[u8]) {
+    if is_pdf(&att.mime, &att.filename) {
+        tokio::spawn(crate::pdftext::extract_and_store(state.clone(), att.id.clone(), bytes.to_vec()));
+    }
+}
+
 /// `POST /attachments`, multipart with `note_id` then `file`. Stores the file by content hash.
 pub async fn upload(
     State(state): State<AppState>,
@@ -194,7 +206,9 @@ pub async fn upload(
                     .to_ascii_lowercase();
                 let filename = clean_filename(field.file_name().unwrap_or(""));
                 let bytes = field.bytes().await.map_err(|e| bad(&e.body_text()))?.to_vec();
-                return Ok(Json(store_file(&state, &note_id, &me.id, &mime, &filename, &bytes).await?));
+                let att = store_file(&state, &note_id, &me.id, &mime, &filename, &bytes).await?;
+                maybe_extract(&state, &att, &bytes);
+                return Ok(Json(att));
             }
             _ => {}
         }

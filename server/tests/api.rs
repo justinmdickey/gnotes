@@ -177,6 +177,57 @@ fn edit(doc: &LoroDoc, pos: usize, text: &str) -> Vec<u8> {
     doc.export(ExportMode::updates(&before)).unwrap()
 }
 
+/// Replaces a note's whole text, as an update since the doc's last state.
+fn set_text(doc: &LoroDoc, text: &str) -> Vec<u8> {
+    let before = doc.oplog_vv();
+    let t = doc.get_text("body");
+    let mut len = 0usize;
+    t.iter(|s| {
+        len += s.len();
+        true
+    });
+    if len > 0 {
+        t.delete(0, len).unwrap();
+    }
+    t.insert(0, text).unwrap();
+    doc.commit();
+    doc.export(ExportMode::updates(&before)).unwrap()
+}
+
+/// A minimal single-page PDF with a text layer, for the PDF-text tests.
+fn make_pdf(text: &str) -> Vec<u8> {
+    use lopdf::{Document, Object, Stream, content::{Content, Operation}, dictionary};
+    let mut doc = Document::new();
+    let font_id = doc.add_object(dictionary! {
+        "Type" => "Font",
+        "Subtype" => "Type1",
+        "BaseFont" => "Helvetica",
+    });
+    let resources_id = doc.add_object(dictionary! { "Font" => dictionary! { "F1" => font_id } });
+    let content = Content {
+        operations: vec![
+            Operation::new("BT", vec![]),
+            Operation::new("Tf", vec!["F1".into(), Object::Integer(24)]),
+            Operation::new("Td", vec![Object::Integer(72), Object::Integer(720)]),
+            Operation::new("Tj", vec![Object::string_literal(text)]),
+            Operation::new("ET", vec![]),
+        ],
+    };
+    let content_id = doc.add_object(Stream::new(dictionary! {}, content.encode().unwrap()));
+    let page_id = doc.add_object(dictionary! {
+        "Type" => "Page",
+        "MediaBox" => vec![Object::Integer(0), Object::Integer(0), Object::Integer(612), Object::Integer(792)],
+        "Contents" => content_id,
+        "Resources" => resources_id,
+    });
+    let pages_id = doc.add_object(dictionary! { "Type" => "Pages", "Kids" => vec![Object::Reference(page_id)], "Count" => Object::Integer(1) });
+    let catalog_id = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+    doc.trailer.set("Root", catalog_id);
+    let mut out = Vec::new();
+    doc.save_to(&mut out).unwrap();
+    out
+}
+
 #[tokio::test]
 async fn first_account_from_the_browser() {
     let dir = TempDir::new().unwrap();
@@ -1502,6 +1553,84 @@ async fn search_finds_words_deep_in_notes() {
     let alice = login(&server.base, "alice").await;
     assert_eq!(search(&alice, "zucchini").await.len(), 1);
     assert_eq!(search(&alice, "passport").await.len(), 1);
+}
+
+#[tokio::test]
+async fn pdf_text_is_searchable_and_names_the_file() {
+    let dir = TempDir::new().unwrap();
+    let server = start(&dir).await;
+    let alice = user(&server, "alice").await;
+    let note = alice.post("/notes", json!({})).await["id"].as_str().unwrap().to_owned();
+    let mut ws = alice.ws().await;
+    ws.join_and_sync(&note, None).await;
+    let doc = LoroDoc::new();
+
+    // A small PDF whose only searchable word ("warranty") lives in its text layer.
+    let att: Value = upload(&alice, &note, "manual.pdf", "application/pdf", make_pdf("The dishwasher warranty lasts two years.")).await.json().await.unwrap();
+    let att_id = att["id"].as_str().unwrap().to_owned();
+
+    // Link it into the note; the PDF's text is extracted in the background and re-indexed.
+    ws.send_frame(0x01, &note, &set_text(&doc, &format!("# Manual\n[manual.pdf](att:{att_id})\n"))).await;
+    let found = async || {
+        let url = reqwest::Url::parse_with_params(&alice.url("/search"), &[("q", "warranty")]).unwrap();
+        let body: Value = alice.http.get(url).send().await.unwrap().json().await.unwrap();
+        body["results"].as_array().unwrap().iter().any(|r| r["note"] == note)
+    };
+    for _ in 0..150 {
+        if found().await {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let url = reqwest::Url::parse_with_params(&alice.url("/search"), &[("q", "warranty")]).unwrap();
+    let body: Value = alice.http.get(url).send().await.unwrap().json().await.unwrap();
+    let r = body["results"].as_array().unwrap().iter().find(|r| r["note"] == note).expect("the note is found by a word only in the PDF");
+    assert_eq!(r["file"].as_str(), Some("manual.pdf"), "the snippet names its file");
+
+    // Unlinking the PDF drops its text from search.
+    ws.send_frame(0x01, &note, &set_text(&doc, "# Manual\n")).await;
+    let gone = async || {
+        let url = reqwest::Url::parse_with_params(&alice.url("/search"), &[("q", "warranty")]).unwrap();
+        let body: Value = alice.http.get(url).send().await.unwrap().json().await.unwrap();
+        body["results"].as_array().unwrap().iter().all(|r| r["note"] != note)
+    };
+    for _ in 0..150 {
+        if gone().await {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(gone().await, "unlinking the PDF stops its text being found");
+}
+
+#[tokio::test]
+async fn pdf_text_is_embedded_with_its_note() {
+    let (fake_url, _seen) = fake_ai().await;
+    let dir = TempDir::new().unwrap();
+    let server = start(&dir).await;
+    auth::create_user(&server.state.db, "root", "", "password123", true).await.unwrap();
+    let root = login(&server.base, "root").await;
+    let alice = user(&server, "alice").await;
+
+    let note = alice.post("/notes", json!({})).await["id"].as_str().unwrap().to_owned();
+    let mut ws = alice.ws().await;
+    ws.join_and_sync(&note, None).await;
+    let doc = LoroDoc::new();
+    ws.send_frame(0x01, &note, &set_text(&doc, "# Recipe\nyogurt for breakfast\n")).await;
+
+    // Setting up embeddings embeds the note already there.
+    let tested = root.post("/admin/settings/embed/test", json!({ "url": fake_url, "model": "fake-embed" })).await;
+    assert_eq!(tested["ok"], true, "{tested}");
+    let saved = root.send(reqwest::Method::PUT, "/admin/settings/embed", json!({ "url": fake_url, "model": "fake-embed", "key": "k" })).await;
+    assert!(saved.status().is_success());
+
+    // A PDF with a travel word, linked into the note; its text is embedded with the note.
+    let att: Value = upload(&alice, &note, "trip.pdf", "application/pdf", make_pdf("Book a flight for the trip.")).await.json().await.unwrap();
+    let att_id = att["id"].as_str().unwrap().to_owned();
+    ws.send_frame(0x01, &note, &set_text(&doc, &format!("# Recipe\nyogurt for breakfast\n[trip.pdf](att:{att_id})\n"))).await;
+
+    // "flight" is only in the PDF, so finding the note by meaning proves its text was embedded with it.
+    meaning_settles(&alice, "flight", &[&note]).await;
 }
 
 #[tokio::test]

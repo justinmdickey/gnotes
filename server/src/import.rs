@@ -305,6 +305,9 @@ pub async fn import(
     let now = now_ms();
     let mut result = ImportResult::default();
     let mut tx = state.db.begin().await?;
+    // Search text is indexed after the commit, since it reads the note's linked PDFs (a second query).
+    let mut to_index: Vec<(String, String)> = Vec::new();
+    let mut to_extract: Vec<(String, Vec<u8>)> = Vec::new();
     for mut batch in batches {
         batch.docs.sort_by(|a, b| (&a.dir, &a.stem).cmp(&(&b.dir, &b.stem)));
         let mut notebooks: HashMap<Vec<String>, String> = HashMap::new();
@@ -361,13 +364,14 @@ pub async fn import(
             .execute(&mut *tx)
             .await?;
             seed(&mut *tx, &note_id, &body).await?;
-            crate::search::index(&mut *tx, &note_id, &body).await?;
+            to_index.push((note_id.clone(), body.clone()));
             crate::tasks::index_in(&mut tx, &note_id, &crate::tasks::parse(&body)).await?;
             for (path, att_id) in linked {
                 used.insert(path.clone());
                 let bytes = &batch.files[&path];
                 let sha = store_blob(&state, bytes).await?;
                 let filename = clean_filename(&path);
+                let mime = mime_for(&path).unwrap_or("application/octet-stream");
                 sqlx::query(
                     "INSERT INTO attachments (id, note_id, uploader_id, filename, mime, size, sha256, created_at)
                      VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -376,12 +380,15 @@ pub async fn import(
                 .bind(&note_id)
                 .bind(&me.id)
                 .bind(&filename)
-                .bind(mime_for(&path).unwrap_or("application/octet-stream"))
+                .bind(mime)
                 .bind(bytes.len() as i64)
                 .bind(&sha)
                 .bind(now)
                 .execute(&mut *tx)
                 .await?;
+                if crate::attachments::is_pdf(mime, &filename) {
+                    to_extract.push((att_id.clone(), bytes.to_vec()));
+                }
                 result.attachments += 1;
             }
             result.notes += 1;
@@ -392,6 +399,12 @@ pub async fn import(
         result.skipped.append(&mut unused);
     }
     tx.commit().await?;
+    for (note_id, body) in to_index {
+        crate::search::index(&state, &note_id, &body).await?;
+    }
+    for (id, bytes) in to_extract {
+        tokio::spawn(crate::pdftext::extract_and_store(state.clone(), id, bytes));
+    }
     state.hub.tree_changed();
     state.export.changed();
     state.embedder.refresh_all();

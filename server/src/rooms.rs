@@ -410,7 +410,7 @@ impl Room {
                 .bind(&key)
                 .execute(&state.db)
                 .await?;
-            crate::search::index(&state.db, &key, &body).await?;
+            crate::search::index(&state, &key, &body).await?;
             if tasks_changed {
                 crate::tasks::index(&state.db, &key, &tasks).await?;
             }

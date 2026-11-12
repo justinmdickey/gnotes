@@ -356,7 +356,7 @@
           <span class="time">{when(note.updated_at)}</span>
           {#if hits.get(note.id)?.snippet.some((p) => p.hit)}
             <!-- Where the words matched, which may be far down the note. -->
-            <span class="dim snippet">{#each hits.get(note.id)!.snippet as part, i (i)}{#if part.hit}<mark>{part.text}</mark>{:else}{part.text}{/if}{/each}</span>
+            <span class="dim snippet">{#if hits.get(note.id)!.file}<span class="file-from" title="From an attached file"><Icon name="file" size={12} />{hits.get(note.id)!.file}</span>{/if}{#each hits.get(note.id)!.snippet as part, i (i)}{#if part.hit}<mark>{part.text}</mark>{:else}{part.text}{/if}{/each}</span>
           {:else}
             <span class="dim preview">{note.preview || (note.role !== "owner" ? note.owner : "No additional text")}</span>
           {/if}
@@ -735,6 +735,16 @@
     line-clamp: 2;
     overflow: hidden;
     overflow-wrap: anywhere;
+  }
+
+  /* A snippet that came from an attached file names it before the words. */
+  .file-from {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    margin-right: 6px;
+    font-size: 12px;
+    color: var(--text-secondary);
   }
 
   /* Matched words stand out like a highlighter pen. */

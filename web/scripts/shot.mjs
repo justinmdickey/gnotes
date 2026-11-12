@@ -30,6 +30,28 @@ const outIdx = args.indexOf("--out");
 const out = outIdx >= 0 ? args[outIdx + 1] : "/tmp/gnotes-shots";
 const screens = args.filter((a, i) => !a.startsWith("--") && args[i - 1] !== "--out");
 const targets = screens.length ? screens : ["home", "notebook:Kitchen", "note:Groceries", "account"];
+
+// A minimal single-page PDF with a text layer (a valid xref), so a search can find its words.
+function makePdf(text) {
+  const objects = [];
+  objects[1] = "<< /Type /Catalog /Pages 2 0 R >>";
+  objects[2] = "<< /Type /Pages /Kids [3 0 R] /Count 1 >>";
+  objects[3] = "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>";
+  const stream = `BT /F1 24 Tf 72 720 Td (${text}) Tj ET`;
+  objects[4] = `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`;
+  objects[5] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>";
+  let pdf = "%PDF-1.4\n";
+  const offsets = [0];
+  for (let i = 1; i <= 5; i++) {
+    offsets[i] = pdf.length;
+    pdf += `${i} 0 obj\n${objects[i]}\nendobj\n`;
+  }
+  const xrefPos = pdf.length;
+  pdf += "xref\n0 6\n0000000000 65535 f \n";
+  for (let i = 1; i <= 5; i++) pdf += `${String(offsets[i]).padStart(10, "0")} 00000 n \n`;
+  pdf += `trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xrefPos}\n%%EOF\n`;
+  return new TextEncoder().encode(pdf);
+}
 const viewports = [
   ...(flag("--desktop") ? [] : [["phone", { width: 390, height: 844, isMobile: true, hasTouch: true, deviceScaleFactor: 2 }]]),
   ...(flag("--phone") ? [] : [["desktop", { width: 1280, height: 800 }]]),
@@ -186,7 +208,7 @@ async function seed(page) {
   await page.waitForSelector(".cm-content[contenteditable=true]");
   await page.keyboard.type("# Files\n");
   await settle(400);
-  const attIds = await page.evaluate(async () => {
+  const attIds = await page.evaluate(async (pdfBytes) => {
     const noteId = location.hash.split("/note/")[1];
     const up = (name, mime, file) => {
       const f = new FormData();
@@ -204,13 +226,15 @@ async function seed(page) {
     const blob = await new Promise((r) => cv.toBlob(r, "image/png"));
     const [photo, pdf] = await Promise.all([
       up("photo.png", "image/png", new File([blob], "photo.png", { type: "image/png" })),
-      up("manual.pdf", "application/pdf", new File([new Uint8Array([37, 80, 68, 70])], "manual.pdf", { type: "application/pdf" })),
+      up("manual.pdf", "application/pdf", new File([new Uint8Array(pdfBytes)], "manual.pdf", { type: "application/pdf" })),
     ]);
     return [photo.id, pdf.id];
-  });
+  }, Array.from(makePdf("The dishwasher warranty lasts two years.")));
   await page.keyboard.type(`![Photo](att:${attIds[0]})\n[manual.pdf](att:${attIds[1]})`);
   await settle(600);
   await page.evaluate(() => document.activeElement?.blur());
+  // Wait for the PDF's text to be extracted and indexed, so a search finds it by a word only in the PDF.
+  await page.waitForFunction(async () => (await fetch("/api/search?q=warranty").then((r) => r.json())).results.length > 0, { timeout: 15000, polling: 500 });
   // The notes are embedded a few seconds after typing stops.
   if (flag("--ai")) {
     await page.waitForFunction(async () => (await fetch("/api/search/meaning?q=dairy").then((r) => r.json())).results.length > 0, { timeout: 20000, polling: 500 });
