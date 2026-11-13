@@ -1888,7 +1888,8 @@ impl Editor {
                     let alt: String = name.rsplit_once('.').map_or(name, |(a, _)| a).chars().filter(|c| !"[]".contains(*c)).collect();
                     format!("![{alt}](att:{})\n", att.id)
                 } else {
-                    format!("[{}] (att:{})\n", att.filename, att.id).replace(") (", "](")
+                    let label: String = att.filename.chars().filter(|c| !"[]".contains(*c)).collect();
+                    format!("[{label}](att:{})\n", att.id)
                 };
                 self.edit(|b| {
                     let mut at = b.iter_at_mark(&b.get_insert());
