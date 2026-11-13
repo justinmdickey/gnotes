@@ -1790,10 +1790,14 @@ impl Editor {
         dialog.present(Some(&main.window));
     }
 
-    /// Opens a link: a [[wiki link]]'s note here, a web or mail link outside.
+    /// Opens a link: a [[wiki link]]'s note here, a file with its app, a web or mail link outside.
     fn follow(&self, url: &str) -> bool {
         let Some(main) = self.main.upgrade() else { return false };
-        if let Some(title) = url.strip_prefix("wiki:") {
+        if let Some(att) = url.strip_prefix("att:") {
+            if let Some(me) = self.me.upgrade() {
+                me.open_file(att);
+            }
+        } else if let Some(title) = url.strip_prefix("wiki:") {
             let found = main.store.tree.borrow().notes.iter().find(|n| n.title.trim().eq_ignore_ascii_case(title.trim())).map(|n| n.id.clone());
             match found {
                 Some(id) => main.open_note(&id, false),
@@ -2367,7 +2371,7 @@ impl Editor {
         }
         self.view.set_pictures(pictures);
         self.show_blocks(&text, &styled, active);
-        self.place_files(&text, &styled);
+        self.place_files(&text, &styled, active);
         self.styled.replace(styled);
         self.show_blame(&text);
     }
@@ -2466,8 +2470,9 @@ impl Editor {
         }
     }
 
-    /// File links on their own line, drawn as rows over their Markdown.
-    fn place_files(&self, text: &str, styled: &markdown::Styled) {
+    /// File links on their own line, drawn as rows over their Markdown, which shrinks away, except
+    /// while the cursor is on that line: then the Markdown shows, to edit as text.
+    fn place_files(&self, text: &str, styled: &markdown::Styled, active: Option<(i32, i32)>) {
         if self.placing_files.replace(true) {
             self.queue_restyle();
             return;
@@ -2489,6 +2494,10 @@ impl Editor {
             let link: String = chars[l.start..l.end].iter().collect();
             if line.trim() != link.trim() {
                 continue; // not on its own line: a normal link in a sentence
+            }
+            let row = self.buffer.iter_at_offset(l.start as i32).line();
+            if active.is_some_and(|(a, b)| (a..=b).contains(&row)) {
+                continue;
             }
             wanted.push((l.start, l.end, att.to_owned()));
         }
@@ -2520,8 +2529,11 @@ impl Editor {
             if !line_end.ends_line() {
                 line_end.forward_to_line_end();
             }
-            self.buffer.apply_tag(&self.photo_tag(h + 12), &self.buffer.iter_at_offset(s as i32), &line_end);
-            let loc = self.view.iter_location(&self.buffer.iter_at_offset(s as i32));
+            let mut line_start = self.buffer.iter_at_offset(s as i32);
+            line_start.set_line_offset(0);
+            self.buffer.apply_tag_by_name("hidden", &line_start, &line_end);
+            self.buffer.apply_tag(&self.photo_tag(h + 12), &line_start, &line_end);
+            let loc = self.view.iter_location(&line_start);
             self.view.move_overlay(&slot, loc.x(), loc.y() + 4);
             kept.push(FileView { id, att: att.to_owned(), slot });
         }
@@ -2537,17 +2549,23 @@ impl Editor {
     fn file_widget(&self, att: &str) -> gtk::Widget {
         let row = gtk::Box::builder().spacing(12).margin_top(6).margin_bottom(6).margin_start(12).margin_end(12).build();
         row.add_css_class("file-row");
-        let icon = gtk::Image::from_icon_name("file-symbolic");
+        let icon = gtk::Image::from_icon_name("text-x-generic-symbolic");
         icon.set_pixel_size(24);
         row.append(&icon);
         let name = gtk::Label::builder().hexpand(true).xalign(0.0).ellipsize(gtk::pango::EllipsizeMode::End).build();
         row.append(&name);
         let size = gtk::Label::builder().css_classes(["dim-label"]).build();
         row.append(&size);
-        let (api, att2, name2, size2) = (self.store.api.clone(), att.to_owned(), name.clone(), size.clone());
+        let (api, att2, name2, size2, icon2) = (self.store.api.clone(), att.to_owned(), name.clone(), size.clone(), icon.clone());
         glib::spawn_future_local(async move {
             match bg(async move { api.attachment_meta(&att2).await }).await {
                 Ok(m) => {
+                    // The theme's icon for its type, when it has one (a PDF, a spreadsheet, ...).
+                    let kind = gio::content_type_from_mime_type(&m.mime).map(|t| gio::content_type_get_symbolic_icon(&t));
+                    let theme = gtk::IconTheme::for_display(&icon2.display());
+                    if let Some(kind) = kind.filter(|k| theme.has_gicon(k)) {
+                        icon2.set_from_gicon(&kind);
+                    }
                     name2.set_text(&m.filename);
                     size2.set_text(&human_size(m.size));
                 }

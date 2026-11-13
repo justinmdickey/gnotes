@@ -529,6 +529,10 @@ check("a new server's first account is made from sign-in", code === 0 && setupDu
         "wait-media 1",
         `add-file ${pdf}`,
         "wait-files 2",
+        // A row hides its link's Markdown, which shows again with the cursor on its line.
+        "wait-hidden [manual.pdf](att:",
+        "cursor 4",
+        "wait-shown [manual.pdf](att:",
         `dump ${f("file.json")}`,
         "quit",
       ].join("\n"),
