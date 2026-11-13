@@ -2506,6 +2506,21 @@ try {
     return r.ok ? `ok:${r.headers.get("content-security-policy")}` : `status:${r.status}`;
   });
   check(served === "ok:sandbox", `the server has the dropped file, served as a sandboxed PDF (${served})`);
+  // The same file linked in a sentence reads as a link; a click opens the file, not an att: address.
+  const opened = await alice.evaluate(async () => {
+    const view = document.querySelector(".cm-content").cmTile.root.view;
+    const id = view.state.doc.toString().match(/att:([0-9a-f-]{36})/)[1];
+    view.dispatch({ changes: { from: view.state.doc.length, insert: `\nSee [the manual](att:${id}) first.\n` } });
+    view.contentDOM.blur();
+    await new Promise((r) => setTimeout(r, 200));
+    const urls = [];
+    const real = window.open;
+    window.open = (url) => (urls.push(url), null);
+    document.querySelector(`.cm-link[data-href="att:${id}"]`)?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    window.open = real;
+    return urls[0] === `/api/attachments/${id}` ? "ok" : String(urls[0]);
+  });
+  check(opened === "ok", `a file link in a sentence opens the file (${opened})`);
 
   // ---- PDF text in search (#54) ----
   // A PDF's text is searchable; a snippet that comes from it names the file.

@@ -680,7 +680,7 @@ export const livePreview = [
   EditorView.atomicRanges.of((view) => view.plugin(livePreviewPlugin)?.atomic ?? Decoration.none),
 ];
 
-// The click that follows a link: a [[wiki link]] opens its note here, a web link opens in a new tab.
+// The click that follows a link: a [[wiki link]] opens its note here, a file or web link in a new tab.
 // The notes field lives in livePreview so every editor has it.
 export const linkClicks = [
   EditorView.domEventHandlers({
@@ -695,7 +695,8 @@ export const linkClicks = [
       }
       if (href && !/^\s*javascript:/i.test(href)) {
         e.preventDefault();
-        window.open(href, "_blank", "noopener,noreferrer");
+        const att = href.match(/^att:([0-9a-f-]{36})$/);
+        window.open(att ? attachmentUrl(att[1]) : href, "_blank", "noopener,noreferrer");
         return true;
       }
       return false;
