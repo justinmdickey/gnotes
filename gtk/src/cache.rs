@@ -138,6 +138,23 @@ impl Cache {
         fs::read(self.note_path(id)).ok()
     }
 
+    /// When a note's copy was last written, to know when what was read from it is stale.
+    pub fn note_modified(&self, id: &str) -> Option<std::time::SystemTime> {
+        fs::metadata(self.note_path(id)).ok()?.modified().ok()
+    }
+
+    /// The ids of the notes on this computer, to drop the ones that are gone from the tree.
+    pub fn note_ids(&self) -> Vec<String> {
+        fs::read_dir(self.dir.join("notes"))
+            .ok()
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|e| e.file_name().to_str().map(str::to_owned))
+            .filter_map(|n| n.strip_suffix(".loro").map(str::to_owned))
+            .collect()
+    }
+
     /// Drops a note's copy, e.g. when it's gone from the server.
     pub fn forget(&self, id: &str) {
         let _ = fs::remove_file(self.note_path(id));

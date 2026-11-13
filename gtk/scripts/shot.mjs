@@ -4,10 +4,10 @@
 //
 // Usage: cargo build -p gnotes-server -p gnotes-gtk && node gtk/scripts/shot.mjs [options] [screen...]
 //   screens: login local local:settings home note:<title> notebook:<name> recent search:<query> shared trash
-//            share:<title> move:<title> new-notebook menu shortcuts notemenu:<title> styles:<title>   (default: home note:Groceries)
+//            share:<title> move:<title> new-notebook menu shortcuts notemenu:<title> styles:<title> scribe   (default: home note:Groceries)
 //   --narrow | --wide     window size (default: both)
 //   --dark | --light      style (default: both)
-//   --ai                  stand-in AI services, for summary:<title> tidy:<title> editai:<title>
+//   --ai                  stand-in AI services, for summary:<title> tidy:<title> editai:<title> scribe
 //   --my-theme            your own GTK config (gtk.css, fonts) instead of stock Adwaita
 //   --out <dir>           where PNGs go (default: /tmp/gnotes-shots)
 // Needs web/node_modules (loro-crdt, to write the demo notes) and sway.
@@ -38,6 +38,8 @@ for (const target of targets) {
     for (const [sizeName, size] of sizes) {
       const file = join(out, `gtk-${target.replace(/[^\w.-]+/g, "_")}-${sizeName}-${style}.png`);
       rmSync(file, { force: true });
+      // `scribe`: a Scribe turn that makes a change (needs --ai), given time to finish.
+      const openTarget = target === "scribe" ? "ask:add a line to Groceries" : target;
       const { code, stderr } = await demo.runApp({
         // local[:screen]: notes on this computer, then that screen.
         signedIn: target !== "login" && !target.startsWith("local"),
@@ -46,7 +48,8 @@ for (const target of targets) {
         env: {
           ...(target.startsWith("local")
             ? { GNOTES_LOCAL: "1", GNOTES_OPEN: target.split(":").slice(1).join(":") || "home", GNOTES_SHOT: file }
-            : { GNOTES_OPEN: target, GNOTES_SHOT: file }),
+            : { GNOTES_OPEN: openTarget, GNOTES_SHOT: file }),
+          ...(target === "scribe" ? { GNOTES_SHOT_DELAY: "6000" } : {}),
           ...(flag("--my-theme") ? { XDG_CONFIG_HOME: join(homedir(), ".config") } : {}),
         },
         timeout: 20_000,

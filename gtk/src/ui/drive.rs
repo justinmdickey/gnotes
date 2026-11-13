@@ -30,6 +30,7 @@
 //! new-note
 //! add-file <path>           as Add Photo, into the open note
 //! wait-media <n>            the open note shows n photos or recordings
+//! wait-files <n>            the open note shows n file rows
 //! make-notebook <name>      at the top level
 //! rename-notebook <old>|<new>
 //! move-note <title>|<notebook>   ("Notes" is the top level)
@@ -53,6 +54,7 @@
 //! live-delta <text> | live-final <text>       live transcript words, as the server sends them
 //! get-text <n>             Get Text on the open note's nth photo or recording (from 0)
 //! wait-answer <text>       Ask's last answer has <text>
+//! wait-action <text>       Scribe's last turn shows an action row with <text>
 //! cite <n>                 opens the note the last answer's [n] links to
 //! move-to-server <server> <username> <password>   Move to a Server, signing in there
 //! dump <file.json>          the open note's text, title and peers, the sidebar's rows, the status
@@ -447,6 +449,7 @@ async fn run(main: &Rc<Main>, cmd: &str, arg: &str) {
             }
         }
         "wait-media" => until(&format!("{arg} photos or recordings"), || editor().is_some_and(|e| e.media_shown().len() >= arg.parse().unwrap_or(1))).await,
+        "wait-files" => until(&format!("{arg} file rows"), || editor().is_some_and(|e| e.file_ids().len() >= arg.parse().unwrap_or(1))).await,
         "make-notebook" => dialogs::create_notebook(main, None, arg.to_owned()),
         "rename-notebook" => {
             let (old, new) = arg.split_once('|').unwrap_or((arg, arg));
@@ -600,6 +603,7 @@ async fn run(main: &Rc<Main>, cmd: &str, arg: &str) {
             }
         }
         "wait-answer" => until(&format!("an answer with {arg:?}"), || main.ask.get().is_some_and(|a| a.last_answer().contains(arg))).await,
+        "wait-action" => until(&format!("an action with {arg:?}"), || main.ask.get().is_some_and(|a| a.action_texts().iter().any(|t| t.contains(arg)))).await,
         "cite" => {
             if let Some(id) = main.ask.get().and_then(|a| a.cited_note(arg.parse().unwrap_or(1))) {
                 main.open_note(&id, true);

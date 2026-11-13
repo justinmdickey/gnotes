@@ -463,6 +463,9 @@ check("a new server's first account is made from sign-in", code === 0 && setupDu
   const aiAnn = aiDemo.ann;
   // Sam's open note in the main demo is irrelevant here; this one starts clean.
   const aiStart = Date.now();
+  // A small PDF, to attach as a file (not a photo).
+  const pdf = f("warranty.pdf");
+  writeFileSync(pdf, "%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 300 200]>>endobj\nxref\n0 4\ntrailer<</Size 4/Root 1 0 R>>\nstartxref\n9\n%%EOF\n");
   ({ code, stderr } = await aiDemo.runApp({
     timeout: 180_000,
     env: {
@@ -504,13 +507,25 @@ check("a new server's first account is made from sign-in", code === 0 && setupDu
         "wait-media 1",
         "get-text 0",
         "wait-text RICE 2 KG",
-        "wait-row Ask",
+        "wait-row Scribe",
         "open ask:what do I still need to buy for the groceries?",
         "wait-answer spinach",
         `dump ${f("ask.json")}`,
         "cite 1",
         "wait-loaded",
         `dump ${f("cited.json")}`,
+        "open ask:add a line to Groceries",
+        "wait-action E2E Scribe added this line",
+        `dump ${f("scribe.json")}`,
+        // The demo's file shows as a row; a dropped photo is still a photo, and a dropped PDF a file.
+        "open note:Dishwasher",
+        "wait-loaded",
+        "wait-files 1",
+        `add-file ${join(demo.root, "web/public/icon-192.png")}`,
+        "wait-media 1",
+        `add-file ${pdf}`,
+        "wait-files 2",
+        `dump ${f("file.json")}`,
         "quit",
       ].join("\n"),
     },
@@ -529,6 +544,13 @@ check("a new server's first account is made from sign-in", code === 0 && setupDu
   check("Ask shows in the sidebar and streams an answer", existsSync(f("ask.json")) && /spinach, lemons and milk/.test(dump("ask.json").dialog_text + JSON.stringify(dump("ask.json"))));
   check("an answer's citation opens its note", existsSync(f("cited.json")) && dump("cited.json").title === "Groceries", existsSync(f("cited.json")) && dump("cited.json").title);
   check("the AI Prompt writes at the cursor", /# Pantry\n- Olive oil\n- Coffee beans/.test(edited), edited.slice(0, 80));
+  const scribed = await aiDemo.read(aiAnn, aiDemo.ids.groceries);
+  check("a Scribe turn that adds a line shows its action row", existsSync(f("scribe.json")) && scribed.includes("E2E Scribe added this line"), scribed.slice(-80));
+  const withFile = await aiDemo.read(aiAnn, aiDemo.ids.dishwasher);
+  const attMatch = withFile.match(/^\[warranty\.pdf\]\(att:([0-9a-f-]+)\)$/m);
+  const fileRes = attMatch ? await fetch(`${aiDemo.base}/api/attachments/${attMatch[1]}`, { headers: { cookie: `gnotes_session=${aiAnn.token}` } }) : null;
+  check("a dropped PDF is a file link on its own line, on the server, and shows as a row", existsSync(f("file.json")) && !!attMatch && fileRes?.ok === true, { attMatch: !!attMatch, ok: fileRes?.ok });
+  check("a dropped photo is still embedded as a photo", /!\[[^\]]*\]\(att:[0-9a-f-]+\)/.test(withFile), withFile.slice(-200));
 }
 
 // Notes on this computer: no server to set up, then moved to one.

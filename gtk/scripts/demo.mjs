@@ -61,6 +61,19 @@ function standInAI(port) {
       const last = body.messages.at(-1).content;
       if (Array.isArray(last)) return reply(res, "RICE 2 KG");
       if (first.role === "system") {
+        // Scribe, asked to add a line: find the note, append to it, then say so, as a model would.
+        const asked = body.messages.findLast((m) => m.role === "user")?.content ?? "";
+        if (Array.isArray(body.tools) && body.tools.length && asked.includes("add a line to Groceries")) {
+          const call = (name, args) =>
+            res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: "", tool_calls: [{ id: `call_${name}`, type: "function", function: { name, arguments: JSON.stringify(args) } }] } }] }));
+          const lastCall = body.messages.findLast((m) => m.tool_calls)?.tool_calls[0].function.name;
+          if (!lastCall) return call("search_notes", { query: "Groceries" });
+          if (lastCall === "search_notes") {
+            const found = JSON.parse(body.messages.at(-1).content).notes?.find((n) => n.title === "Groceries");
+            if (found) return call("append_to_note", { note: found.id, text: "E2E Scribe added this line." });
+          }
+          return res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: "Added a line to Groceries." } }] }));
+        }
         // Ask: a sentence for each note it knows, cited by its number, streamed.
         const lines = { Groceries: "You still need spinach, lemons and milk", Pantry: "Rice, beans and flour are in the pantry" };
         const said = [...first.content.matchAll(/^\[(\d+)\] (\w+)$/gm)].filter((m) => lines[m[2]]).map((m) => `${lines[m[2]]} [${m[1]}].`);
@@ -260,6 +273,13 @@ export async function startDemo({ ai = false } = {}) {
   form.append("file", new Blob([readFileSync(join(root, "web/public/icon-192.png"))], { type: "image/png" }), "Shelf.png");
   const photo = await (await fetch(`${base}/api/attachments`, { method: "POST", headers: { cookie: `gnotes_session=${ann.token}` }, body: form })).json();
 
+  // A file (a PDF manual), attached as a plain link on its own line, in a note of its own.
+  const dishwasher = await ann.note();
+  const pdfForm = new FormData();
+  pdfForm.append("note_id", dishwasher);
+  pdfForm.append("file", new Blob([Buffer.from("%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 300 200]>>endobj\nxref\n0 4\ntrailer<</Size 4/Root 1 0 R>>\nstartxref\n9\n%%EOF\n")], { type: "application/pdf" }), "manual.pdf");
+  const manual = await (await fetch(`${base}/api/attachments`, { method: "POST", headers: { cookie: `gnotes_session=${ann.token}` }, body: pdfForm })).json();
+
   // A voice memo: a second of quiet as WAV.
   const memo = await ann.note();
   const rate = 8000;
@@ -314,6 +334,7 @@ export async function startDemo({ ai = false } = {}) {
     "Inline `cargo test` runs everything, ~~slowly~~.",
   ].join("\n"));
   await write(ann, memo, `# Plumber\n\n![Voice memo](att:${recording.id})\n\nCall about the leak under the sink.`);
+  await write(ann, dishwasher, `# Dishwasher\n\nThe manual, in case it acts up again.\n\n[manual.pdf](att:${manual.id})`);
   const plans = await ann.note();
   await write(ann, plans, [
     "# Plans",
@@ -467,7 +488,7 @@ export async function startDemo({ ai = false } = {}) {
     data,
     ann,
     sam,
-    ids: { home, kitchen, groceries, pantry, snippets, memo, plans, family, sync, photo: photo.id, recording: recording.id },
+    ids: { home, kitchen, groceries, pantry, snippets, memo, dishwasher, plans, family, sync, photo: photo.id, recording: recording.id },
     open,
     read,
     write,

@@ -241,11 +241,15 @@ pub fn search_page(main: &Rc<Main>) -> adw::NavigationPage {
                     }
                 }
                 Err(_) => {
-                    // Offline: titles and previews of the notes on this computer.
+                    // Offline: titles, previews, and the full text of the notes on this computer.
                     let words: Vec<String> = q.to_lowercase().split_whitespace().map(str::to_owned).collect();
                     let notes = main.store.tree.borrow().notes.clone();
                     for n in notes {
-                        let hay = format!("{} {}", n.title, n.preview).to_lowercase();
+                        let mut hay = format!("{} {}", n.title, n.preview).to_lowercase();
+                        if let Some(text) = main.store.cached_text(&n.id) {
+                            hay.push(' ');
+                            hay.push_str(&text.to_lowercase());
+                        }
                         if words.iter().all(|w| hay.contains(w.as_str())) {
                             list.append(&note_row(&main, &n, &where_and_preview(&main, &n)));
                             count += 1;
@@ -255,7 +259,7 @@ pub fn search_page(main: &Rc<Main>) -> adw::NavigationPage {
             }
             // Ask Your Notes: first when the search reads like a question, otherwise last.
             if main.store.features.borrow().ask {
-                let row = adw::ActionRow::builder().title("Ask Your Notes").subtitle(glib::markup_escape_text(&q)).activatable(true).build();
+                let row = adw::ActionRow::builder().title("Ask Scribe").subtitle(glib::markup_escape_text(&q)).activatable(true).build();
                 row.add_prefix(&gtk::Image::from_icon_name("starred-symbolic"));
                 let (m, question) = (main.clone(), q.clone());
                 row.connect_activated(move |_| m.ask_question(&question));

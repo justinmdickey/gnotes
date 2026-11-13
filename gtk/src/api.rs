@@ -27,6 +27,9 @@ pub struct User {
     pub display_name: String,
     #[serde(default)]
     pub is_admin: bool,
+    /// What Scribe may do: "read", "add" or "full"; absent from older servers.
+    #[serde(default)]
+    pub scribe_access: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -154,6 +157,9 @@ pub struct Features {
     pub summaries: bool,
     pub semantic_search: bool,
     pub ask: bool,
+    /// Scribe can act, not just answer (the chat model takes tools); absent from older servers.
+    #[serde(default)]
+    pub ask_actions: bool,
     pub max_upload: u64,
     pub version: String,
 }
@@ -299,8 +305,28 @@ pub struct AskDone {
 pub enum AskEvent {
     Sources(AskSources),
     Text(String),
+    Action(AskAction),
     Done(AskDone),
     Error(String),
+}
+
+/// One thing Scribe did in a turn, as an `action` event. Undo sends it back as it came; `before`
+/// and `after` are for the server.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct AskAction {
+    /// `created`, `appended`, `task_added`, `task_done`, `replaced`, `moved` or `trashed`.
+    pub kind: String,
+    pub note: String,
+    pub title: String,
+    /// What was written.
+    pub text: String,
+    #[serde(default)]
+    pub before: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<String>,
+    /// The task's line, for task actions.
+    #[serde(default)]
+    pub line: Option<i64>,
 }
 
 #[derive(Debug)]
@@ -513,6 +539,29 @@ impl Api {
 
     pub async fn tree(&self) -> Result<Tree> {
         self.get("/tree").await
+    }
+
+    /// What this device's copies lack, for the notes asked about: each `(id, base64 snapshot)`,
+    /// plus the ids it didn't get to come back in `rest` to ask for again. `have` maps a note id
+    /// to the base64 of the version vector its copy has ("" for a full snapshot).
+    pub async fn note_snapshots(
+        &self,
+        have: &std::collections::BTreeMap<String, String>,
+    ) -> Result<(Vec<(String, String)>, Vec<String>)> {
+        let v: Value = self.post("/notes/snapshots", json!({ "have": have })).await?;
+        let notes: Vec<(String, String)> = v["notes"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|n| Some((n["id"].as_str()?.to_owned(), n["data"].as_str()?.to_owned())))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let rest: Vec<String> = v["rest"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|r| r.as_str().map(str::to_owned)).collect())
+            .unwrap_or_default();
+        Ok((notes, rest))
     }
 
     pub async fn features(&self) -> Result<Features> {
@@ -809,6 +858,7 @@ impl Api {
                 let ev = match event.as_str() {
                     "sources" => serde_json::from_value(body).ok().map(AskEvent::Sources),
                     "delta" => body["text"].as_str().map(|t| AskEvent::Text(t.to_owned())),
+                    "action" => serde_json::from_value(body).ok().map(AskEvent::Action),
                     "done" => serde_json::from_value(body).ok().map(AskEvent::Done),
                     "error" => Some(AskEvent::Error(body["message"].as_str().unwrap_or("Couldn't answer").to_owned())),
                     _ => None,
@@ -824,6 +874,16 @@ impl Api {
         }
         on(AskEvent::Error("The answer stopped partway".into()));
         Ok(())
+    }
+
+    /// What Scribe may do with your notes; the server's answer, with the new level.
+    pub async fn set_scribe_access(&self, access: &str) -> Result<User> {
+        self.send(Method::PATCH, "/me/scribe", Some(json!({ "access": access }))).await
+    }
+
+    /// Takes one of Scribe's changes back (an `action` event's data).
+    pub async fn undo_ask_action(&self, action: &AskAction) -> Result<()> {
+        self.post::<Value>("/ask/undo", json!({ "action": action })).await.map(drop)
     }
 
     pub async fn attachment(&self, id: &str) -> Result<Vec<u8>> {

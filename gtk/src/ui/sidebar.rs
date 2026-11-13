@@ -364,9 +364,9 @@ impl Sidebar {
         let shared: Vec<&TreeNotebook> =
             tops.iter().filter(|n| n.role != crate::api::Role::Owner && !hidden.contains(n.id.as_str())).collect();
 
-        // Ask, the AI search, once AI services are set up; plain word search either way.
+        // Scribe, the AI search, once AI services are set up; plain word search either way.
         if main.store.features.borrow().ask {
-            self.add_simple(Row::Ask, "starred-symbolic", "Ask", None);
+            self.add_simple(Row::Ask, "starred-symbolic", "Scribe", None);
         }
         self.add_simple(Row::Search, "system-search-symbolic", "Search", None);
         self.add_simple(Row::Tasks, "checkbox-checked-symbolic", "Tasks", None);

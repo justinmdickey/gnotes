@@ -10,6 +10,17 @@ use std::{
 use gtk::glib;
 use loro::VersionVector;
 
+use base64::Engine as _;
+
+/// Base64 of the version vector bytes, as `POST /notes/snapshots` wants.
+fn encode64(b: &[u8]) -> String {
+    base64::engine::general_purpose::STANDARD.encode(b)
+}
+
+fn decode64(s: &str) -> Option<Vec<u8>> {
+    base64::engine::general_purpose::STANDARD.decode(s).ok()
+}
+
 use crate::{
     api::{Api, Features, Role, Tree, TreeNote, User},
     bg,
@@ -67,6 +78,12 @@ pub struct Store {
     pub on_signed_out: RefCell<Option<Listener>>,
     refreshing: Cell<bool>,
     refresh_again: Cell<bool>,
+    /// The background pass that keeps the notes on this computer up to date, one at a time.
+    saving_all: Cell<bool>,
+    save_again: Cell<bool>,
+    /// What was read out of each saved copy (its version and text) as of the file's last change,
+    /// so the pass and offline search don't decode every note each time.
+    saved: RefCell<HashMap<String, Saved>>,
     /// Notes this client just made, known to be empty, so they can be typed in before the server answers.
     fresh: RefCell<std::collections::HashSet<String>>,
 }
@@ -100,6 +117,9 @@ impl Store {
             on_signed_out: Default::default(),
             refreshing: Cell::new(false),
             refresh_again: Cell::new(false),
+            saving_all: Cell::new(false),
+            save_again: Cell::new(false),
+            saved: Default::default(),
             fresh: Default::default(),
         });
         store.refresh_features();
@@ -324,6 +344,8 @@ impl Store {
                         add_queued(&mut tree, &store.cache.queued());
                         *store.tree.borrow_mut() = tree;
                         store.tree_changed();
+                        // A fresh tree (and every reconnect brings one): bring the copies up to date.
+                        store.save_all();
                     }
                     Err(crate::api::Error::Unauthorized) => {
                         if let Some(f) = &*store.on_signed_out.borrow() {
@@ -338,6 +360,102 @@ impl Store {
             }
             store.refreshing.set(false);
         });
+    }
+
+    /// Keeps the notes on this computer up to date, a few at a time: the background pass behind
+    /// "every note available offline". A note being edited, owed to the server, or open is left
+    /// alone; a copy of a note gone from the tree is dropped.
+    pub fn save_all(self: &Rc<Self>) {
+        if self.saving_all.get() {
+            self.save_again.set(true);
+            return;
+        }
+        self.saving_all.set(true);
+        let store = self.clone();
+        glib::spawn_future_local(async move {
+            loop {
+                store.save_again.set(false);
+                store.save_pass().await;
+                if !store.save_again.get() {
+                    break;
+                }
+            }
+            store.saving_all.set(false);
+        });
+    }
+
+    async fn save_pass(self: &Rc<Self>) {
+        let tree = self.tree.borrow().clone();
+        let ids: std::collections::BTreeSet<String> = tree.notes.iter().map(|n| n.id.clone()).collect();
+        // Notes owed to the server or open (in an editor, or being pushed) keep their own copy.
+        let busy = |store: &Store| -> std::collections::BTreeSet<String> {
+            let mut out: std::collections::BTreeSet<String> = store.cache.dirty().into_iter().collect();
+            out.extend(store.cache.queued().into_iter().map(|q| q.id));
+            out.extend(store.notes.borrow().keys().cloned());
+            out
+        };
+
+        // Drop copies of notes gone from the tree, unless we still owe them something.
+        let held = busy(self);
+        for id in self.cache.note_ids() {
+            if !ids.contains(&id) && !held.contains(&id) {
+                self.cache.forget(&id);
+                self.saved.borrow_mut().remove(&id);
+            }
+        }
+
+        let mut todo: Vec<String> = ids.into_iter().filter(|id| !held.contains(id)).collect();
+        while !todo.is_empty() {
+            let chunk: Vec<String> = todo.drain(..todo.len().min(20)).collect();
+            let held = busy(self);
+            let have: std::collections::BTreeMap<String, String> = chunk
+                .into_iter()
+                .filter(|id| !held.contains(id))
+                .map(|id| {
+                    let v = self.read_saved(&id).map(|s| s.version).unwrap_or_default();
+                    (id, v)
+                })
+                .collect();
+            if have.is_empty() {
+                continue;
+            }
+            let api = self.api.clone();
+            let (got, rest) = match bg(async move { api.note_snapshots(&have).await }).await {
+                Ok(r) => r,
+                Err(_) => return, // offline or failing: the next fresh tree tries again
+            };
+            // Read again now the reply is in: a note opened or edited meanwhile keeps its copy.
+            let held = busy(self);
+            for (id, data) in got {
+                if held.contains(&id) {
+                    continue;
+                }
+                if let Some(bytes) = decode64(&data) {
+                    self.cache.save_note(&id, &bytes);
+                }
+            }
+            // What didn't fit in the reply is asked for again.
+            todo.splice(0..0, rest);
+        }
+    }
+
+    /// The version and text of a note's saved copy, read once per change to the file.
+    fn read_saved(&self, id: &str) -> Option<Saved> {
+        let modified = self.cache.note_modified(id)?;
+        if let Some(s) = self.saved.borrow().get(id).filter(|s| s.modified == modified) {
+            return Some(s.clone());
+        }
+        let bytes = self.cache.note(id)?;
+        let mut doc = NoteDoc::new();
+        doc.import(&bytes).ok()?;
+        let s = Saved { modified, version: encode64(&doc.version().encode()), text: doc.text() };
+        self.saved.borrow_mut().insert(id.to_owned(), s.clone());
+        Some(s)
+    }
+
+    /// A saved copy's full text, for offline search.
+    pub fn cached_text(&self, id: &str) -> Option<String> {
+        self.read_saved(id).map(|s| s.text)
     }
 
     /// Makes a note in `notebook_id` (None: the top level). Offline it's queued and made on reconnect.
@@ -419,6 +537,15 @@ fn placeholder(id: &str, notebook_id: Option<String>, user: &User) -> TreeNote {
     }
 }
 
+/// What a note's saved copy holds, as of the file's last change.
+#[derive(Clone)]
+struct Saved {
+    modified: std::time::SystemTime,
+    /// Base64 of its version vector, as `POST /notes/snapshots` wants.
+    version: String,
+    text: String,
+}
+
 /// Notes made offline aren't on the server yet; the tree shows them anyway.
 fn add_queued(tree: &mut Tree, queued: &[Queued]) {
     for q in queued {
@@ -428,6 +555,7 @@ fn add_queued(tree: &mut Tree, queued: &[Queued]) {
                 username: String::new(),
                 display_name: String::new(),
                 is_admin: false,
+                scribe_access: None,
             });
             n.owner.clear();
             tree.notes.push(n);

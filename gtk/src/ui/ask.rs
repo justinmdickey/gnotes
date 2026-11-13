@@ -1,7 +1,8 @@
-//! Ask: a chat with your notes, like web/src/Ask.svelte and web/src/lib/ask.svelte.ts. Each question
-//! shows the notes found as cards, then an answer streamed from them with numbered links. Follow-ups
-//! build on the turns before. The conversation stays while you visit other places, until New Chat or
-//! logging out; only the app keeps it.
+//! Scribe: a chat with your notes, like web/src/Ask.svelte and web/src/lib/ask.svelte.ts. Each
+//! question shows the notes found as cards, then an answer streamed from them with numbered links.
+//! At the levels you choose in Account it also makes and changes notes, showing each change as a
+//! row you can open or take back. Follow-ups build on the turns before. The conversation stays
+//! while you visit other places, until New Chat or logging out; only the app keeps it.
 
 use std::{
     cell::{Cell, RefCell},
@@ -12,7 +13,10 @@ use adw::prelude::*;
 use gtk::glib;
 
 use super::{sidebar, window::Main};
-use crate::api::{AskEvent, AskMessage, AskNote, SnippetPart};
+use crate::{
+    api::{AskAction, AskEvent, AskMessage, AskNote, SnippetPart},
+    bg,
+};
 
 #[derive(Default)]
 struct Turn {
@@ -20,6 +24,8 @@ struct Turn {
     /// The notes found; None while searching.
     notes: Option<Vec<AskNote>>,
     terms: Vec<String>,
+    /// What Scribe did in the turn, in order; the ones that changed something offer an Undo.
+    actions: Vec<AskAction>,
     /// The answer so far, as it streams in.
     answer: String,
     /// Set once the answer is finished: the notes it cites.
@@ -27,6 +33,8 @@ struct Turn {
     /// The notes didn't say.
     none: bool,
     error: Option<String>,
+    /// The actions already taken back, by their (turn, index) key.
+    undone: std::collections::HashSet<usize>,
     widget: gtk::Box,
 }
 
@@ -65,6 +73,20 @@ pub fn questionish(q: &str) -> bool {
         || ["who", "what", "when", "where", "why", "how", "which", "is", "are", "do", "does", "did", "can", "should"].contains(&first)
 }
 
+/// An action's icon, by what it did.
+fn action_icon(kind: &str) -> &'static str {
+    match kind {
+        "created" => "note-add-symbolic",
+        "appended" => "list-add-symbolic",
+        "task_added" => "list-add-symbolic",
+        "task_done" => "object-select-symbolic",
+        "replaced" => "document-edit-symbolic",
+        "moved" => "folder-symbolic",
+        "trashed" => "user-trash-symbolic",
+        _ => "starred-symbolic",
+    }
+}
+
 impl Ask {
     pub fn new(main: &Rc<Main>) -> Rc<Ask> {
         let new_chat = gtk::Button::builder().icon_name("list-add-symbolic").tooltip_text("New Chat").visible(false).build();
@@ -73,8 +95,8 @@ impl Ask {
 
         let empty = adw::StatusPage::builder()
             .icon_name("starred-symbolic")
-            .title("Ask Your Notes")
-            .description("Ask a question, and get an answer from your notes with links to them.")
+            .title("Scribe")
+            .description("Ask a question, and get an answer from your notes with links to them. It can also make and change notes, at the level you choose in Account.")
             .vexpand(true)
             .build();
         let turns_box = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(28).build();
@@ -98,12 +120,12 @@ impl Ask {
         stack.add_named(&scroll, Some("chat"));
 
         let entry = gtk::Entry::builder()
-            .placeholder_text("Ask your notes…")
+            .placeholder_text("Ask Scribe…")
             .primary_icon_name("starred-symbolic")
             .max_length(1000)
             .hexpand(true)
             .build();
-        let send = gtk::Button::builder().icon_name("go-up-symbolic").tooltip_text("Ask").css_classes(["suggested-action", "circular"]).sensitive(false).build();
+        let send = gtk::Button::builder().icon_name("go-up-symbolic").tooltip_text("Send").css_classes(["suggested-action", "circular"]).sensitive(false).build();
         let composer = gtk::Box::builder().spacing(8).margin_top(8).margin_bottom(12).margin_start(12).margin_end(12).build();
         composer.append(&entry);
         composer.append(&send);
@@ -113,7 +135,7 @@ impl Ask {
         view.add_top_bar(&header);
         view.set_content(Some(&stack));
         view.add_bottom_bar(&bottom);
-        let page = adw::NavigationPage::builder().title("Ask").tag("ask").child(&view).build();
+        let page = adw::NavigationPage::builder().title("Scribe").tag("ask").child(&view).build();
 
         let ask = Rc::new(Ask {
             main: Rc::downgrade(main),
@@ -200,7 +222,7 @@ impl Ask {
         let chatting = !self.turns.borrow().is_empty();
         self.stack.set_visible_child_name(if chatting { "chat" } else { "empty" });
         self.new_chat.set_visible(chatting);
-        self.entry.set_placeholder_text(Some(if chatting { "Ask a follow-up…" } else { "Ask your notes…" }));
+        self.entry.set_placeholder_text(Some(if chatting { "Ask a follow-up…" } else { "Ask Scribe…" }));
         self.disclaimer.set_visible(self.turns.borrow().iter().any(|t| !t.answer.is_empty()));
         self.refresh_send();
     }
@@ -256,7 +278,30 @@ impl Ask {
         });
     }
 
-    fn on_event(&self, index: usize, ev: AskEvent) {
+    /// Takes one of Scribe's changes back, and strikes the card's button.
+    fn undo_action(self: &Rc<Self>, index: usize, j: usize) {
+        let Some(main) = self.main.upgrade() else { return };
+        let Some(a) = self.turns.borrow().get(index).and_then(|t| t.actions.get(j)).cloned() else { return };
+        let api = main.store.api.clone();
+        let main2 = main.clone();
+        let weak = Rc::downgrade(self);
+        glib::spawn_future_local(async move {
+            let ok = bg(async move { api.undo_ask_action(&a).await }).await.is_ok();
+            if let Some(me) = weak.upgrade() {
+                if ok {
+                    if let Some(t) = me.turns.borrow_mut().get_mut(index) {
+                        t.undone.insert(j);
+                    }
+                    me.draw(index);
+                    me.refresh();
+                } else {
+                    main2.toast("Couldn't undo that");
+                }
+            }
+        });
+    }
+
+    fn on_event(self: &Rc<Self>, index: usize, ev: AskEvent) {
         {
             let mut turns = self.turns.borrow_mut();
             let Some(t) = turns.get_mut(index) else { return };
@@ -266,6 +311,7 @@ impl Ask {
                     t.terms = s.terms;
                 }
                 AskEvent::Text(piece) => t.answer.push_str(&piece),
+                AskEvent::Action(a) => t.actions.push(a),
                 AskEvent::Done(d) => {
                     t.none = d.answer.is_none();
                     t.answer = d.answer.unwrap_or_default();
@@ -287,7 +333,7 @@ impl Ask {
     }
 
     /// Draws a turn again: question, status, answer and cards.
-    fn draw(&self, index: usize) {
+    fn draw(self: &Rc<Self>, index: usize) {
         let turns = self.turns.borrow();
         let Some(t) = turns.get(index) else { return };
         while let Some(c) = t.widget.first_child() {
@@ -340,6 +386,43 @@ impl Ask {
         } else if t.none {
             t.widget.append(&status("Your notes don't seem to say. These came closest:", false));
         }
+        // What Scribe did in the turn: an icon, the note's title, the text it wrote, and an Undo.
+        if !t.actions.is_empty() {
+            let actions = gtk::ListBox::builder().css_classes(["boxed-list"]).selection_mode(gtk::SelectionMode::None).build();
+            for (j, a) in t.actions.iter().enumerate() {
+                let undone = t.undone.contains(&j);
+                let row = adw::ActionRow::builder().activatable(true).build();
+                row.add_prefix(&gtk::Image::from_icon_name(action_icon(&a.kind)));
+                let title = if a.title.trim().is_empty() { "New Note" } else { a.title.as_str() };
+                row.set_title(&glib::markup_escape_text(title));
+                if !a.text.is_empty() {
+                    row.set_subtitle(&glib::markup_escape_text(&a.text));
+                    row.set_subtitle_lines(2);
+                }
+                let (m, note, line) = (self.main.clone(), a.note.clone(), a.line);
+                row.connect_activated(move |_| {
+                    if let Some(m) = m.upgrade() {
+                        if let Some(line) = line {
+                            m.open_task(&note, line as usize);
+                        } else {
+                            m.open_note(&note, true);
+                        }
+                    }
+                });
+                if !undone {
+                    let undo = gtk::Button::builder().label("Undo").css_classes(["flat"]).build();
+                    let (weak, index, j) = (Rc::downgrade(self), index, j);
+                    undo.connect_clicked(move |_| {
+                        if let Some(me) = weak.upgrade() {
+                            me.undo_action(index, j);
+                        }
+                    });
+                    row.add_suffix(&undo);
+                }
+                actions.append(&row);
+            }
+            t.widget.append(&actions);
+        }
         // Every note found, then only the ones the finished answer cites.
         let shown: Vec<&AskNote> = match &t.cited {
             Some(c) if !c.is_empty() => c.iter().filter_map(|n| notes.iter().find(|x| x.n == *n)).collect(),
@@ -377,6 +460,12 @@ impl Ask {
     pub fn cited_note(&self, n: u32) -> Option<String> {
         let turns = self.turns.borrow();
         turns.last()?.notes.as_ref()?.iter().find(|x| x.n == n).map(|x| x.note.clone())
+    }
+
+    /// What Scribe did in the last turn: each action's title and text, for checks.
+    pub fn action_texts(&self) -> Vec<String> {
+        let turns = self.turns.borrow();
+        turns.last().map(|t| t.actions.iter().map(|a| format!("{} {}", a.title, a.text)).collect()).unwrap_or_default()
     }
 }
 

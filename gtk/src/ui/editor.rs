@@ -102,6 +102,10 @@ pub struct Editor {
     /// while something in it has focus.
     redraw_block: Cell<Option<u64>>,
     spare_slots: RefCell<Vec<gtk::Box>>,
+    /// File links on their own line, drawn as rows over their Markdown.
+    file_views: RefCell<Vec<FileView>>,
+    next_file: Cell<u64>,
+    placing_files: Cell<bool>,
     /// The start of the table or board being edited as its Markdown (Edit as Text), if one is.
     text_block: RefCell<Option<gtk::TextMark>>,
     /// Where the cursor was, to know which way it was going.
@@ -179,6 +183,24 @@ impl NoteHandler for Handler {
 
 fn icon_button(icon: &str, tooltip: &str) -> gtk::Button {
     gtk::Button::builder().icon_name(icon).tooltip_text(tooltip).css_classes(["flat"]).build()
+}
+
+/// A file's size, e.g. "4 B", "1.2 KB", "3 MB".
+fn human_size(n: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut v = n as f64;
+    let mut i = 0;
+    while v >= 1024.0 && i < UNITS.len() - 1 {
+        v /= 1024.0;
+        i += 1;
+    }
+    if i == 0 {
+        format!("{n} B")
+    } else if v < 10.0 {
+        format!("{v:.1} {}", UNITS[i])
+    } else {
+        format!("{v:.0} {}", UNITS[i])
+    }
 }
 
 /// The paragraph styles the format bar offers, with the Markdown that starts their line.
@@ -438,6 +460,9 @@ impl Editor {
             placing_blocks: Cell::new(false),
             redraw_block: Cell::new(None),
             spare_slots: Default::default(),
+            file_views: Default::default(),
+            next_file: Cell::new(0),
+            placing_files: Cell::new(false),
             text_block: Default::default(),
             last_cursor: Cell::new(0),
             recording: Default::default(),
@@ -733,6 +758,7 @@ impl Editor {
             let media = gio::Menu::new();
             menu.insert_section(1, None, &media);
             action(&media, "Add Photo…", "photo", open(|_, e| e.pick_photo()));
+            action(&media, "Add File…", "file", open(|_, e| e.pick_file()));
             action(&media, "Record Voice Memo", "record", open(|_, e| e.start_recording()));
         }
         // A list like groceries keeps its checkboxes out of Tasks; Clear Done takes out ticked items.
@@ -1065,6 +1091,7 @@ impl Editor {
                 }
             }
             Pick::Photo => self.pick_photo(),
+            Pick::File => self.pick_file(),
             Pick::Voice => self.start_recording(),
             Pick::Prompt => super::ai::prompt_popover(&main, self),
             Pick::Tidy => super::ai::rewrite_dialog(&main, self, super::ai::Rewrite::Tidy),
@@ -1846,24 +1873,44 @@ impl Editor {
         self.upload(&name, &mime, bytes.to_vec()).await;
     }
 
-    /// Uploads a file and links it on its own line at the cursor.
+    /// Uploads a file and links it on its own line at the cursor: a photo or recording as an
+    /// image, anything else as a plain file link.
     async fn upload(self: &Rc<Self>, name: &str, mime: &str, bytes: Vec<u8>) {
         if !self.can_edit() {
             return;
         }
+        let media = mime.starts_with("image/") || mime.starts_with("audio/");
         let api = self.store.api.clone();
         let (id, name2, mime2) = (self.id.clone(), name.to_owned(), mime.to_owned());
         match bg(async move { api.upload(&id, &name2, &mime2, bytes).await }).await {
             Ok(att) => {
-                let alt: String = name.rsplit_once('.').map_or(name, |(a, _)| a).chars().filter(|c| !"[]".contains(*c)).collect();
+                let link = if media {
+                    let alt: String = name.rsplit_once('.').map_or(name, |(a, _)| a).chars().filter(|c| !"[]".contains(*c)).collect();
+                    format!("![{alt}](att:{})\n", att.id)
+                } else {
+                    format!("[{}] (att:{})\n", att.filename, att.id).replace(") (", "](")
+                };
                 self.edit(|b| {
                     let mut at = b.iter_at_mark(&b.get_insert());
                     let before = if at.starts_line() { "" } else { "\n" };
-                    b.insert(&mut at, &format!("{before}![{alt}](att:{})\n", att.id));
+                    b.insert(&mut at, &format!("{before}{link}"));
                 });
             }
             Err(e) => self.store.toast(&format!("Couldn't add the file: {e}")),
         }
+    }
+
+    /// Picks any file to attach, as a plain link on its own line.
+    pub fn pick_file(self: &Rc<Self>) {
+        let e = self;
+        let Some(main) = e.main.upgrade() else { return };
+        let dialog = gtk::FileDialog::builder().title("Add File").modal(true).build();
+        let e = e.clone();
+        dialog.open(Some(&main.window), gio::Cancellable::NONE, move |file| {
+            if let Ok(file) = file {
+                glib::spawn_future_local(async move { e.upload_file(&file).await });
+            }
+        });
     }
 
     /// Starts a voice memo: where it goes is picked now, and shown in the bar while recording.
@@ -2319,6 +2366,7 @@ impl Editor {
         }
         self.view.set_pictures(pictures);
         self.show_blocks(&text, &styled, active);
+        self.place_files(&text, &styled);
         self.styled.replace(styled);
         self.show_blame(&text);
     }
@@ -2415,6 +2463,155 @@ impl Editor {
                 }
             });
         }
+    }
+
+    /// File links on their own line, drawn as rows over their Markdown.
+    fn place_files(&self, text: &str, styled: &markdown::Styled) {
+        if self.placing_files.replace(true) {
+            self.queue_restyle();
+            return;
+        }
+        let chars: Vec<char> = text.chars().collect();
+        let mut wanted: Vec<(usize, usize, String)> = Vec::new();
+        for l in &styled.links {
+            let Some(att) = l.url.strip_prefix("att:") else { continue };
+            // Its line, in characters.
+            let mut ls = l.start;
+            while ls > 0 && chars[ls - 1] != '\n' {
+                ls -= 1;
+            }
+            let mut le = l.end;
+            while le < chars.len() && chars[le] != '\n' {
+                le += 1;
+            }
+            let line: String = chars[ls..le].iter().collect();
+            let link: String = chars[l.start..l.end].iter().collect();
+            if line.trim() != link.trim() {
+                continue; // not on its own line: a normal link in a sentence
+            }
+            wanted.push((l.start, l.end, att.to_owned()));
+        }
+        wanted.sort_by_key(|w| w.0);
+        let width = self.view.fit_width();
+        let mut old: Vec<Option<FileView>> = self.file_views.take().into_iter().map(Some).collect();
+        let mut kept = Vec::new();
+        for (i, &(s, e, ref att)) in wanted.iter().enumerate() {
+            let nth = wanted[..i].iter().filter(|w| w.2 == *att).count();
+            let prev = old.iter().enumerate().filter(|(_, b)| b.as_ref().is_some_and(|b| b.att == *att)).nth(nth).map(|(p, _)| p);
+            let fresh = |slot: gtk::Box| {
+                let id = self.next_file.get() + 1;
+                self.next_file.set(id);
+                while let Some(c) = slot.first_child() {
+                    slot.remove(&c);
+                }
+                slot.append(&self.file_widget(att));
+                (id, slot)
+            };
+            let (id, slot) = match prev.and_then(|p| old[p].take()) {
+                Some(b) if b.att == *att => (b.id, b.slot),
+                Some(b) => fresh(b.slot),
+                None => fresh(self.free_slot()),
+            };
+            slot.set_size_request(width, -1);
+            let (_, measured, _, _) = slot.measure(gtk::Orientation::Vertical, width);
+            let h = measured.max(slot.height());
+            let mut line_end = self.buffer.iter_at_offset(e as i32);
+            if !line_end.ends_line() {
+                line_end.forward_to_line_end();
+            }
+            self.buffer.apply_tag(&self.photo_tag(h + 12), &self.buffer.iter_at_offset(s as i32), &line_end);
+            let loc = self.view.iter_location(&self.buffer.iter_at_offset(s as i32));
+            self.view.move_overlay(&slot, loc.x(), loc.y() + 4);
+            kept.push(FileView { id, att: att.to_owned(), slot });
+        }
+        for b in old.into_iter().flatten() {
+            self.release_slot(b.slot);
+        }
+        self.file_views.replace(kept);
+        self.placing_files.set(false);
+    }
+
+    /// The row for a file link: a symbolic icon, the name, and the size. Clicking downloads it to
+    /// a temp folder and opens it with the default app.
+    fn file_widget(&self, att: &str) -> gtk::Widget {
+        let row = gtk::Box::builder().spacing(12).margin_top(6).margin_bottom(6).margin_start(12).margin_end(12).build();
+        row.add_css_class("file-row");
+        let icon = gtk::Image::from_icon_name("file-symbolic");
+        icon.set_pixel_size(24);
+        row.append(&icon);
+        let name = gtk::Label::builder().hexpand(true).xalign(0.0).ellipsize(gtk::pango::EllipsizeMode::End).build();
+        row.append(&name);
+        let size = gtk::Label::builder().css_classes(["dim-label"]).build();
+        row.append(&size);
+        let (api, att2, name2, size2) = (self.store.api.clone(), att.to_owned(), name.clone(), size.clone());
+        glib::spawn_future_local(async move {
+            match bg(async move { api.attachment_meta(&att2).await }).await {
+                Ok(m) => {
+                    name2.set_text(&m.filename);
+                    size2.set_text(&human_size(m.size));
+                }
+                Err(_) => name2.set_text("(unavailable)"),
+            }
+        });
+        let weak = self.me.clone();
+        let att3 = att.to_owned();
+        let clicks = gtk::EventControllerLegacy::new();
+        clicks.connect_event(move |_, ev| {
+            if ev.event_type() == gdk::EventType::ButtonRelease {
+                if let Some(e) = weak.upgrade() {
+                    e.open_file(&att3);
+                }
+            }
+            glib::Propagation::Proceed
+        });
+        row.add_controller(clicks);
+        row.upcast()
+    }
+
+    /// Downloads a file to a temp folder and opens it with the default app.
+    pub fn open_file(self: &Rc<Self>, att: &str) {
+        let Some(main) = self.main.upgrade() else { return };
+        let api = self.store.api.clone();
+        let att = att.to_owned();
+        let me = self.clone();
+        let main2 = main.clone();
+        glib::spawn_future_local(async move {
+            let (api2, att2) = (api.clone(), att.clone());
+            let meta = match bg(async move { api2.attachment_meta(&att2).await }).await {
+                Ok(m) => m,
+                Err(e) => {
+                    me.store.toast(&format!("Couldn't open the file: {e}"));
+                    return;
+                }
+            };
+            let att3 = att.clone();
+            let bytes = match bg(async move { api.attachment(&att3).await }).await {
+                Ok(b) => b,
+                Err(e) => {
+                    me.store.toast(&format!("Couldn't download the file: {e}"));
+                    return;
+                }
+            };
+            // Its own folder, under its name: only the name's last part, so it can't land elsewhere,
+            // and one folder per attachment, so two files with the same name don't overwrite.
+            let name = std::path::Path::new(&meta.filename).file_name().map(|n| n.to_owned()).unwrap_or_else(|| "attachment".into());
+            let att: String = att.chars().filter(|c| c.is_ascii_hexdigit() || *c == '-').collect();
+            let dir = std::env::temp_dir().join(format!("gnotes-{}", std::process::id())).join(att);
+            let path = dir.join(name);
+            if std::fs::create_dir_all(&dir).is_err() || std::fs::write(&path, &bytes).is_err() {
+                me.store.toast("Couldn't save the file");
+                return;
+            }
+            let file = gio::File::for_path(&path);
+            let launcher = gtk::FileLauncher::new(Some(&file));
+            let window = main2.window.clone();
+            let me2 = me.clone();
+            launcher.launch(Some(&window), None::<&gio::Cancellable>, move |res| {
+                if let Err(e) = res {
+                    me2.store.toast(&format!("Couldn't open the file: {e}"));
+                }
+            });
+        });
     }
 
     /// An empty slot over the text for a table or board. GTK has no way to take a widget back out
@@ -2970,6 +3167,11 @@ impl Editor {
         self.view.pictures().iter().map(|p| p.id.clone()).collect()
     }
 
+    /// The file links on their own line showing, by attachment id.
+    pub fn file_ids(&self) -> Vec<String> {
+        self.file_views.borrow().iter().map(|f| f.att.clone()).collect()
+    }
+
     /// Adds a file as Add Photo does.
     pub fn add_file(self: &Rc<Self>, path: &str) {
         let (e, file) = (self.clone(), gio::File::for_path(path));
@@ -3082,6 +3284,14 @@ struct BlockView {
     end: usize,
     text: String,
     /// The slot in the view its widget is in (see `free_slot`).
+    slot: gtk::Box,
+}
+
+/// A file link on its own line, shown as a row: a symbolic icon, the name, and the size.
+struct FileView {
+    id: u64,
+    /// The attachment's id, from the link's `att:<id>`.
+    att: String,
     slot: gtk::Box,
 }
 

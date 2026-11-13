@@ -20,6 +20,7 @@ pub enum Pick {
     /// Opens the emoji list at the cursor.
     Emoji,
     Photo,
+    File,
     Voice,
     Prompt,
     Tidy,
@@ -107,6 +108,7 @@ pub fn slash_items(query: &str, ai: bool) -> Vec<Item> {
         item("Kanban Board", "view-grid-symbolic", Pick::Board),
         item("Emoji", "face-smile-symbolic", Pick::Emoji),
         item("Photo", "camera-photo-symbolic", Pick::Photo),
+        item("File", "file-symbolic", Pick::File),
         item("Voice Memo", "audio-input-microphone-symbolic", Pick::Voice),
     ];
     if ai {

@@ -109,6 +109,36 @@ fn account_page(main: &Rc<Main>, dialog: &adw::PreferencesDialog) -> adw::Prefer
     notes.add(&import);
     page.add(&notes);
 
+    let scribe = adw::PreferencesGroup::builder()
+        .title("Scribe")
+        .description("What Scribe may do with your notes. It always acts as you: it never sees or changes a note you couldn't, and never shares, unshares or empties the trash.")
+        .build();
+    let opts = gio::ListStore::new::<gtk::StringObject>();
+    for label in ["Read only", "Add", "Full"] {
+        opts.append(&gtk::StringObject::new(label));
+    }
+    let current = main.store.user().scribe_access.clone().unwrap_or_else(|| "add".into());
+    let index = match current.as_str() { "read" => 0, "full" => 2, _ => 1 };
+    let choice = adw::ComboRow::builder().title("What Scribe may do").model(&opts).selected(index).build();
+    scribe.add(&choice);
+    let no_tools = gtk::Label::builder().css_classes(["dim-label", "caption"]).margin_start(12).margin_end(12).build();
+    no_tools.set_label("Actions need a chat model with tool calling; Scribe answers only.");
+    no_tools.set_visible(!main.store.features.borrow().ask_actions);
+    scribe.add(&no_tools);
+    let m = main.clone();
+    choice.connect_selected_notify(move |choice| {
+        let access = match choice.selected() { 0 => "read", 2 => "full", _ => "add" };
+        let m = m.clone();
+        glib::spawn_future_local(async move {
+            let api = m.store.api.clone();
+            if let Some(user) = call(&m, async move { api.set_scribe_access(access).await }).await {
+                m.store.set_user(user);
+                m.toast("Scribe saved");
+            }
+        });
+    });
+    page.add(&scribe);
+
     let devices = adw::PreferencesGroup::builder().title("Devices").build();
     let others = adw::ActionRow::builder().title("Other Devices").subtitle("Signs out everywhere but here").build();
     let out = button("Log Out Others");
@@ -623,16 +653,16 @@ const SERVICES: [Service; 4] = [
     Service {
         kind: "summary",
         title: "AI Summaries",
-        subtitle: "Summarize notes, and answer Ask Your Notes",
-        explain: "Summaries, Tidy Up, Edit with AI, the AI Prompt block and Ask's answers use this chat model. Nothing is sent until someone asks. Any OpenAI-compatible chat service works.",
+        subtitle: "Summarize notes, and answer Scribe",
+        explain: "Summaries, Tidy Up, Edit with AI, the AI Prompt block and Scribe's answers use this chat model. Nothing is sent until someone asks. Any OpenAI-compatible chat service works.",
         url: "http://ollama:11434/v1",
         model: "llama3.1",
     },
     Service {
         kind: "embed",
         title: "Semantic Search",
-        subtitle: "Find notes by meaning in Ask",
-        explain: "Notes are sent here in pieces to be indexed, and again after edits, so Ask finds them by meaning. Any OpenAI-compatible embeddings service works, such as Ollama with nomic-embed-text.",
+        subtitle: "Find notes by meaning in Scribe",
+        explain: "Notes are sent here in pieces to be indexed, and again after edits, so Scribe finds them by meaning. Any OpenAI-compatible embeddings service works, such as Ollama with nomic-embed-text.",
         url: "http://ollama:11434/v1",
         model: "nomic-embed-text",
     },
