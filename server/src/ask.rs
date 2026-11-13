@@ -81,7 +81,8 @@ pub(crate) fn tools_rejected_reset() {
 }
 
 /// One thing Scribe did in a turn, sent to the app as an `action` event and what its Undo takes
-/// back. `before` is the replaced text or the old notebook's name, when there is one.
+/// back. `before` is what was there: the replaced lines, the old notebook's id, or a ticked
+/// task's old state ("done" or "open").
 #[derive(Serialize, Deserialize)]
 struct Action {
     /// `created`, `appended`, `task_added`, `task_done`, `replaced`, `moved` or `trashed`.
@@ -92,6 +93,9 @@ struct Action {
     text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     before: Option<String>,
+    /// The replaced lines as they read after the change, for Undo to find them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    after: Option<String>,
     /// The task's line, for task actions, so the app can open the note there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     line: Option<i64>,
@@ -552,7 +556,7 @@ async fn turn(state: AppState, me: User, embed_cfg: ChatConfig, chat_cfg: ChatCo
 async fn scribe_turn(state: &AppState, me: &User, cfg: &ChatConfig, messages: &[Value], n_notes: usize, tx: &mpsc::Sender<Event>) -> ApiResult<()> {
     let tools = tools_for(me.scribe_access);
     let mut messages = messages.to_vec();
-    for _ in 0..MAX_TOOL_CALLS {
+    for round in 0..MAX_TOOL_CALLS {
         let mut reply = String::new();
         let mut sent = 0;
         let (content, calls) = crate::chat::stream_tools(state, cfg, json!(messages), Some(tools.clone()), "Scribe", |piece| {
@@ -565,7 +569,13 @@ async fn scribe_turn(state: &AppState, me: &User, cfg: &ChatConfig, messages: &[
             sent = text.len();
             tx.try_send(event("delta", json!({ "text": fresh }))).is_ok() || !tx.is_closed()
         })
-        .await?;
+        .await
+        // Only the first request says whether the service takes tools; a 400 after a tool ran
+        // (a reply too long for the context, say) is just an error, not a reason to stop offering them.
+        .map_err(|e| match e {
+            AppError::ToolsRejected if round > 0 => AppError::Conflict("The Scribe service returned an error".into()),
+            e => e,
+        })?;
         if calls.is_empty() {
             let answer = crate::summary::clean(shown(&content).unwrap_or_default());
             let done = if answer.is_empty() || is_no_answer(&answer) {
@@ -701,7 +711,7 @@ async fn run_tool(state: &AppState, me: &User, name: &str, args: &Value) -> Resu
             let (title, _) = read_note_text(state, &me.id, Uuid::parse_str(&id).unwrap()).await?;
             Ok((
                 json!({ "note": id, "title": title }).to_string(),
-                Some(Action { kind: "created".into(), note: id, title, text: text.to_owned(), before: None, line: None }),
+                Some(Action { kind: "created".into(), note: id, title, text: text.to_owned(), before: None, after: None, line: None }),
             ))
         }
         "append_to_note" => {
@@ -730,7 +740,7 @@ async fn run_tool(state: &AppState, me: &User, name: &str, args: &Value) -> Resu
             let (title, _) = read_note_text(state, &me.id, uuid).await?;
             Ok((
                 json!({ "note": uuid.to_string(), "title": title }).to_string(),
-                Some(Action { kind: "appended".into(), note: uuid.to_string(), title, text: text.to_owned(), before: None, line: None }),
+                Some(Action { kind: "appended".into(), note: uuid.to_string(), title, text: text.to_owned(), before: None, after: None, line: None }),
             ))
         }
         "add_task" => {
@@ -768,7 +778,7 @@ async fn run_tool(state: &AppState, me: &User, name: &str, args: &Value) -> Resu
             };
             Ok((
                 json!({ "note": id, "title": title }).to_string(),
-                Some(Action { kind: "task_added".into(), note: id, title, text: line, before: None, line: Some(last_line) }),
+                Some(Action { kind: "task_added".into(), note: id, title, text: line, before: None, after: None, line: Some(last_line) }),
             ))
         }
         "set_task_done" => {
@@ -776,11 +786,21 @@ async fn run_tool(state: &AppState, me: &User, name: &str, args: &Value) -> Resu
             let Some(line) = args.get("line").and_then(|v| v.as_u64()) else { return err("Send the task's line") };
             let Some(text) = args.get("text").and_then(|v| v.as_str()) else { return err("Send the task's text") };
             let Some(done) = args.get("done").and_then(|v| v.as_bool()) else { return err("Send done: true or false") };
+            let (_, body) = read_note_text(state, &me.id, uuid).await?;
+            let was_done = tasks::parse(&body).into_iter().find(|t| t.line == line as usize && t.text == text).map(|t| t.done);
             tasks::set_done(state, &me.id, &uuid.to_string(), line as usize, text, done).await?;
             let (title, _) = read_note_text(state, &me.id, uuid).await?;
             Ok((
                 json!({ "ok": true }).to_string(),
-                Some(Action { kind: "task_done".into(), note: uuid.to_string(), title, text: text.to_owned(), before: None, line: Some(line as i64) }),
+                Some(Action {
+                    kind: "task_done".into(),
+                    note: uuid.to_string(),
+                    title,
+                    text: text.to_owned(),
+                    before: Some(if was_done.unwrap_or(!done) { "done" } else { "open" }.into()),
+                    after: None,
+                    line: Some(line as i64),
+                }),
             ))
         }
         "replace_in_note" => {
@@ -791,27 +811,36 @@ async fn run_tool(state: &AppState, me: &User, name: &str, args: &Value) -> Resu
             };
             let replace = args.get("replace").and_then(|v| v.as_str()).unwrap_or_default();
             let mut not_found = false;
-            let mut replaced = false;
+            let mut replaced = None;
             write_text(state, uuid, &me.id, None, |body| {
                 if body.matches(find).count() != 1 {
                     not_found = true;
                     return body.to_owned();
                 }
-                replaced = true;
-                body.replacen(find, replace, 1)
+                let new = body.replacen(find, replace, 1);
+                replaced = Some(changed_lines(body, &new));
+                new
             })
             .await?;
-            if !replaced {
+            let Some((before, after)) = replaced else {
                 return err(if not_found {
                     "That text isn't in the note, or it appears more than once"
                 } else {
                     "The note changed while this was running; try again"
                 });
-            }
+            };
             let (title, _) = read_note_text(state, &me.id, uuid).await?;
             Ok((
                 json!({ "ok": true }).to_string(),
-                Some(Action { kind: "replaced".into(), note: uuid.to_string(), title, text: replace.to_owned(), before: Some(find.to_owned()), line: None }),
+                Some(Action {
+                    kind: "replaced".into(),
+                    note: uuid.to_string(),
+                    title,
+                    text: replace.to_owned(),
+                    before: Some(before),
+                    after: Some(after),
+                    line: None,
+                }),
             ))
         }
         "move_note" => {
@@ -822,17 +851,16 @@ async fn run_tool(state: &AppState, me: &User, name: &str, args: &Value) -> Resu
             let target = find_notebook(state, me, name)
                 .await?
                 .ok_or_else(|| AppError::BadRequest(format!("There's no notebook named {name}")))?;
-            let old: Option<String> = sqlx::query_scalar(
-                "SELECT n.name FROM notes n JOIN notebooks nb ON nb.id = n.notebook_id WHERE n.id = ?",
-            )
-            .bind(uuid.to_string())
-            .fetch_optional(&state.db)
-            .await?;
+            let old: Option<String> = sqlx::query_scalar("SELECT notebook_id FROM notes WHERE id = ?")
+                .bind(uuid.to_string())
+                .fetch_optional(&state.db)
+                .await?
+                .flatten();
             move_note(state, &me.id, &uuid.to_string(), Some(&target)).await?;
             let (title, _) = read_note_text(state, &me.id, uuid).await?;
             Ok((
                 json!({ "ok": true }).to_string(),
-                Some(Action { kind: "moved".into(), note: uuid.to_string(), title, text: name.to_owned(), before: old, line: None }),
+                Some(Action { kind: "moved".into(), note: uuid.to_string(), title, text: name.to_owned(), before: old, after: None, line: None }),
             ))
         }
         "trash_note" => {
@@ -841,7 +869,7 @@ async fn run_tool(state: &AppState, me: &User, name: &str, args: &Value) -> Resu
             trash_note(state, &me.id, &uuid.to_string()).await?;
             Ok((
                 json!({ "ok": true }).to_string(),
-                Some(Action { kind: "trashed".into(), note: uuid.to_string(), title, text: String::new(), before: None, line: None }),
+                Some(Action { kind: "trashed".into(), note: uuid.to_string(), title, text: String::new(), before: None, after: None, line: None }),
             ))
         }
         _ => Err(ToolError::Other(format!("Unknown tool {name}"))),
@@ -959,6 +987,12 @@ pub struct UndoBody {
 pub async fn undo(State(state): State<AppState>, CurrentUser(me): CurrentUser, Json(body): Json<UndoBody>) -> ApiResult<Json<Value>> {
     let a = &body.action;
     let id = Uuid::parse_str(&a.note).map_err(|_| AppError::NotFound)?;
+    // The action comes back from the app, so it's checked like any edit: the note must be one
+    // this user may change, whatever the action says.
+    if matches!(a.kind.as_str(), "appended" | "task_added" | "replaced") {
+        require_editor(&state, &me.id, &id).await?;
+    }
+    let gone = |what: &str| Err(AppError::Conflict(format!("{what} isn't in the note any more")));
     match a.kind.as_str() {
         "created" => trash_note(&state, &me.id, &a.note).await?,
         "appended" => {
@@ -980,13 +1014,9 @@ pub async fn undo(State(state): State<AppState>, CurrentUser(me): CurrentUser, J
             let removed = std::sync::atomic::AtomicBool::new(false);
             write_text(&state, id, &me.id, None, |body| {
                 let mut lines: Vec<&str> = body.split('\n').collect();
-                if let Some(i) = lines
-                    .iter()
-                    .position(|l| {
-                        let t = l.trim_start();
-                        (t.starts_with("- [ ] ") || t.starts_with("* [ ] ") || t.starts_with("+ [ ] ")) && l.contains(&a.text)
-                    })
-                {
+                // The line Scribe wrote, where it wrote it; else the same line where it has moved to.
+                let at = a.line.and_then(|l| usize::try_from(l).ok()).filter(|&l| lines.get(l).is_some_and(|l| l.trim() == a.text.trim()));
+                if let Some(i) = at.or_else(|| lines.iter().position(|l| l.trim() == a.text.trim())) {
                     lines.remove(i);
                     removed.store(true, std::sync::atomic::Ordering::Relaxed);
                 }
@@ -994,57 +1024,59 @@ pub async fn undo(State(state): State<AppState>, CurrentUser(me): CurrentUser, J
             })
             .await?;
             if !removed.load(std::sync::atomic::Ordering::Relaxed) {
-                return Err(AppError::Conflict("That task isn't in the note any more".into()));
+                return gone("That task");
             }
         }
         "task_done" => {
-            let changed = std::sync::atomic::AtomicBool::new(false);
-            write_text(&state, id, &me.id, None, |body| {
-                let Some(task) = tasks::parse(body).into_iter().find(|t| t.text == a.text) else {
-                    return body.to_owned();
-                };
-                changed.store(true, std::sync::atomic::Ordering::Relaxed);
-                let mut lines: Vec<String> = body.split('\n').map(str::to_owned).collect();
-                let l = &lines[task.line];
-                let open = l.find('[').expect("a checkbox line has a [");
-                lines[task.line] = format!("{}[{}]{}", &l[..open], if task.done { ' ' } else { 'x' }, &l[open + 3..]);
-                lines.join("\n")
-            })
-            .await?;
-            if !changed.load(std::sync::atomic::Ordering::Relaxed) {
-                return Err(AppError::Conflict("That task isn't in the note any more".into()));
-            }
+            // Back to how it was, not flipped, so a second Undo changes nothing.
+            let Some(line) = a.line.and_then(|l| usize::try_from(l).ok()) else { return gone("That task") };
+            let was_done = a.before.as_deref() == Some("done");
+            tasks::set_done(&state, &me.id, &a.note, line, &a.text, was_done).await?;
         }
         "replaced" => {
-            let Some(before) = &a.before else { return Err(AppError::Conflict("Nothing to put back".into())) };
+            let (Some(before), Some(after)) = (&a.before, &a.after) else {
+                return Err(AppError::Conflict("Nothing to put back".into()));
+            };
             let undone = std::sync::atomic::AtomicBool::new(false);
             write_text(&state, id, &me.id, None, |body| {
-                if a.text.is_empty() || !body.contains(&a.text) || body.contains(before) {
+                let found = if after.is_empty() { body.is_empty() } else { body.matches(after.as_str()).count() == 1 };
+                if !found {
                     return body.to_owned();
                 }
                 undone.store(true, std::sync::atomic::Ordering::Relaxed);
-                body.replacen(&a.text, before, 1)
+                if after.is_empty() { before.clone() } else { body.replacen(after.as_str(), before, 1) }
             })
             .await?;
             if !undone.load(std::sync::atomic::Ordering::Relaxed) {
                 return Err(AppError::Conflict("That change can't be undone any more".into()));
             }
         }
-        "moved" => {
-            let target = match &a.before {
-                Some(name) => Some(
-                    find_notebook(&state, &me, name)
-                        .await?
-                        .ok_or_else(|| AppError::NotFound)?,
-                ),
-                None => None,
-            };
-            move_note(&state, &me.id, &a.note, target.as_deref()).await?;
-        }
+        "moved" => move_note(&state, &me.id, &a.note, a.before.as_deref()).await?,
         "trashed" => crate::tree::restore_item(&state, &me.id, "note", &a.note).await?,
         _ => return Err(AppError::BadRequest("Unknown action".into())),
     }
     Ok(Json(json!({ "ok": true })))
+}
+
+/// The whole lines a replace changed, as they read before and after it, widened by a line at a
+/// time until the after side is found once in the new text (so a deletion still has an anchor).
+fn changed_lines(old: &str, new: &str) -> (String, String) {
+    let (a, b): (Vec<&str>, Vec<&str>) = (old.split('\n').collect(), new.split('\n').collect());
+    let mut pre = a.iter().zip(&b).take_while(|(x, y)| x == y).count();
+    let most = a.len().min(b.len()) - pre;
+    let mut suf = a.iter().rev().zip(b.iter().rev()).take(most).take_while(|(x, y)| x == y).count();
+    loop {
+        let before = a[pre..a.len() - suf].join("\n");
+        let after = b[pre..b.len() - suf].join("\n");
+        if (!after.is_empty() && new.matches(after.as_str()).count() == 1) || (pre == 0 && suf == 0) {
+            return (before, after);
+        }
+        if pre > 0 {
+            pre -= 1;
+        } else {
+            suf -= 1;
+        }
+    }
 }
 
 /// `POST /ask {messages: [{role, text}]}` — the next turn of a conversation with your notes, as

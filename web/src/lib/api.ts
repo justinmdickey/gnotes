@@ -197,7 +197,7 @@ export interface AskDone {
   cited: number[];
 }
 
-/** One thing Scribe did in a turn, as an `action` event; `before` is the replaced text or the old notebook, when there is one. */
+/** One thing Scribe did in a turn, as an `action` event. Undo sends it back as it came; `before` and `after` are for the server. */
 export interface AskAction {
   /** What changed. */
   kind: "created" | "appended" | "task_added" | "task_done" | "replaced" | "moved" | "trashed";
@@ -206,6 +206,7 @@ export interface AskAction {
   /** What was written. */
   text: string;
   before?: string | null;
+  after?: string | null;
   /** The task's line, for task actions. */
   line?: number | null;
 }

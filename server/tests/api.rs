@@ -2410,6 +2410,10 @@ async fn fake_tools(reject_tools: bool) -> (String, std::sync::Arc<std::sync::Mu
                 ("set_task_done", json!({ "note": content.split_whitespace().last().unwrap(), "line": 1, "text": "buy milk", "done": true }))
             } else if content.contains("replace") {
                 ("replace_in_note", json!({ "note": content.split_whitespace().last().unwrap(), "find": "buy milk", "replace": "buy oat milk" }))
+            } else if content.contains("erase") {
+                ("replace_in_note", json!({ "note": content.split_whitespace().last().unwrap(), "find": "\n- [ ] buy eggs", "replace": "" }))
+            } else if content.contains("move") {
+                ("move_note", json!({ "note": content.split_whitespace().last().unwrap(), "notebook": "Home" }))
             } else if content.contains("trash") {
                 ("trash_note", json!({ "note": content.split_whitespace().last().unwrap() }))
             } else {
@@ -2490,7 +2494,8 @@ async fn scribe_acts_at_the_level_chosen() {
     undos.push(actions[0].clone());
     let (actions, _) = scribe(&alice, &format!("tick {groceries}")).await;
     assert_eq!((actions.len(), actions[0]["kind"].clone()), (1, json!("task_done")));
-    undos.push(actions[0].clone());
+    let tick = actions[0].clone();
+    undos.push(tick.clone());
 
     // Undo takes each back, in reverse: the tick is back, the task and the append are out, the note is trashed.
     for a in undos.into_iter().rev() {
@@ -2500,6 +2505,10 @@ async fn scribe_acts_at_the_level_chosen() {
     let text = note_text(&server, &groceries).await;
     assert!(!text.contains("oat milk") && !text.contains("Call the vet"), "undo took the append and the task out: {text}");
     assert!(text.contains("- [ ] buy milk"), "undo unticked the task: {text}");
+    // Undo puts the task back how it was, so a second one doesn't tick it again.
+    let res = alice.send(reqwest::Method::POST, "/ask/undo", json!({ "action": tick })).await;
+    assert!(res.status().is_success(), "second undo: {}", res.status());
+    assert!(note_text(&server, &groceries).await.contains("- [ ] buy milk"), "a second undo leaves the task open");
     let trash = alice.get("/trash").await;
     assert!(trash.as_array().unwrap().iter().any(|t| t["id"] == created), "undo trashed the new note: {trash}");
 
@@ -2515,8 +2524,28 @@ async fn scribe_acts_at_the_level_chosen() {
     // Full: replace and trash work; at Add they're refused.
     alice.send(reqwest::Method::PATCH, "/me/scribe", json!({ "access": "full" })).await;
     let (actions, _) = scribe(&alice, &format!("replace {groceries}")).await;
-    assert_eq!((actions.len(), actions[0]["kind"].clone(), actions[0]["before"].clone()), (1, json!("replaced"), json!("buy milk")));
+    assert_eq!((actions.len(), actions[0]["kind"].clone()), (1, json!("replaced")));
     assert!(note_text(&server, &groceries).await.contains("buy oat milk"));
+    // Undo works when the new text contains the old ("buy milk" → "buy oat milk")…
+    let res = alice.send(reqwest::Method::POST, "/ask/undo", json!({ "action": actions[0] })).await;
+    assert!(res.status().is_success(), "undo replace: {}", res.status());
+    assert_eq!(note_text(&server, &groceries).await.matches("- [ ] buy milk").count(), 1);
+    assert!(!note_text(&server, &groceries).await.contains("oat milk"));
+    // …and when the replacement was nothing at all.
+    let (actions, _) = scribe(&alice, &format!("erase {groceries}")).await;
+    assert_eq!((actions.len(), actions[0]["kind"].clone()), (1, json!("replaced")), "{actions:?}");
+    assert!(!note_text(&server, &groceries).await.contains("buy eggs"));
+    let res = alice.send(reqwest::Method::POST, "/ask/undo", json!({ "action": actions[0] })).await;
+    assert!(res.status().is_success(), "undo erase: {}", res.status());
+    assert!(note_text(&server, &groceries).await.contains("- [ ] buy milk\n- [ ] buy eggs"), "{}", note_text(&server, &groceries).await);
+    // A move, and its undo back to the top level.
+    let (actions, _) = scribe(&alice, &format!("move {groceries}")).await;
+    assert_eq!((actions.len(), actions[0]["kind"].clone()), (1, json!("moved")), "{actions:?}");
+    let place = |tree: Value| tree["notes"].as_array().unwrap().iter().find(|n| n["id"] == groceries).unwrap()["notebook_id"].clone();
+    assert_eq!(place(alice.get("/tree").await), home);
+    let res = alice.send(reqwest::Method::POST, "/ask/undo", json!({ "action": actions[0] })).await;
+    assert!(res.status().is_success(), "undo move: {}", res.status());
+    assert_eq!(place(alice.get("/tree").await), Value::Null);
     let victim = alice.post("/notes", json!({})).await["id"].as_str().unwrap().to_owned();
     ws.join_and_sync(&victim, None).await;
     ws.send_frame(0x01, &victim, &edit(&LoroDoc::new(), 0, "# To trash\nold estimate")).await;
@@ -2528,6 +2557,11 @@ async fn scribe_acts_at_the_level_chosen() {
     let (actions, _) = scribe(&alice, &format!("trash {victim}")).await;
     assert!(actions.is_empty(), "trash is refused at Add: {actions:?}");
 
+    // An undo is checked like any edit: someone who can't edit the note can't use one to change it.
+    let forged = json!({ "action": { "kind": "replaced", "note": groceries, "title": "", "text": "", "before": "pwned", "after": "buy milk" } });
+    let before = note_text(&server, &groceries).await;
+    let res = carol.send(reqwest::Method::POST, "/ask/undo", forged.clone()).await;
+    assert_eq!(res.status(), 404, "a stranger's undo");
     // A viewer's append is refused, and the model is told so; the note is unchanged.
     alice.post("/shares", json!({ "resource_type": "note", "resource_id": groceries, "username": "carol", "role": "viewer" })).await;
     let before = note_text(&server, &groceries).await;
@@ -2535,6 +2569,8 @@ async fn scribe_acts_at_the_level_chosen() {
     assert!(actions.is_empty(), "{actions:?}");
     let last = seen.lock().unwrap().last().unwrap().to_string();
     assert!(last.contains("only view"), "the model is told a viewer can't append: {last}");
+    let res = carol.send(reqwest::Method::POST, "/ask/undo", forged).await;
+    assert!(res.status().is_client_error(), "a viewer's undo: {}", res.status());
     assert_eq!(note_text(&server, &groceries).await, before);
 }
 
