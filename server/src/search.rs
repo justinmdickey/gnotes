@@ -123,16 +123,18 @@ pub async fn index(state: &AppState, note: &str, body: &str) -> sqlx::Result<()>
     let (title, own_rest) = own.split_once('\n').unwrap_or((&own, ""));
     let refs = att_refs(body);
     // The text of the linked PDFs, appended after the note's own text, so FTS, embeddings and
-    // Ask read it with no changes of their own.
+    // Ask read it with no changes of their own. Only the note's own attachments: a link copied
+    // from a note the reader can't see mustn't bring that note's PDF into their search.
     let texts: Vec<(String, String)> = if refs.is_empty() {
         vec![]
     } else {
         sqlx::query_as::<_, (String, String)>(
             "SELECT a.filename, t.text FROM attachment_text t
              JOIN attachments a ON a.id = t.attachment_id
-             WHERE a.id IN (SELECT value FROM json_each(?))",
+             WHERE a.id IN (SELECT value FROM json_each(?)) AND a.note_id = ? AND t.text != ''",
         )
         .bind(serde_json::to_string(&refs).unwrap_or_default())
+        .bind(note)
         .fetch_all(&state.db)
         .await?
     };

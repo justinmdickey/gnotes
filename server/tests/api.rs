@@ -745,6 +745,12 @@ async fn any_file_attaches_and_serves_safely() {
     assert!(disp.starts_with("attachment;") && disp.contains("page.html"), "{disp}");
     assert_eq!(res.headers()["x-content-type-options"], "nosniff");
     assert_eq!(res.bytes().await.unwrap().to_vec(), html);
+    // A name in any language survives the download, for clients that read filename*.
+    let res = upload(&alice, &note, "Résumé.docx", "application/octet-stream", b"doc".to_vec()).await;
+    let doc_id = res.json::<Value>().await.unwrap()["id"].as_str().unwrap().to_owned();
+    let res = alice.http.get(alice.url(&format!("/attachments/{doc_id}"))).send().await.unwrap();
+    let disp = res.headers()["content-disposition"].to_str().unwrap().to_owned();
+    assert!(disp.contains("filename*=UTF-8''R%C3%A9sum%C3%A9.docx"), "{disp}");
 
     // A viewer can't upload.
     alice
@@ -760,8 +766,9 @@ async fn any_file_attaches_and_serves_safely() {
     let pdf_short = &pdf_id[pdf_id.len() - 8..];
     let file = format!("alice/attachments/manual ({pdf_short}).pdf");
     let html_file = format!("alice/attachments/page ({}).html", &html_id[html_id.len() - 8..]);
+    let doc_file = format!("alice/attachments/Résumé ({}).docx", &doc_id[doc_id.len() - 8..]);
     let copy = format!("alice/Manual ({short}).md");
-    export_settles(&dir, &[&file, &html_file, &copy]).await;
+    export_settles(&dir, &[&file, &html_file, &doc_file, &copy]).await;
     assert_eq!(std::fs::read(dir.path().join("export").join(&file)).unwrap(), pdf);
     assert_eq!(read(&copy), format!("# Manual\n\n[manual.pdf](attachments/manual%20%28{pdf_short}%29.pdf)\n"));
 }
@@ -1587,6 +1594,21 @@ async fn pdf_text_is_searchable_and_names_the_file() {
     let r = body["results"].as_array().unwrap().iter().find(|r| r["note"] == note).expect("the note is found by a word only in the PDF");
     assert_eq!(r["file"].as_str(), Some("manual.pdf"), "the snippet names its file");
 
+    // Bob links the same attachment from a note of his own: he can't open the PDF, so its text
+    // stays out of his search.
+    let bob = user(&server, "bob").await;
+    let bobs = bob.post("/notes", json!({})).await["id"].as_str().unwrap().to_owned();
+    let mut bob_ws = bob.ws().await;
+    bob_ws.join_and_sync(&bobs, None).await;
+    bob_ws.send_frame(0x01, &bobs, &set_text(&LoroDoc::new(), &format!("# Mine\n[manual.pdf](att:{att_id})\n"))).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let url = reqwest::Url::parse_with_params(&bob.url("/search"), &[("q", "Mine")]).unwrap();
+    let body: Value = bob.http.get(url).send().await.unwrap().json().await.unwrap();
+    assert_eq!(body["results"].as_array().unwrap().len(), 1, "bob's note is indexed: {body}");
+    let url = reqwest::Url::parse_with_params(&bob.url("/search"), &[("q", "warranty")]).unwrap();
+    let body: Value = bob.http.get(url).send().await.unwrap().json().await.unwrap();
+    assert!(body["results"].as_array().unwrap().is_empty(), "another note's PDF isn't in bob's search: {body}");
+
     // Unlinking the PDF drops its text from search.
     ws.send_frame(0x01, &note, &set_text(&doc, "# Manual\n")).await;
     let gone = async || {
@@ -2073,7 +2095,8 @@ async fn api_keys_act_as_their_user_within_their_scope() {
     let note = writer.ok(reqwest::Method::POST, "/notes", Some(json!({ "text": "# Files" }))).await;
     let note_id = note["id"].as_str().unwrap().to_owned();
     let attach = |agent: &Agent, name: &str, mime: &str| {
-        let file = reqwest::multipart::Part::bytes(b"x".to_vec()).file_name(name.to_owned()).mime_str(mime).unwrap();
+        // Over axum's 2 MB default body limit, which uploads lift to the 50 MB attachment limit.
+        let file = reqwest::multipart::Part::bytes(vec![b'x'; 3 * 1024 * 1024]).file_name(name.to_owned()).mime_str(mime).unwrap();
         agent.http
             .post(format!("http://{}/api/v1/notes/{note_id}/attachments", agent.base))
             .bearer_auth(&agent.key)

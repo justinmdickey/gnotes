@@ -275,7 +275,13 @@ pub async fn build(config: Config) -> anyhow::Result<AppState> {
     };
     search::backfill(&state).await?;
     tasks::backfill(&state).await?;
-    pdftext::backfill(&state).await?;
+    // Reading old PDFs can take a while; it doesn't hold up the server starting.
+    let pdfs = state.clone();
+    tokio::spawn(async move {
+        if let Err(e) = pdftext::backfill(&pdfs).await {
+            tracing::error!("reading text from PDFs: {e:#}");
+        }
+    });
     Ok(state)
 }
 

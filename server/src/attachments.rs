@@ -253,7 +253,13 @@ pub async fn download(
     } else if !inline_media {
         let name: String = att.filename.chars().filter(|c| c.is_ascii() && *c != '"' && *c != '\\').collect();
         let name = if name.is_empty() { "download".to_owned() } else { name };
-        headers.insert(header::CONTENT_DISPOSITION, format!("attachment; filename=\"{name}\"").parse().unwrap());
+        // The real name, any language, for clients that read RFC 5987; the ASCII one for the rest.
+        let utf8: String = att
+            .filename
+            .bytes()
+            .map(|b| if b.is_ascii_alphanumeric() || b"!#$&+-.^_`|~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") })
+            .collect();
+        headers.insert(header::CONTENT_DISPOSITION, format!("attachment; filename=\"{name}\"; filename*=UTF-8''{utf8}").parse().unwrap());
     }
     Ok(res.into_response())
 }

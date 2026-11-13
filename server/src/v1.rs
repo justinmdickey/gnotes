@@ -7,7 +7,7 @@
 
 use axum::{
     Json, Router,
-    extract::{FromRequest, FromRequestParts, Multipart, Path, Request, State},
+    extract::{DefaultBodyLimit, FromRequest, FromRequestParts, Multipart, Path, Request, State},
     http::request::Parts,
     routing::{get, post},
 };
@@ -42,7 +42,10 @@ pub fn router() -> Router<AppState> {
         .route("/notes", get(list_notes).post(create_note))
         .route("/notes/{id}", get(get_note).patch(update_note).delete(delete_note))
         .route("/notes/{id}/append", post(append))
-        .route("/notes/{id}/attachments", post(attach_file))
+        .route(
+            "/notes/{id}/attachments",
+            post(attach_file).layer(DefaultBodyLimit::max(crate::attachments::MAX_UPLOAD + 64 * 1024)),
+        )
         .route("/search", get(search))
         .route("/tasks", get(list_tasks).post(add_task))
         .fallback(|| async { AppError::BadRequest("No such endpoint; see docs/API.md".into()) })

@@ -86,7 +86,7 @@ These copies are for backup and leaving the app. The SQL database and Loro snaps
 - The plain Markdown copies rewrite `att:` links to relative `attachments/` paths.
 - Audio recordings use the same syntax. The editor shows an audio player for audio MIME types.
 - Every attachment request checks the requester's access to the note it belongs to.
-- A PDF's text is read out (a pure-Rust crate, capped at 200 000 characters) when it's uploaded and once at startup for PDFs from before, and kept in `attachment_text`. A PDF with no text layer, or a failed or slow extraction (10 s limit), gets none. That text is appended to the note's search text after the note's own words, so full-text search, embeddings and Ask read it with no changes of their own, and a snippet that comes from a PDF names the file. Trashing or deleting a note, or deleting an attachment, removes its text.
+- A PDF's text is read out (a pure-Rust crate, capped at 200 000 characters) when it's uploaded and once at startup for PDFs from before, and kept in `attachment_text`. It's read one PDF at a time, page by page, for up to 10 s; a page that can't be read is skipped, and a PDF with no text layer, or one that can't be read at all, gets none. Each PDF is marked as tried before it's read, so the startup pass (which runs in the background) never reads the same one twice, even one that took the server down. That text is appended to the note's search text after the note's own words, so full-text search, embeddings and Ask read it with no changes of their own, and a snippet that comes from a PDF names the file. Trashing or deleting a note, or deleting an attachment, removes its text.
 
 ### Import
 
