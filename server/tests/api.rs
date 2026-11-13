@@ -2656,6 +2656,17 @@ async fn note_snapshots_only_visible_and_unchanged() {
     let ids = res["notes"].as_array().unwrap().iter().map(|n| n["id"].clone()).collect::<Vec<_>>();
     assert_eq!(ids, vec![json!(shared)], "{res}");
 
+    // Edited since (the room still open), an old copy gets the whole note, not just the change:
+    // the device saves the reply as its copy, so it must stand on its own.
+    ws.send_frame(0x01, &mine, &edit(&LoroDoc::new(), 0, "fresh ")).await;
+    ws.join_and_sync(&mine, Some(&vv)).await;
+    let res = alice.post("/notes/snapshots", json!({ "have": { mine.as_str(): STANDARD.encode(vv.encode().as_slice()) } })).await;
+    let data = STANDARD.decode(res["notes"][0]["data"].as_str().unwrap()).unwrap();
+    let copy = LoroDoc::new();
+    copy.import(&data).unwrap();
+    let text = copy.get_text("body").to_string();
+    assert!(text.contains("fresh") && text.contains("secret word"), "the reply is the whole note: {text:?}");
+
     // Bob can't ask for Alice's note either.
     let res = bob.post("/notes/snapshots", json!({ "have": { mine.as_str(): "" } })).await;
     assert!(res["notes"].as_array().unwrap().is_empty(), "{res}");

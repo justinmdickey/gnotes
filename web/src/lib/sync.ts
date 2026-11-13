@@ -1,7 +1,7 @@
 // One websocket for every open note. Protocol: "Websocket protocol" in docs/DESIGN.md.
 import { LoroDoc, VersionVector } from "loro-crdt";
 import { api, type Role } from "./api";
-import { cache, editing, isQueued, plainText, rememberText, unreachable } from "./offline";
+import { cache, editing, isQueued, plainText, rememberText } from "./offline";
 
 const KIND_UPDATE = 0x01;
 const KIND_PRESENCE = 0x02;
@@ -133,7 +133,7 @@ export class SyncClient {
 
   /**
    * Keeps every note in the tree saved on this device: a background pass, a few notes at a time,
-   * that asks the server for what each saved copy lacks, drops copies of notes gone from the
+   * that asks the server for a whole copy of each note whose saved one is behind, drops copies of notes gone from the
    * tree, and never touches a note being edited or with unsent edits. Re-queued while running.
    */
   saveAll(ids: () => string[]) {
@@ -178,16 +178,18 @@ export class SyncClient {
           const v = await cache.noteVersion(id);
           have[id] = v ? b64(v) : "";
         }
+        if (!Object.keys(have).length) continue;
         let resp: { notes: { id: string; data: string }[]; rest: string[] };
         try {
           resp = await api.noteSnapshots(have);
-        } catch (err) {
-          if (unreachable(err)) return;
+        } catch {
           return;
         }
+        // Read again now the reply is in: a note that went dirty or got an editor while it was in
+        // flight keeps its own copy.
+        const dirtyAfter = new Set(await cache.dirtyIds());
         for (const n of resp.notes) {
-          // Skip a note that went dirty or got an editor while the snapshot was in flight.
-          if (dirtyNow.has(n.id) || editing.has(n.id)) continue;
+          if (dirtyAfter.has(n.id) || editing.has(n.id)) continue;
           const doc = new LoroDoc();
           doc.import(unb64(n.data));
           await cache.saveNote(n.id, doc);

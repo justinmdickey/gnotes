@@ -287,21 +287,13 @@ async fn write_snapshot(db: &sqlx::SqlitePool, id: &Uuid, st: &mut RoomState) ->
 }
 
 impl Room {
-    /// The note's data for a caller that has `since` — the updates after it, or a full snapshot
-    /// when `since` is none — and the note's current version.
-    pub async fn export_since(&self, since: Option<&[u8]>) -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
+    /// The whole note as a snapshot, and its current version.
+    pub async fn export_snapshot(&self) -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
         let st = self.state.lock().await;
         if st.closed {
             anyhow::bail!("the room is closed");
         }
-        let data = match since {
-            Some(vv) => {
-                let v = VersionVector::decode(vv)?;
-                st.doc.export(ExportMode::updates(&v))?
-            }
-            None => st.doc.export(ExportMode::Snapshot)?,
-        };
-        Ok((data, st.doc.oplog_vv().encode()))
+        Ok((st.doc.export(ExportMode::Snapshot)?, st.doc.oplog_vv().encode()))
     }
 
     /// Adds a client and sends `joined`, the missing document data and current presence.

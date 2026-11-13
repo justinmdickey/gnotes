@@ -127,9 +127,9 @@ pub(crate) async fn visible_note_ids(state: &AppState, me: &User) -> ApiResult<B
     Ok(ids)
 }
 
-/// `POST /notes/snapshots {"have": {"<id>": "<base64 version vector>"}}`: what this device's
-/// copies lack, for the notes asked about, the same visibility as /tree. A note the caller has
-/// up to date is left out of the reply. The reply holds as many as fit in a few MB; the asked
+/// `POST /notes/snapshots {"have": {"<id>": "<base64 version vector>"}}`: a whole snapshot of
+/// each note asked about whose copy on the device is behind, the same visibility as /tree. Always
+/// whole, so the device can save it as its copy. A note the caller has up to date is left out. The reply holds as many as fit in a few MB; the asked
 /// ids it didn't get to come back in `rest` to ask for again.
 #[derive(Deserialize)]
 pub struct SnapshotsBody {
@@ -169,9 +169,8 @@ pub async fn note_snapshots(
             continue;
         }
         // What the server has of the note: an open room's doc, else the saved snapshot, else blank.
-        let have_bytes = Some(have.as_str()).filter(|s| !s.is_empty()).and_then(|s| STANDARD.decode(s).ok());
         let (data, version) = match state.rooms.get(&uuid).await {
-            Some(room) => room.export_since(have_bytes.as_deref()).await?,
+            Some(room) => room.export_snapshot().await?,
             None => {
                 let row: Option<(Vec<u8>, Vec<u8>)> =
                     sqlx::query_as("SELECT snapshot, version FROM note_snapshots WHERE note_id = ?")
