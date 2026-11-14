@@ -30,6 +30,11 @@
     <control>keyboard</control>
   </supports>
   <releases>
+    <release version="1.9.1" date="2026-11-13">
+      <description>
+        <p>Fixes: an attached file shows as just its row, with its type's icon, and a file link in a sentence opens the file. Links in table cells open on a click.</p>
+      </description>
+    </release>
     <release version="1.9.0" date="2026-11-13">
       <description>
         <p>Scribe: Ask is now Scribe, and at the level you choose in Preferences it can make notes, add to them, add and tick tasks, and more, each change shown with an Undo. Every note is kept on this computer for offline use, any file can be attached to a note and opened from it, and search reads inside attached PDFs.</p>
