@@ -2,7 +2,7 @@
 // Starts a throwaway server with demo data, logs in, and saves one PNG per screen.
 //
 // Usage: npm run build && cargo build -p gnotes-server && node scripts/shot.mjs [options] [screen...]
-//   screens: home recent tasks shared account trash notebook:<name> note:<title> edit:<title> search:<query>
+//   screens: home recent tasks shared account[:<group>] trash notebook:<name> note:<title> edit:<title> search:<query>
 //            ask (the Ask tab, empty; without --ai, the page saying it isn't set up)
 //            find:<query> (typed in Ask's field, not sent, with --ai)
 //            ask:<question>[|<follow-up>...] (with --ai) service:<form> (a Settings service form, e.g. service:embed)
@@ -319,6 +319,11 @@ async function go(page, target) {
       await page.keyboard.press("Enter");
       await done(i + 1);
     }
+  }
+  if (kind === "account" && arg) {
+    // account:<group>: that group's title at the top, e.g. account:Scribe.
+    await page.waitForFunction((t) => [...document.querySelectorAll(".group-title")].some((h) => h.textContent.trim() === t), {}, arg);
+    await page.evaluate((t) => [...document.querySelectorAll(".group-title")].find((h) => h.textContent.trim() === t).scrollIntoView({ block: "start" }), arg);
   }
   if (kind === "service") {
     await page.waitForSelector(`.service.${arg}`);

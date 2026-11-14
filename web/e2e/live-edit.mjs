@@ -1255,6 +1255,13 @@ try {
   // Scribe acts at the level chosen in Account. At Read only, the same question answers without acting: no card, no note.
   await alice.goto(`${base2}/#/settings`);
   await alice.waitForSelector(".settings-layer input[name=scribe][value=read]");
+  // The levels are the card's own rows, full width: nothing beside them for a radio to cover.
+  const levelRow = await alice.$eval(".settings-layer input[name=scribe][value=read]", (r) => {
+    const row = r.closest("label").getBoundingClientRect();
+    const card = r.closest("ul").getBoundingClientRect();
+    return Math.round(row.left - card.left) + "/" + Math.round(card.right - row.right);
+  });
+  check(levelRow === "0/0", `Scribe's levels are full-width rows of their card (${levelRow})`);
   await alice.click(".settings-layer input[name=scribe][value=read]");
   await alice.waitForFunction(() => document.body.innerText.includes("Scribe saved"));
   await alice.click(".settings-layer .back");

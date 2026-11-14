@@ -253,23 +253,24 @@
       {#if app.features.ask}
         <h2 class="group-title">Scribe</h2>
         <p class="dim group-note">What Scribe may do with your notes. It always acts as you: it never sees or changes a note you couldn't, and never shares, unshares or empties the trash.</p>
-        <ul class="boxed">
-          <li>
-            <span class="label">Access</span>
-            <div class="choices" role="radiogroup" aria-label="What Scribe may do">
-              <label class="choice">
-                <input type="radio" name="scribe" value="read" bind:group={scribe} onchange={saveScribe} />
-                <span class="label">Read only<span class="dim sub">Search and read your notes and answer</span></span>
-              </label>
-              <label class="choice">
-                <input type="radio" name="scribe" value="add" bind:group={scribe} onchange={saveScribe} />
-                <span class="label">Add<span class="dim sub">Also make notes, add to the end of a note, add tasks and tick tasks</span></span>
-              </label>
-              <label class="choice">
-                <input type="radio" name="scribe" value="full" bind:group={scribe} onchange={saveScribe} />
-                <span class="label">Full<span class="dim sub">Also change text inside a note, move notes, and move notes you own to the trash</span></span>
-              </label>
-            </div>
+        <ul class="boxed" role="radiogroup" aria-label="What Scribe may do">
+          <li class="pick">
+            <label class="choice">
+              <input type="radio" name="scribe" value="read" bind:group={scribe} onchange={saveScribe} />
+              <span class="label">Read only<span class="dim sub">Search and read your notes and answer</span></span>
+            </label>
+          </li>
+          <li class="pick">
+            <label class="choice">
+              <input type="radio" name="scribe" value="add" bind:group={scribe} onchange={saveScribe} />
+              <span class="label">Add<span class="dim sub">Also make notes, add to the end of a note, add tasks and tick tasks</span></span>
+            </label>
+          </li>
+          <li class="pick">
+            <label class="choice">
+              <input type="radio" name="scribe" value="full" bind:group={scribe} onchange={saveScribe} />
+              <span class="label">Full<span class="dim sub">Also change text inside a note, move notes, and move notes you own to the trash</span></span>
+            </label>
           </li>
           {#if !app.features.ask_actions}
             <li class="dim">Actions need a chat model with tool calling; Scribe answers only.</li>
@@ -684,6 +685,15 @@
 
   .boxed li + li {
     border-top: 1px solid var(--border);
+  }
+
+  /* A row that is itself a choice: the label fills it, so the whole row takes the click. */
+  .boxed li.pick {
+    padding: 0;
+  }
+
+  .boxed li.pick .choice {
+    flex: 1;
   }
 
   .boxed li.disabled .label {
