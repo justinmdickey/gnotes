@@ -1400,11 +1400,23 @@ impl Editor {
                 });
             }
         });
-        let drop = gtk::DropTarget::new(gdk::FileList::static_type(), gdk::DragAction::COPY);
+        // Files dropped on the note. The text view's own drop would take a file as its path and type
+        // that in, so it turns files away and they come here. They're read as text/uri-list by hand:
+        // GTK's own file list can pick the document portal's format, and gets nothing where that
+        // portal isn't running (Hyprland, 2026-11-16).
+        let own = self.view.observe_controllers();
+        for i in 0..own.n_items() {
+            if let Some(text_drop) = own.item(i).and_downcast::<gtk::DropTarget>() {
+                text_drop.connect_accept(|_, drop| !drop.formats().contain_mime_type("text/uri-list"));
+            }
+        }
+        let drop = gtk::DropTargetAsync::new(Some(gdk::ContentFormats::new(&["text/uri-list"])), gdk::DragAction::COPY);
+        drop.connect_accept(|_, d| d.formats().contain_mime_type("text/uri-list"));
+        drop.connect_drag_enter(|_, _, _, _| gdk::DragAction::COPY);
+        drop.connect_drag_motion(|_, _, _, _| gdk::DragAction::COPY);
         let weak = Rc::downgrade(self);
-        drop.connect_drop(move |_, value, x, y| {
+        drop.connect_drop(move |_, d, x, y| {
             let Some(e) = weak.upgrade() else { return false };
-            let Ok(files) = value.get::<gdk::FileList>() else { return false };
             if !e.can_edit() {
                 return false;
             }
@@ -1412,20 +1424,22 @@ impl Editor {
             if let Some(it) = e.view.iter_at_location(bx, by) {
                 e.buffer.place_cursor(&it);
             }
-            // Markdown and zips are notes to import; anything else goes in this note.
-            let (notes, attach): (Vec<gio::File>, Vec<gio::File>) = files
-                .files()
-                .into_iter()
-                .partition(|f| f.basename().is_some_and(|n| super::settings::importable(&n.to_string_lossy())));
-            if !notes.is_empty()
-                && let Some(main) = e.main.upgrade()
-            {
-                glib::spawn_future_local(async move { super::settings::import(&main, notes).await });
-            }
-            for file in attach {
-                let e = e.clone();
-                glib::spawn_future_local(async move { e.upload_file(&file).await });
-            }
+            let d = d.clone();
+            glib::spawn_future_local(async move {
+                let files = read_uri_list(&d).await;
+                d.finish(if files.is_empty() { gdk::DragAction::empty() } else { gdk::DragAction::COPY });
+                // Markdown and zips are notes to import; anything else goes in this note.
+                let (notes, attach): (Vec<gio::File>, Vec<gio::File>) =
+                    files.into_iter().partition(|f| f.basename().is_some_and(|n| super::settings::importable(&n.to_string_lossy())));
+                if !notes.is_empty()
+                    && let Some(main) = e.main.upgrade()
+                {
+                    super::settings::import(&main, notes).await;
+                }
+                for file in attach {
+                    e.upload_file(&file).await;
+                }
+            });
             true
         });
         self.view.add_controller(drop);
@@ -3345,4 +3359,21 @@ fn is_checklist_item(l: &str) -> bool {
 
 fn is_done_item(l: &str) -> bool {
     is_checklist_item(l) && !l[1..].trim_start().starts_with("[ ]")
+}
+
+/// The files a drop carries, from its text/uri-list: one URI a line, `#` lines are comments.
+pub(crate) async fn read_uri_list(drop: &gdk::Drop) -> Vec<gio::File> {
+    let Ok((stream, _)) = drop.read_future(&["text/uri-list"], glib::Priority::DEFAULT).await else { return Vec::new() };
+    let out = gio::MemoryOutputStream::new_resizable();
+    let flags = gio::OutputStreamSpliceFlags::CLOSE_SOURCE | gio::OutputStreamSpliceFlags::CLOSE_TARGET;
+    if out.splice_future(&stream, flags, glib::Priority::DEFAULT).await.is_err() {
+        return Vec::new();
+    }
+    let bytes = out.steal_as_bytes();
+    String::from_utf8_lossy(&bytes)
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .map(gio::File::for_uri)
+        .collect()
 }

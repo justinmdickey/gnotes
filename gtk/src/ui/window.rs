@@ -193,11 +193,21 @@ impl Main {
 
         main.add_actions();
         // Markdown files or zips dropped anywhere but a note are imported into the current notebook.
-        let target = gtk::DropTarget::new(gtk::gdk::FileList::static_type(), gtk::gdk::DragAction::COPY);
+        // Read as text/uri-list by hand, as a note's own drop is: see Editor.
+        let target = gtk::DropTargetAsync::new(Some(gtk::gdk::ContentFormats::new(&["text/uri-list"])), gtk::gdk::DragAction::COPY);
+        target.connect_drag_enter(|_, _, _, _| gtk::gdk::DragAction::COPY);
+        target.connect_drag_motion(|_, _, _, _| gtk::gdk::DragAction::COPY);
         let weak = Rc::downgrade(&main);
-        target.connect_drop(move |_, value, _, _| {
-            let (Some(main), Ok(files)) = (weak.upgrade(), value.get::<gtk::gdk::FileList>()) else { return false };
-            glib::spawn_future_local(async move { super::settings::import(&main, files.files()).await });
+        target.connect_drop(move |_, drop, _, _| {
+            let Some(main) = weak.upgrade() else { return false };
+            let drop = drop.clone();
+            glib::spawn_future_local(async move {
+                let files = super::editor::read_uri_list(&drop).await;
+                drop.finish(if files.is_empty() { gtk::gdk::DragAction::empty() } else { gtk::gdk::DragAction::COPY });
+                if !files.is_empty() {
+                    super::settings::import(&main, files).await;
+                }
+            });
             true
         });
         split.add_controller(target);
