@@ -70,7 +70,7 @@ function standInAI(port) {
           if (!lastCall) return call("search_notes", { query: "Groceries" });
           if (lastCall === "search_notes") {
             const found = JSON.parse(body.messages.at(-1).content).notes?.find((n) => n.title === "Groceries");
-            if (found) return call("append_to_note", { note: found.id, text: "E2E Scribe added this line." });
+            if (found) return call("append_to_note", { note: found.id, text: "E2E Scribe added this line.\n- Bread\n- Butter\n- Eggs\n- Jam" });
           }
           return res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: "Added a line to Groceries." } }] }));
         }

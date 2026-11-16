@@ -396,7 +396,10 @@ impl Ask {
                 let title = if a.title.trim().is_empty() { "New Note" } else { a.title.as_str() };
                 row.set_title(&glib::markup_escape_text(title));
                 if !a.text.is_empty() {
-                    row.set_subtitle(&glib::markup_escape_text(&a.text));
+                    // One run of text, as the web shows it, so two lines cut it short: a line limit
+                    // only counts wrapped lines, not ones the text breaks itself.
+                    let text = a.text.split_whitespace().collect::<Vec<_>>().join(" ");
+                    row.set_subtitle(&glib::markup_escape_text(&text));
                     row.set_subtitle_lines(2);
                 }
                 let (m, note, line) = (self.main.clone(), a.note.clone(), a.line);
@@ -410,7 +413,7 @@ impl Ask {
                     }
                 });
                 if !undone {
-                    let undo = gtk::Button::builder().label("Undo").css_classes(["flat"]).build();
+                    let undo = gtk::Button::builder().label("Undo").valign(gtk::Align::Center).css_classes(["flat"]).build();
                     let (weak, index, j) = (Rc::downgrade(self), index, j);
                     undo.connect_clicked(move |_| {
                         if let Some(me) = weak.upgrade() {
