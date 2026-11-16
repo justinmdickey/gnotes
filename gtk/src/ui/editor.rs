@@ -338,6 +338,8 @@ impl Editor {
         media.append(&gtk::Separator::new(gtk::Orientation::Vertical));
         let photo = icon_button("camera-photo-symbolic", "Add Photo");
         media.append(&photo);
+        let attach = icon_button("mail-attachment-symbolic", "Add File");
+        media.append(&attach);
         let mic = icon_button("audio-input-microphone-symbolic", "Voice Memo");
         media.append(&mic);
         bar.append(&media);
@@ -536,7 +538,7 @@ impl Editor {
         }
         editor.connect_buffer();
         editor.connect_view();
-        editor.connect_buttons(&style_button, [&bold, &italic, &strike, &code], [&check, &bullets, &numbers, &quote], &photo);
+        editor.connect_buttons(&style_button, [&bold, &italic, &strike, &code], [&check, &bullets, &numbers, &quote], &photo, &attach);
         for (button, save) in [(&mic, None), (&rec_stop, Some(true)), (&rec_cancel, Some(false))] {
             let weak = Rc::downgrade(&editor);
             button.connect_clicked(move |_| {
@@ -1823,7 +1825,7 @@ impl Editor {
         true
     }
 
-    fn connect_buttons(self: &Rc<Self>, styles: &gtk::MenuButton, inline: [&gtk::Button; 4], blocks: [&gtk::Button; 4], photo: &gtk::Button) {
+    fn connect_buttons(self: &Rc<Self>, styles: &gtk::MenuButton, inline: [&gtk::Button; 4], blocks: [&gtk::Button; 4], photo: &gtk::Button, attach: &gtk::Button) {
         let on = |b: &gtk::Button, f: Box<dyn Fn(&Editor)>| {
             let weak = Rc::downgrade(self);
             b.connect_clicked(move |_| {
@@ -1856,6 +1858,12 @@ impl Editor {
         photo.connect_clicked(move |_| {
             if let Some(e) = weak.upgrade() {
                 e.pick_photo();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        attach.connect_clicked(move |_| {
+            if let Some(e) = weak.upgrade() {
+                e.pick_file();
             }
         });
     }
