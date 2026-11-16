@@ -30,6 +30,11 @@
     <control>keyboard</control>
   </supports>
   <releases>
+    <release version="1.9.2" date="2026-11-16">
+      <description>
+        <p>Files dropped on a note are attached again, and a paperclip on the format bar adds one. Scribe's change rows stay two lines tall however much it wrote.</p>
+      </description>
+    </release>
     <release version="1.9.1" date="2026-11-13">
       <description>
         <p>Fixes: an attached file shows as just its row, with its type's icon, and a file link in a sentence opens the file. Links in table cells open on a click.</p>
