@@ -14,7 +14,10 @@ if [ "${1:-}" = "--uninstall" ]; then
 fi
 cargo build --release -p gnotes-gtk
 install -Dm755 target/release/gnotes "$bin"
-install -Dm644 gtk/data/com.erisdor.Gnotes.desktop "$apps/com.erisdor.Gnotes.desktop"
+# The full path: a desktop session's PATH often leaves out ~/.local/bin, and would start a packaged
+# /usr/bin/gnotes instead.
+mkdir -p "$apps"
+sed "s|^Exec=gnotes|Exec=$bin|" gtk/data/com.erisdor.Gnotes.desktop >"$apps/com.erisdor.Gnotes.desktop"
 install -Dm644 gtk/data/com.erisdor.Gnotes.svg "$icons/com.erisdor.Gnotes.svg"
 install -Dm644 gtk/data/com.erisdor.Gnotes.metainfo.xml "$prefix/share/metainfo/com.erisdor.Gnotes.metainfo.xml"
 if command -v update-desktop-database >/dev/null; then update-desktop-database "$apps" || true; fi
