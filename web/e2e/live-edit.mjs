@@ -74,8 +74,23 @@ const whisper = createServer((req, res) => {
         );
         return;
       }
+      // Scribe, asked for an emoji on a notebook, renames it, once, without searching.
+      const users = body.messages.filter((m) => m.role === "user").map((m) => m.content);
+      if (!body.messages.some((m) => m.role === "tool") && body.tools?.some((t) => t.function.name === "rename_notebook") && users.at(-1).includes("emoji to E2E Shelf")) {
+        const call = { id: "call_rename", type: "function", function: { name: "rename_notebook", arguments: JSON.stringify({ notebook: "E2E Shelf", name: "📚 E2E Shelf" }) } };
+        return void res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: null, tool_calls: [call] } }] }));
+      }
+      if (body.messages.some((m) => m.role === "tool") && users.at(-1).includes("emoji to E2E Shelf")) {
+        return void res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: "Renamed it." } }] }));
+      }
+      // Scribe searches first: the conversation's first question plus the follow-up.
+      if (Array.isArray(body.tools) && body.tools.length && !body.messages.some((m) => m.role === "tool")) {
+        const query = users.length > 1 ? `${users[0]} ${users.at(-1)}` : users.at(-1);
+        const call = { id: "call_search", type: "function", function: { name: "search_notes", arguments: JSON.stringify({ query }) } };
+        return void res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: null, tool_calls: [call] } }] }));
+      }
       if (body.messages[0].role === "system") {
-        const content = last.includes("cheese") ? "Cheese is on your list too [1]." : "You have milk and cheese on your list [1].";
+        const content = users.at(-1).includes("cheese") ? "Cheese is on your list too [1]." : "You have milk and cheese on your list [1].";
         res.setHeader("content-type", "text/event-stream");
         const pieces = content.match(/.{1,6}/g).map((text) => `data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\n`);
         let i = 0;
@@ -1304,6 +1319,36 @@ try {
   await alice.evaluate(async (id) => {
     await fetch(`/api/trash/note/${id}`, { method: "DELETE" });
   }, scribeNote);
+  // At Full, Scribe renames a notebook without searching first: its card shows the old and new
+  // names, Undo puts the name back, and the card opens the notebook.
+  const shelf = await alice.evaluate(async () => {
+    await fetch("/api/me/scribe", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ access: "full" }) });
+    const r = await fetch("/api/notebooks", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "E2E Shelf" }) });
+    return (await r.json()).id;
+  });
+  await alice.reload();
+  await alice.waitForSelector(".pane.list .composer input");
+  await alice.type(".pane.list .composer input", "Add an emoji to E2E Shelf");
+  await alice.keyboard.press("Enter");
+  await alice.waitForSelector(".pane.list .turn:last-child[aria-busy=false]", { timeout: 15000 });
+  const renamed = await alice.evaluate(() => {
+    const turn = document.querySelector(".pane.list .turn:last-child");
+    return [turn.querySelector(".action .t")?.textContent, turn.querySelector(".action .sub")?.textContent, turn.querySelector(".answer")?.textContent, !!turn.querySelector(".cards")].join("|");
+  });
+  check(renamed === "E2E Shelf|📚 E2E Shelf|Renamed it.|false", `at Full, Scribe renames a notebook without a search, shown as a card (${renamed})`);
+  const shelfName = () => alice.evaluate(async (id) => (await fetch("/api/tree").then((r) => r.json())).notebooks.find((n) => n.id === id)?.name, shelf);
+  check((await shelfName()) === "📚 E2E Shelf", "the notebook has its new name");
+  await alice.click(".pane.list .turn:last-child .action button::-p-text(Undo)");
+  await alice.waitForFunction(() => !!document.querySelector(".pane.list .turn:last-child .action.undone"), { timeout: 5000 });
+  check((await shelfName()) === "E2E Shelf", "Undo puts the notebook's name back");
+  await alice.click(".pane.list .turn:last-child .action .body");
+  await alice.waitForFunction((id) => location.hash === `#/nb/${id}`, { timeout: 5000 }, shelf);
+  check(true, "a notebook's card opens the notebook");
+  await alice.evaluate(async (id) => {
+    await fetch("/api/me/scribe", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ access: "add" }) });
+    await fetch(`/api/notebooks/${id}`, { method: "DELETE" });
+    await fetch(`/api/trash/notebook/${id}`, { method: "DELETE" });
+  }, shelf);
   // Back to the note the later checks start from.
   await alice.evaluate((h) => (location.hash = h), askedNote);
   await alice.waitForFunction(() => document.querySelector(".cm-content")?.innerText.includes("cheese"));

@@ -5,7 +5,7 @@
 //   screens: home recent tasks shared account[:<group>] trash notebook:<name> note:<title> edit:<title> search:<query>
 //            ask (the Ask tab, empty; without --ai, the page saying it isn't set up)
 //            find:<query> (typed in Ask's field, not sent, with --ai)
-//            ask:<question>[|<follow-up>...] (with --ai) service:<form> (a Settings service form, e.g. service:embed)
+//            ask:<question>[|<follow-up>...] (with --ai; --full sets Scribe to Full) service:<form> (a Settings service form, e.g. service:embed)
 //            keys (Account's API Keys) keys:new (its New API Key dialog)
 //            fab:<title> (a note with its actions open) tidy:<title> (Tidy Up's preview, with --ai)
 //            editai:<title>[|<instruction>] (Edit with AI asking, or its preview for that, with --ai)
@@ -98,9 +98,26 @@ if (flag("--ai")) {
         const [first] = body.messages;
         const last = body.messages.at(-1).content;
         if (first.role === "system") {
+          const users = body.messages.filter((m) => m.role === "user").map((m) => m.content);
+          const asked = users.at(-1);
+          const call = (calls) =>
+            res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: "", tool_calls: calls.map(([name, args], i) => ({ id: `call_${i}`, type: "function", function: { name, arguments: JSON.stringify(args) } })) } }] }));
+          const acted = body.messages.some((m) => m.role === "tool");
+          // Scribe, asked for emojis: renames each top-level notebook it was shown, then says so.
+          if (body.tools?.length && /emoji/i.test(asked)) {
+            if (acted) return void res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: "Added an emoji to each of your top notebooks." } }] }));
+            const emoji = { Home: "🏠", Personal: "👤" };
+            const tops = [...first.content.matchAll(/^- ([^/\n(]+?)(?: \(view only\))?$/gm)].map((m) => m[1]).filter((n) => emoji[n]);
+            return call(tops.map((n) => ["rename_notebook", { notebook: n, name: `${emoji[n]} ${n}` }]));
+          }
+          // Scribe searches first: the conversation's first question plus the follow-up.
+          if (body.tools?.length && !acted) return call([["search_notes", { query: users.length > 1 ? `${users[0]} ${asked}` : asked }]]);
           // Ask: a sentence for each note it knows, cited by its number.
           const lines = { Groceries: "You still need milk, eggs and bread", Pantry: "Rice, beans and flour are in the pantry" };
-          const said = [...first.content.matchAll(/^\[(\d+)\] (\w+)$/gm)].filter((m) => lines[m[2]]).map((m) => `${lines[m[2]]} [${m[1]}].`);
+          const known = body.tools?.length
+            ? body.messages.filter((m) => m.role === "tool").flatMap((m) => JSON.parse(m.content).notes ?? []).map((n) => [n.n, n.title])
+            : [...first.content.matchAll(/^\[(\d+)\] (\w+)$/gm)].map((m) => [m[1], m[2]]);
+          const said = known.filter(([, t]) => lines[t]).map(([n, t]) => `${lines[t]} [${n}].`);
           res.setHeader("content-type", "text/event-stream");
           for (const text of (said.join(" ") || "NO_ANSWER").match(/.{1,8}/g)) {
             res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\n`);
@@ -301,6 +318,9 @@ async function go(page, target) {
   }
   // Without --ai, Ask has no field: the page says it isn't set up, and that's the shot.
   if ((kind === "ask" || kind === "find") && flag("--ai")) {
+    // --full: Scribe at its Full level, so it can rename and move.
+    if (flag("--full"))
+      await page.evaluate(() => fetch("/api/me/scribe", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ access: "full" }) }));
     // Start from a new conversation and an empty field, whatever the screen before left.
     await page.waitForSelector(".pane.list .composer input");
     if (await page.$(".pane.list .new-chat")) await page.click(".pane.list .new-chat");

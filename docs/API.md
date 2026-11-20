@@ -26,6 +26,7 @@ A key acts as you: it sees what you see, including notes and notebooks shared wi
 | `GET /me` | Who the key acts as, and its scope |
 | `GET /notebooks` | Notebooks you can see, A–Z |
 | `POST /notebooks` | Make a notebook: `{ "name", "parent_id"? }` |
+| `PATCH /notebooks/{id}` | Rename a notebook, move it, or both: `{ "name"?, "parent_id"? }` |
 | `GET /notes` | Notes you can see, newest change first. Query: `notebook_id`, `limit` (100, max 1000) |
 | `POST /notes` | Make a note: `{ "notebook_id"?, "text"? }` |
 | `GET /notes/{id}` | A note with its text |
@@ -36,7 +37,7 @@ A key acts as you: it sees what you see, including notes and notebooks shared wi
 | `GET /tasks` | Checkbox lines in every note you can see, by due date. Query: `done` (`true` or `false`), `due_before` (`YYYY-MM-DD`) |
 | `POST /tasks` | Add `{ "text", "due"? }` as a task at the end of your Inbox note (made the first time); answers with the note |
 
-Leave out `notebook_id` to work at the top level. On `PATCH`, `"notebook_id": null` moves a note to the top level.
+Leave out `notebook_id` to work at the top level. On `PATCH`, `"notebook_id": null` moves a note to the top level, and `"parent_id": null` a notebook.
 
 ## Notes are Markdown
 

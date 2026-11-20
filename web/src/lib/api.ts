@@ -200,7 +200,8 @@ export interface AskDone {
 /** One thing Scribe did in a turn, as an `action` event. Undo sends it back as it came; `before` and `after` are for the server. */
 export interface AskAction {
   /** What changed. */
-  kind: "created" | "appended" | "task_added" | "task_done" | "replaced" | "moved" | "trashed";
+  kind: "created" | "appended" | "task_added" | "task_done" | "replaced" | "moved" | "trashed" | "notebook_created" | "notebook_renamed" | "notebook_moved";
+  /** The note's id, or the notebook's for a notebook_ kind. */
   note: string;
   title: string;
   /** What was written. */

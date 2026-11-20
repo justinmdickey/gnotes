@@ -449,35 +449,42 @@ pub async fn update_notebook(
     Path(id): Path<String>,
     Json(body): Json<NotebookPatch>,
 ) -> ApiResult<Json<Value>> {
-    require_notebook(&state, &me.id, &id, Role::Editor).await?;
+    change_notebook(&state, &me.id, &id, body.name.as_deref(), body.parent_id.as_ref().map(|p| p.as_deref())).await?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// Renames a notebook and moves it into `parent` (`Some(None)` for the top level), either or
+/// both, as `me`, who must be able to edit it.
+pub(crate) async fn change_notebook(state: &AppState, me: &str, id: &str, name: Option<&str>, parent: Option<Option<&str>>) -> ApiResult<()> {
+    require_notebook(state, me, id, Role::Editor).await?;
     let now = now_ms();
-    if let Some(name) = &body.name {
+    if let Some(name) = name {
         sqlx::query("UPDATE notebooks SET name = ?, updated_at = ? WHERE id = ?")
             .bind(clean_name(name)?)
             .bind(now)
-            .bind(&id)
+            .bind(id)
             .execute(&state.db)
             .await?;
     }
-    if let Some(parent) = &body.parent_id {
-        let owner = notebook_owner(&state, &id).await?;
-        check_move_target(&state, &me.id, &owner, parent.as_deref()).await?;
+    if let Some(parent) = parent {
+        let owner = notebook_owner(state, id).await?;
+        check_move_target(state, me, &owner, parent).await?;
         if let Some(p) = parent
-            && is_self_or_descendant(&state.db, &id, p).await?
+            && is_self_or_descendant(&state.db, id, p).await?
         {
             return Err(AppError::BadRequest("A notebook can't move inside itself".into()));
         }
         sqlx::query("UPDATE notebooks SET parent_id = ?, updated_at = ? WHERE id = ?")
             .bind(parent)
             .bind(now)
-            .bind(&id)
+            .bind(id)
             .execute(&state.db)
             .await?;
         state.recheck_access().await;
     }
     state.hub.tree_changed();
     state.export.changed();
-    Ok(Json(json!({ "ok": true })))
+    Ok(())
 }
 
 /// Moves a notebook, its sub-notebooks and their notes to the trash with one shared timestamp,
@@ -487,7 +494,13 @@ pub async fn delete_notebook(
     CurrentUser(me): CurrentUser,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Value>> {
-    require_notebook(&state, &me.id, &id, Role::Owner).await?;
+    trash_notebook(&state, &me.id, &id).await?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// `delete_notebook` for one `me` owns.
+pub(crate) async fn trash_notebook(state: &AppState, me: &str, id: &str) -> ApiResult<()> {
+    require_notebook(state, me, id, Role::Owner).await?;
     let now = now_ms();
     let mut tx = state.db.begin().await?;
     sqlx::query(
@@ -496,7 +509,7 @@ pub async fn delete_notebook(
          )
          UPDATE notes SET deleted_at = ?2 WHERE deleted_at IS NULL AND notebook_id IN (SELECT id FROM sub)",
     )
-    .bind(&id)
+    .bind(id)
     .bind(now)
     .execute(&mut *tx)
     .await?;
@@ -506,7 +519,7 @@ pub async fn delete_notebook(
          )
          UPDATE notebooks SET deleted_at = ?2 WHERE deleted_at IS NULL AND id IN (SELECT id FROM sub)",
     )
-    .bind(&id)
+    .bind(id)
     .bind(now)
     .execute(&mut *tx)
     .await?;
@@ -514,7 +527,7 @@ pub async fn delete_notebook(
     state.recheck_access().await;
     state.hub.tree_changed();
     state.export.changed();
-    Ok(Json(json!({ "ok": true })))
+    Ok(())
 }
 
 #[derive(Deserialize)]

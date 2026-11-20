@@ -465,6 +465,8 @@ check("a new server's first account is made from sign-in", code === 0 && setupDu
 {
   const aiDemo = await startDemo({ ai: true });
   const aiAnn = aiDemo.ann;
+  // Full, so Scribe can rename a notebook.
+  await aiAnn.call("PATCH", "/me/scribe", { access: "full" });
   // Sam's open note in the main demo is irrelevant here; this one starts clean.
   const aiStart = Date.now();
   // A small PDF, to attach as a file (not a photo).
@@ -521,6 +523,8 @@ check("a new server's first account is made from sign-in", code === 0 && setupDu
         "open ask:add a line to Groceries",
         "wait-action E2E Scribe added this line",
         `dump ${f("scribe.json")}`,
+        "open ask:add an emoji to Home",
+        "wait-action 🏠 Home",
         // The demo's file shows as a row; a dropped photo is still a photo, and a dropped PDF a file.
         "open note:Dishwasher",
         "wait-loaded",
@@ -554,6 +558,8 @@ check("a new server's first account is made from sign-in", code === 0 && setupDu
   check("the AI Prompt writes at the cursor", /# Pantry\n- Olive oil\n- Coffee beans/.test(edited), edited.slice(0, 80));
   const scribed = await aiDemo.read(aiAnn, aiDemo.ids.groceries);
   check("a Scribe turn that adds a line shows its action row", existsSync(f("scribe.json")) && scribed.includes("E2E Scribe added this line"), scribed.slice(-80));
+  const renamed = (await aiAnn.tree()).notebooks.map((n) => n.name);
+  check("a Scribe turn renames a notebook, without a search, and shows its row", renamed.includes("🏠 Home") && !renamed.includes("Home"), renamed);
   const withFile = await aiDemo.read(aiAnn, aiDemo.ids.dishwasher);
   const attMatch = withFile.match(/^\[warranty\.pdf\]\(att:([0-9a-f-]+)\)$/m);
   const fileRes = attMatch ? await fetch(`${aiDemo.base}/api/attachments/${attMatch[1]}`, { headers: { cookie: `gnotes_session=${aiAnn.token}` } }) : null;

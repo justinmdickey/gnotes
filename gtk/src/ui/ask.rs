@@ -83,6 +83,9 @@ fn action_icon(kind: &str) -> &'static str {
         "replaced" => "document-edit-symbolic",
         "moved" => "folder-symbolic",
         "trashed" => "user-trash-symbolic",
+        "notebook_created" => "folder-new-symbolic",
+        "notebook_renamed" => "document-edit-symbolic",
+        "notebook_moved" => "folder-symbolic",
         _ => "starred-symbolic",
     }
 }
@@ -361,14 +364,9 @@ impl Ask {
             t.widget.append(&gtk::Label::builder().label(e).wrap(true).xalign(0.0).css_classes(["error"]).build());
             return;
         }
-        let Some(notes) = &t.notes else {
-            t.widget.append(&status("Searching your notes…", true));
-            return;
-        };
-        if notes.is_empty() {
-            t.widget.append(&status("Nothing in your notes matches that. Try asking another way.", false));
-            return;
-        }
+        // Scribe searches only when it needs to, so a turn may find no notes at all.
+        let empty = Vec::new();
+        let notes = t.notes.as_ref().unwrap_or(&empty);
         if !t.answer.is_empty() {
             let answer = gtk::Label::builder().wrap(true).wrap_mode(gtk::pango::WrapMode::WordChar).xalign(0.0).selectable(true).css_classes(["ask-answer"]).build();
             answer.set_markup(&answer_markup(&t.answer, notes));
@@ -382,9 +380,16 @@ impl Ask {
             t.widget.append(&answer);
         } else if t.cited.is_none() {
             let n = notes.len();
-            t.widget.append(&status(&format!("Reading {}…", if n == 1 { "1 note".to_owned() } else { format!("{n} notes") }), true));
-        } else if t.none {
+            let text = match n {
+                0 => "Thinking…".to_owned(),
+                1 => "Reading 1 note…".to_owned(),
+                n => format!("Reading {n} notes…"),
+            };
+            t.widget.append(&status(&text, true));
+        } else if t.none && !notes.is_empty() {
             t.widget.append(&status("Your notes don't seem to say. These came closest:", false));
+        } else if t.none && t.actions.is_empty() {
+            t.widget.append(&status("Nothing in your notes matches that. Try asking another way.", false));
         }
         // What Scribe did in the turn: an icon, the note's title, the text it wrote, and an Undo.
         if !t.actions.is_empty() {
@@ -402,10 +407,12 @@ impl Ask {
                     row.set_subtitle(&glib::markup_escape_text(&text));
                     row.set_subtitle_lines(2);
                 }
-                let (m, note, line) = (self.main.clone(), a.note.clone(), a.line);
+                let (m, note, line, notebook) = (self.main.clone(), a.note.clone(), a.line, a.kind.starts_with("notebook_"));
                 row.connect_activated(move |_| {
                     if let Some(m) = m.upgrade() {
-                        if let Some(line) = line {
+                        if notebook {
+                            m.sidebar().unfold(&note);
+                        } else if let Some(line) = line {
                             m.open_task(&note, line as usize);
                         } else {
                             m.open_note(&note, true);
@@ -425,6 +432,9 @@ impl Ask {
                 actions.append(&row);
             }
             t.widget.append(&actions);
+        }
+        if notes.is_empty() {
+            return;
         }
         // Every note found, then only the ones the finished answer cites.
         let shown: Vec<&AskNote> = match &t.cited {

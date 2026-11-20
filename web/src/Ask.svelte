@@ -6,7 +6,7 @@
   import AccountButton from "./lib/AccountButton.svelte";
   import Icon from "./lib/Icon.svelte";
   import StatusPage from "./lib/StatusPage.svelte";
-  import { app, openNote, pathOf, viewTitle } from "./lib/store.svelte";
+  import { app, navigate, openNote, pathOf, viewTitle } from "./lib/store.svelte";
   import { media, scrollEdge, toast } from "./lib/ui.svelte";
 
   /**
@@ -71,6 +71,9 @@
       case "replaced": return "rename";
       case "moved": return "move";
       case "trashed": return "trash";
+      case "notebook_created": return "newfolder";
+      case "notebook_renamed": return "rename";
+      case "notebook_moved": return "move";
       default: return "sparkle";
     }
   }
@@ -80,15 +83,15 @@
     level === "read"
       ? "Scribe can search and read your notes and answer."
       : level === "add"
-        ? "Scribe can search and read your notes, and make notes, add to notes, add and tick tasks."
-        : "Scribe can search and read your notes, and also change, move and trash them.",
+        ? "Scribe can search and read your notes, and make notes and notebooks, add to notes, add and tick tasks."
+        : "Scribe can search and read your notes, and also change, move and trash them, and rename notebooks.",
   );
   const examples = $derived(
     level === "read"
       ? ["Where is my garage note?", "What's due this week?"]
       : level === "add"
         ? ["Add milk to Groceries", "Make a note for the plumber's quote, $4,200"]
-        : ["Tick off the oil change", "Move the quote to Home"],
+        : ["Tick off the oil change", "Add an emoji to each notebook"],
   );
 
   /** Takes one of Scribe's changes back, and strikes the card's button. */
@@ -102,8 +105,9 @@
     }
   }
 
-  /** Opens the note an action touched; task actions, at the task's line. */
+  /** Opens the note or notebook an action touched; task actions, at the task's line. */
   function openAction(a: AskAction) {
+    if (a.kind.startsWith("notebook_")) return navigate({ kind: "notebook", id: a.note });
     if (a.line != null) app.jump = { note: a.note, line: a.line };
     openNote(a.note);
   }
@@ -167,23 +171,25 @@
             {/each}
             {#if turn.error}
               <p class="error">{turn.error}</p>
-            {:else if !turn.notes}
-              <p class="dim status"><span class="spinner"></span> Searching your notes…</p>
-            {:else if !turn.notes.length}
-              <p class="dim status">Nothing in your notes matches that. Try asking another way.</p>
             {:else}
+              <!-- Scribe searches only when it needs to, so a turn may find no notes at all. -->
+              {@const n = turn.notes?.length ?? 0}
               {#if turn.answer}
                 <p class="answer">{#each answerParts(turn) as part, j (j)}{#if "n" in part}<button class="cite" title={part.title || "New Note"} onclick={() => openNote(part.note)}>{part.n}</button>{:else}{part.text}{/if}{/each}</p>
               {:else if !turn.cited}
-                <p class="dim status"><span class="spinner"></span> Reading {turn.notes.length === 1 ? "1 note" : `${turn.notes.length} notes`}…</p>
-              {:else if turn.none}
+                <p class="dim status"><span class="spinner"></span> {n ? `Reading ${n === 1 ? "1 note" : `${n} notes`}…` : "Thinking…"}</p>
+              {:else if turn.none && n}
                 <p class="dim status">Your notes don't seem to say. These came closest:</p>
+              {:else if turn.none && !turn.actions.length}
+                <p class="dim status">Nothing in your notes matches that. Try asking another way.</p>
               {/if}
-              <ul class="boxed-list cards">
-                {#each cards(turn) as note (note.n)}
-                  {@render card(note.note, note.title ? titleParts(note.title, turn.terms) : [], note.snippet, note.n)}
-                {/each}
-              </ul>
+              {#if n}
+                <ul class="boxed-list cards">
+                  {#each cards(turn) as note (note.n)}
+                    {@render card(note.note, note.title ? titleParts(note.title, turn.terms) : [], note.snippet, note.n)}
+                  {/each}
+                </ul>
+              {/if}
             {/if}
           </section>
         {/each}
@@ -397,6 +403,7 @@
     min-width: 0;
     flex-direction: row;
     align-items: center;
+    justify-content: flex-start;
     gap: 10px;
     padding: 0;
     text-align: left;

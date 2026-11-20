@@ -1725,9 +1725,10 @@ fn fake_embedding(text: &str) -> Vec<f32> {
     v
 }
 
-/// The embeddings and chat services Ask and semantic search use. The chat model rewrites a follow-up
-/// as the conversation's first question plus the follow-up, answers from the first note it's
-/// given, or says NO_ANSWER when asked about brands. It streams answers in small pieces, except
+/// The embeddings and chat services Ask and semantic search use. Offered tools, the chat model
+/// first searches for the conversation's first question plus the last message, then answers from
+/// the first note found, or says NO_ANSWER when nothing was found or it's asked about brands.
+/// Without tools it rewrites a follow-up the same way. It streams answers in small pieces, except
 /// for questions saying "plain", which get one JSON body as from a service that can't stream.
 async fn fake_ai() -> (String, FakeAi) {
     let seen = FakeAi::default();
@@ -1758,8 +1759,19 @@ async fn fake_ai() -> (String, FakeAi) {
                     let content = format!("{first} {follow_up}");
                     return axum::Json(json!({ "choices": [{ "message": { "role": "assistant", "content": content } }] })).into_response();
                 }
-                let content = if last.contains("brand") { "NO_ANSWER" } else { "From your notes: you wrote it down [1]." };
-                if body["stream"] != true || last.contains("plain") {
+                let users: Vec<&str> = messages.iter().filter(|m| m["role"] == "user").map(|m| m["content"].as_str().unwrap()).collect();
+                let question = users.last().unwrap().to_string();
+                if body.get("tools").is_some() && messages.last().unwrap()["role"] == "user" {
+                    let query = if users.len() > 1 { format!("{} {}", users[0], question) } else { question };
+                    return axum::Json(json!({ "choices": [{ "message": { "role": "assistant", "content": "", "tool_calls": [{
+                        "id": "call_1", "type": "function",
+                        "function": { "name": "search_notes", "arguments": json!({ "query": query }).to_string() },
+                    }] } }] }))
+                    .into_response();
+                }
+                let nothing = messages.last().unwrap()["role"] == "tool" && last.contains("\"notes\":[]");
+                let content = if nothing || question.contains("brand") { "NO_ANSWER" } else { "From your notes: you wrote it down [1]." };
+                if body["stream"] != true || question.contains("plain") {
                     return axum::Json(json!({ "choices": [{ "message": { "role": "assistant", "content": content } }] })).into_response();
                 }
                 let mut events = String::new();
@@ -1914,7 +1926,7 @@ async fn semantic_search_and_ask_follow_meaning_and_sharing() {
     assert_eq!(deltas.concat(), "From your notes: you wrote it down [1].");
     assert_eq!(done, json!({ "answer": "From your notes: you wrote it down [1].", "cited": [1] }));
     let prompt = seen.prompts.lock().unwrap().last().unwrap().clone();
-    assert!(prompt.contains("[1] Groceries\\nbuy milk and eggs") && prompt.contains("NO_ANSWER"), "{prompt}");
+    assert!(prompt.contains("Groceries") && prompt.contains("buy milk and eggs") && prompt.contains("NO_ANSWER"), "{prompt}");
     assert!(!prompt.contains("oil") && !prompt.contains("passport"), "only matching notes are sent: {prompt}");
     // A service that answers in one piece works too.
     let (_, deltas, done) = ask(&alice, question("Which dairy, plain?")).await;
@@ -1923,18 +1935,18 @@ async fn semantic_search_and_ask_follow_meaning_and_sharing() {
     let (sources, deltas, done) = ask(&alice, question("Which dairy brand?")).await;
     assert_eq!(found_notes(&sources), vec![groceries.clone()]);
     assert_eq!((deltas, done), (Vec::<String>::new(), json!({ "answer": null, "cited": [] })));
-    // Read only, with nothing close: no notes come back and the model isn't asked at all.
-    alice.send(reqwest::Method::PATCH, "/me/scribe", json!({ "access": "read" })).await;
-    let asked = seen.prompts.lock().unwrap().len();
+    // With nothing close, the search finds nothing, no notes are sent, and there's no answer.
     let (sources, _, done) = ask(&alice, question("What's the weather like?")).await;
     assert_eq!((sources["notes"].clone(), done["answer"].clone()), (json!([]), Value::Null));
-    assert_eq!(seen.prompts.lock().unwrap().len(), asked);
-    // A level that can act asks the model with no notes, so it can search and act; none are sent.
-    alice.send(reqwest::Method::PATCH, "/me/scribe", json!({ "access": "add" })).await;
-    let (sources, _, _) = ask(&alice, question("What's the weather like?")).await;
-    assert_eq!(sources["notes"], json!([]));
     let last = seen.prompts.lock().unwrap().last().unwrap().clone();
     assert!(!last.contains("buy milk") && !last.contains("oil"), "no notes are sent when none are found: {last}");
+    // The model gets the notebooks, not notes: nothing is searched before it asks.
+    alice.post("/notebooks", json!({ "name": "Kitchen" })).await;
+    ask(&alice, question("What's the weather like?")).await;
+    let prompts = seen.prompts.lock().unwrap().clone();
+    let first: Value = serde_json::from_str(&prompts[prompts.len() - 2]).unwrap();
+    let system = first[0]["content"].as_str().unwrap();
+    assert!(system.contains("- Kitchen") && !system.contains("buy milk"), "{system}");
     // Limits on what the app can send.
     let long = "why ".repeat(300);
     assert_eq!(alice.send(reqwest::Method::POST, "/ask", json!({ "messages": question(&long) })).await.status(), 400);
@@ -1971,12 +1983,11 @@ async fn semantic_search_and_ask_follow_meaning_and_sharing() {
     assert_eq!(found_notes(&sources), vec![groceries.clone()]);
     assert_eq!(done["cited"], json!([1]));
     let prompts = seen.prompts.lock().unwrap().clone();
-    let rewrite = &prompts[prompts.len() - 2];
-    assert!(rewrite.contains("User: What dairy do I need?\\nAssistant: From your notes: you wrote it down.\\n"), "{rewrite}");
-    let answer: Value = serde_json::from_str(&prompts[prompts.len() - 1]).unwrap();
-    let roles: Vec<&str> = answer.as_array().unwrap().iter().map(|m| m["role"].as_str().unwrap()).collect();
+    let first: Value = serde_json::from_str(&prompts[prompts.len() - 2]).unwrap();
+    let roles: Vec<&str> = first.as_array().unwrap().iter().map(|m| m["role"].as_str().unwrap()).collect();
     assert_eq!(roles, vec!["system", "user", "assistant", "user"]);
-    assert_eq!(answer[3]["content"], "And what else?");
+    assert_eq!(first[2]["content"], "From your notes: you wrote it down.", "old citations are dropped");
+    assert_eq!(first[3]["content"], "And what else?");
 
     // Sharing: bob finds and asks about the trip only while it's shared with him.
     assert!(by_meaning(&bob, "travel").await.is_empty());
@@ -2157,6 +2168,14 @@ async fn agents_write_notes_and_respect_sharing() {
     let nb = agent.ok(M::POST, "/notebooks", Some(json!({ "name": "Agent" }))).await;
     assert_eq!((nb["name"].clone(), nb["role"].clone()), (json!("Agent"), json!("owner")));
     let nb = nb["id"].as_str().unwrap().to_owned();
+    // Rename one, nest it, and bring it back to the top level.
+    let inner = agent.ok(M::POST, "/notebooks", Some(json!({ "name": "Inner" }))).await["id"].as_str().unwrap().to_owned();
+    let moved = agent.ok(M::PATCH, &format!("/notebooks/{inner}"), Some(json!({ "name": "📥 Inner", "parent_id": nb }))).await;
+    assert_eq!((moved["name"].clone(), moved["parent_id"].clone()), (json!("📥 Inner"), json!(nb)));
+    let moved = agent.ok(M::PATCH, &format!("/notebooks/{inner}"), Some(json!({ "parent_id": null }))).await;
+    assert_eq!((moved["name"].clone(), moved["parent_id"].clone()), (json!("📥 Inner"), Value::Null));
+    assert_eq!(agent.call(M::PATCH, &format!("/notebooks/{inner}"), Some(json!({}))).await.0, 400);
+    assert_eq!(agent.call(M::PATCH, &format!("/notebooks/{nb}"), Some(json!({ "parent_id": nb }))).await.0, 400, "not inside itself");
     let note = agent.ok(M::POST, "/notes", Some(json!({ "notebook_id": nb, "text": "# Daily log\n\nStarted." }))).await;
     assert_eq!((note["title"].clone(), note["notebook_id"].clone()), (json!("Daily log"), json!(nb)));
     assert!(note["updated_at"].as_str().unwrap().ends_with('Z'));
@@ -2423,7 +2442,13 @@ async fn fake_tools(reject_tools: bool) -> (String, std::sync::Arc<std::sync::Mu
             if body.get("tools").is_none() {
                 return axum::Json(json!({ "choices": [{ "message": { "role": "assistant", "content": "Answer only." } }] })).into_response();
             }
-            let (name, args) = if content.contains("create") {
+            let (name, args) = if content.contains("rename") {
+                ("rename_notebook", json!({ "notebook": "home", "name": "🏠 Home" }))
+            } else if content.contains("nest") {
+                ("move_notebook", json!({ "notebook": "Garage", "into": "Home" }))
+            } else if content.contains("notebook") {
+                ("create_notebook", json!({ "name": "Garage" }))
+            } else if content.contains("create") {
                 ("create_note", json!({ "text": "Plumber\n$4,200 for the drain", "notebook": "Home" }))
             } else if content.contains("append") {
                 ("append_to_note", json!({ "note": content.split_whitespace().last().unwrap(), "text": "oat milk" }))
@@ -2535,6 +2560,19 @@ async fn scribe_acts_at_the_level_chosen() {
     let trash = alice.get("/trash").await;
     assert!(trash.as_array().unwrap().iter().any(|t| t["id"] == created), "undo trashed the new note: {trash}");
 
+    // Add makes a notebook, and its Undo trashes it; renaming one is above Add.
+    let (actions, _) = scribe(&alice, "make a notebook").await;
+    assert_eq!((actions.len(), actions[0]["kind"].clone(), actions[0]["title"].clone()), (1, json!("notebook_created"), json!("Garage")), "{actions:?}");
+    let named = |name: &str, tree: &Value| tree["notebooks"].as_array().unwrap().iter().find(|n| n["name"] == name).map(|n| n["id"].clone());
+    assert_eq!(named("Garage", &alice.get("/tree").await), Some(actions[0]["note"].clone()));
+    let res = alice.send(reqwest::Method::POST, "/ask/undo", json!({ "action": actions[0] })).await;
+    assert!(res.status().is_success(), "undo notebook: {}", res.status());
+    assert_eq!(named("Garage", &alice.get("/tree").await), None);
+    let (actions, _) = scribe(&alice, "rename the notebook").await;
+    assert!(actions.is_empty(), "rename is refused at Add: {actions:?}");
+    let prompt = seen.lock().unwrap().last().unwrap()["messages"][0]["content"].as_str().unwrap().to_owned();
+    assert!(prompt.contains("- Home\n"), "the model sees the notebooks: {prompt}");
+
     // Read only: the same asks change nothing, and the model is told so. "milk" is in the note,
     // so the search finds it and the turn reaches the model.
     alice.send(reqwest::Method::PATCH, "/me/scribe", json!({ "access": "read" })).await;
@@ -2569,6 +2607,26 @@ async fn scribe_acts_at_the_level_chosen() {
     let res = alice.send(reqwest::Method::POST, "/ask/undo", json!({ "action": actions[0] })).await;
     assert!(res.status().is_success(), "undo move: {}", res.status());
     assert_eq!(place(alice.get("/tree").await), Value::Null);
+    // Rename a notebook (here, to add an emoji) and nest one in another; each Undo puts it back.
+    let (actions, _) = scribe(&alice, "rename the notebook").await;
+    assert_eq!((actions.len(), actions[0]["kind"].clone(), actions[0]["text"].clone()), (1, json!("notebook_renamed"), json!("🏠 Home")), "{actions:?}");
+    assert_eq!(named("🏠 Home", &alice.get("/tree").await), Some(home.clone()));
+    let res = alice.send(reqwest::Method::POST, "/ask/undo", json!({ "action": actions[0] })).await;
+    assert!(res.status().is_success(), "undo rename: {}", res.status());
+    assert_eq!(named("Home", &alice.get("/tree").await), Some(home.clone()));
+    let garage = alice.post("/notebooks", json!({ "name": "Garage" })).await["id"].clone();
+    let (actions, _) = scribe(&alice, "nest garage").await;
+    assert_eq!((actions.len(), actions[0]["kind"].clone(), actions[0]["text"].clone()), (1, json!("notebook_moved"), json!("Home")), "{actions:?}");
+    let parent = |tree: Value| tree["notebooks"].as_array().unwrap().iter().find(|n| n["id"] == garage).unwrap()["parent_id"].clone();
+    assert_eq!(parent(alice.get("/tree").await), home);
+    let res = alice.send(reqwest::Method::POST, "/ask/undo", json!({ "action": actions[0] })).await;
+    assert!(res.status().is_success(), "undo nest: {}", res.status());
+    assert_eq!(parent(alice.get("/tree").await), Value::Null);
+    // A notebook undo is checked too: carol can't rename alice's notebook with a forged one.
+    let forged_nb = json!({ "action": { "kind": "notebook_renamed", "note": home, "title": "", "text": "Home", "before": "pwned" } });
+    assert!(carol.send(reqwest::Method::POST, "/ask/undo", forged_nb).await.status().is_client_error());
+    assert_eq!(named("Home", &alice.get("/tree").await), Some(home.clone()));
+
     let victim = alice.post("/notes", json!({})).await["id"].as_str().unwrap().to_owned();
     ws.join_and_sync(&victim, None).await;
     ws.send_frame(0x01, &victim, &edit(&LoroDoc::new(), 0, "# To trash\nold estimate")).await;
@@ -2607,6 +2665,17 @@ async fn scribe_falls_back_when_the_service_rejects_tools() {
     let alice = user(&server, "alice").await;
     root.send(reqwest::Method::PUT, "/admin/settings/embed", json!({ "url": fake_url, "model": "fake-embed" })).await;
     root.send(reqwest::Method::PUT, "/admin/settings/summary", json!({ "url": fake_url, "model": "fake-chat" })).await;
+    // A note for the answer-only turn to find, since it searches first.
+    let mut ws = alice.ws().await;
+    let note = alice.post("/notes", json!({})).await["id"].as_str().unwrap().to_owned();
+    ws.join_and_sync(&note, None).await;
+    ws.send_frame(0x01, &note, &edit(&LoroDoc::new(), 0, "# Plumber\ncreate a note for the plumber's quote")).await;
+    for _ in 0..50 {
+        if !search(&alice, "plumber").await.is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 
     // The first turn tries the tools, the service says no, and the turn still answers.
     assert_eq!(alice.get("/features").await["ask_actions"], true);

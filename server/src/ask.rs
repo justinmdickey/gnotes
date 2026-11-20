@@ -1,11 +1,15 @@
-//! Ask: a conversation with your notes. See "AI search" in docs/DESIGN.md.
+//! Scribe: a conversation with your notes. See "AI search" in docs/DESIGN.md.
 //!
-//! Each turn the app sends the conversation so far; nothing is kept here. A follow-up is first
-//! rewritten by the chat model into a standalone search. The search mixes full-text matches
-//! (search.rs) with matches by meaning (semantic.rs) by reciprocal rank fusion, so exact words and
-//! meaning both count, over the notes the user can see. The best few notes go back to the app at
-//! once, as cards, and their closest passages, and nothing else, go to the chat model, whose
-//! answer is streamed to the app as it's written.
+//! Each turn the app sends the conversation so far; nothing is kept here. The chat model gets the
+//! user's notebooks and tools to search, read and change notes as the user, and searches only
+//! when it needs a note: many messages ("add an emoji to each notebook") need none. Each search
+//! mixes full-text matches (search.rs) with matches by meaning (semantic.rs) by reciprocal rank
+//! fusion, so exact words and meaning both count, over the notes the user can see. The notes found
+//! go to the app as cards, numbered for the answer's citations, and their closest passages go to
+//! the model. The answer is streamed to the app as it's written.
+//!
+//! A chat service that can't take tools gets the older turn instead: a follow-up is rewritten into
+//! a standalone search, the search runs first, and the model answers from what it found.
 //!
 //! Measured against qwen3-embedding with 30 notes and 30 questions (finder questions, follow-ups,
 //! exact words): the right note was in the top 3 for 26 with full text alone, 29 with meaning
@@ -40,7 +44,7 @@ use crate::{
     search::{self, Segment},
     semantic::{self, chunks, similarity},
     tasks,
-    tree::{add_note, load_tree, move_note, trash_note},
+    tree::{Tree, add_note, add_notebook, change_notebook, load_tree, move_note, trash_note, trash_notebook},
     util::new_id,
 };
 
@@ -62,7 +66,9 @@ const HISTORY_CHARS: usize = 6000;
 /// The model replies with exactly this when the notes don't answer the question.
 const NO_ANSWER: &str = "NO_ANSWER";
 /// The most tool calls one turn makes; after that the model answers with what it has.
-const MAX_TOOL_CALLS: usize = 8;
+const MAX_TOOL_CALLS: usize = 12;
+/// The most notebooks listed in the prompt.
+const PROMPT_NOTEBOOKS: usize = 300;
 /// The most of a note's text read_note sends back, in characters.
 const READ_CHARS: usize = 20_000;
 /// The most text one note may hold, the same as the agent API.
@@ -81,12 +87,14 @@ pub(crate) fn tools_rejected_reset() {
 }
 
 /// One thing Scribe did in a turn, sent to the app as an `action` event and what its Undo takes
-/// back. `before` is what was there: the replaced lines, the old notebook's id, or a ticked
-/// task's old state ("done" or "open").
+/// back. `before` is what was there: the replaced lines, the old notebook's id, a ticked task's old
+/// state ("done" or "open"), a notebook's old name, or its old parent's id.
 #[derive(Serialize, Deserialize)]
 struct Action {
-    /// `created`, `appended`, `task_added`, `task_done`, `replaced`, `moved` or `trashed`.
+    /// `created`, `appended`, `task_added`, `task_done`, `replaced`, `moved` or `trashed`, or for
+    /// a notebook `notebook_created`, `notebook_renamed` or `notebook_moved`.
     kind: String,
+    /// The note's id, or the notebook's for a notebook action.
     note: String,
     title: String,
     /// What was written.
@@ -109,7 +117,7 @@ fn tools_for(access: ScribeAccess) -> Value {
     let mut tools = vec![
         tool(
             "search_notes",
-            "Find your notes by words or meaning. Call this before read_note to find a note's id.",
+            "Find notes by words or meaning. Each note found has a number for [n] citations, its id for the other tools, and its closest passages.",
             json!({ "type": "object", "properties": { "query": { "type": "string" } }, "required": ["query"] }),
         ),
         tool(
@@ -141,6 +149,15 @@ fn tools_for(access: ScribeAccess) -> Value {
                         "notebook": { "type": "string" },
                     },
                     "required": ["text"],
+                }),
+            ),
+            tool(
+                "create_notebook",
+                "Make a notebook. `parent` is the notebook's name or \"A/B\" path to make it in; leave it out for the top level.",
+                json!({
+                    "type": "object",
+                    "properties": { "name": { "type": "string" }, "parent": { "type": "string" } },
+                    "required": ["name"],
                 }),
             ),
             tool(
@@ -198,6 +215,24 @@ fn tools_for(access: ScribeAccess) -> Value {
                 }),
             ),
             tool(
+                "rename_notebook",
+                "Rename a notebook. `notebook` is its name or \"A/B\" path; `name` is the whole new name.",
+                json!({
+                    "type": "object",
+                    "properties": { "notebook": { "type": "string" }, "name": { "type": "string" } },
+                    "required": ["notebook", "name"],
+                }),
+            ),
+            tool(
+                "move_notebook",
+                "Move a notebook into another by its name or \"A/B\" path; leave `into` out for the top level.",
+                json!({
+                    "type": "object",
+                    "properties": { "notebook": { "type": "string" }, "into": { "type": "string" } },
+                    "required": ["notebook"],
+                }),
+            ),
+            tool(
                 "trash_note",
                 "Move a note you own to the trash, where it can be restored.",
                 json!({
@@ -212,12 +247,12 @@ fn tools_for(access: ScribeAccess) -> Value {
 }
 
 /// The system prompt for a turn that can act: the level, today's date and weekday, and the
-/// found notes, numbered for [n] citations, with their closest passages.
-fn scribe_prompt(access: ScribeAccess, found: &[Found], passages: &[Vec<String>]) -> String {
+/// user's notebooks.
+fn scribe_prompt(access: ScribeAccess, tree: &Tree) -> String {
     let level = match access {
         ScribeAccess::Read => "Read only: you may search and read notes and answer, and nothing else. If asked to change something, say in one line that you can't and that they can turn Scribe up in Account.",
-        ScribeAccess::Add => "Add: you may search and read notes, and also make notes, add to the end of a note, add tasks and tick tasks. You can't change text inside a note, move notes or trash them; if asked, say so in one line.",
-        ScribeAccess::Full => "Full: you may search and read notes, make notes, add to the end of a note, add and tick tasks, change text inside a note, move notes, and move notes you own to the trash.",
+        ScribeAccess::Add => "Add: you may search and read notes, and also make notes and notebooks, add to the end of a note, add tasks and tick tasks. You can't change text inside a note, rename or move notes and notebooks, or trash them; if asked, say so in one line.",
+        ScribeAccess::Full => "Full: you may search and read notes, make notes and notebooks, add to the end of a note, add and tick tasks, change text inside a note (a note's title is its first line), rename and move notebooks, move notes, and move notes you own to the trash.",
     };
     let now = time::OffsetDateTime::now_utc();
     let date = now.format(&time::format_description::well_known::Rfc3339).unwrap_or_default();
@@ -232,10 +267,20 @@ fn scribe_prompt(access: ScribeAccess, found: &[Found], passages: &[Vec<String>]
         time::Weekday::Sunday => "Sunday",
     };
     let mut prompt = format!(
-        "You are Scribe, one person's assistant on their notes. Today is {date} ({weekday}); a day like \"Friday\" means that date, and \"this week\" the week containing it.\n{level}\nYou act as that person: you never see or change a note they couldn't, and you never share, unshare or empty the trash.\nDo what's asked with the tools, then answer in one or two short sentences, plain text, no headings, in their language, saying what you did.\nIf nothing answers their message, reply with exactly NO_ANSWER and nothing else.\nThese notes were found for their message; cite the ones you use by number in square brackets, like [1], right after what they support:\n"
+        "You are Scribe, one person's assistant on their notes. Today is {date} ({weekday}); a day like \"Friday\" means that date, and \"this week\" the week containing it.\n{level}\nYou act as that person: you never see or change a note they couldn't, and you never share, unshare or empty the trash.\nDo what's asked with the tools, then answer in one or two short sentences, plain text, no headings, in their language, saying what you did.\nTo answer from their notes or to find a note, use search_notes; don't guess at what a note says. Cite the notes you use by their search_notes number in square brackets, like [1], right after what they support.\nIf you searched and nothing answers their message, reply with exactly NO_ANSWER and nothing else.\n"
     );
-    for (f, texts) in found.iter().zip(passages) {
-        prompt.push_str(&format!("\n[{}] {}\n{}\n", f.n, if f.title.is_empty() { "Untitled" } else { &f.title }, texts.join("\n…\n")));
+    let paths = notebook_paths(tree);
+    if paths.is_empty() {
+        prompt.push_str("\nThey have no notebooks yet.\n");
+    } else {
+        prompt.push_str("\nTheir notebooks, by path (\"(view only)\" ones can't be changed):\n");
+        for (nb, path) in paths.iter().take(PROMPT_NOTEBOOKS) {
+            let view_only = if nb.role < Role::Editor { " (view only)" } else { "" };
+            prompt.push_str(&format!("- {path}{view_only}\n"));
+        }
+        if paths.len() > PROMPT_NOTEBOOKS {
+            prompt.push_str(&format!("- and {} more\n", paths.len() - PROMPT_NOTEBOOKS));
+        }
     }
     prompt
 }
@@ -267,7 +312,7 @@ pub struct AskBody {
 
 /// A note found for a turn. `n` is its number in the answer's [n] citations.
 #[derive(Serialize)]
-struct Found {
+struct FoundNote {
     n: usize,
     note: String,
     title: String,
@@ -370,7 +415,7 @@ fn marked(text: &str, terms: &[String]) -> Vec<Segment> {
 
 /// The notes for a search: full-text and meaning matches mixed by reciprocal rank fusion, best
 /// first, each with its snippet, plus the passages of each to send to the chat model.
-async fn retrieve(state: &AppState, user: &str, cfg: &ChatConfig, query: &str) -> ApiResult<(Vec<Found>, Vec<Vec<String>>)> {
+async fn retrieve(state: &AppState, user: &str, cfg: &ChatConfig, query: &str) -> ApiResult<(Vec<FoundNote>, Vec<Vec<String>>)> {
     let terms = search::question_terms(query);
     let by_text = search::any_terms(state, user, &terms, CANDIDATES as i64).await?;
     let (q, by_meaning) = semantic::matches(state, user, cfg, query).await?;
@@ -441,7 +486,7 @@ async fn retrieve(state: &AppState, user: &str, cfg: &ChatConfig, query: &str) -
             break;
         }
         chosen.sort();
-        found.push(Found { n: found.len() + 1, note: id.to_owned(), title, snippet });
+        found.push(FoundNote { n: found.len() + 1, note: id.to_owned(), title, snippet });
         passages.push(chosen.into_iter().map(|i| pieces[i].0.clone()).collect());
     }
     Ok((found, passages))
@@ -490,17 +535,6 @@ fn event(name: &str, data: Value) -> Event {
 /// answer (null when the notes don't say) and the numbers it cites. Returns early when the app
 /// goes away.
 async fn turn(state: AppState, me: User, embed_cfg: ChatConfig, chat_cfg: ChatConfig, earlier: Vec<(&'static str, String)>, question: String, tx: mpsc::Sender<Event>) -> ApiResult<()> {
-    let query = if earlier.is_empty() { question.clone() } else { standalone(&state, &chat_cfg, &earlier, &question).await? };
-    let (found, passages) = retrieve(&state, &me.id, &embed_cfg, &query).await?;
-    let terms = search::question_terms(&query);
-    if tx.send(event("sources", json!({ "query": query, "terms": terms, "notes": found }))).await.is_err() {
-        return Ok(());
-    }
-    // Read only with nothing found is today's Ask: the model isn't asked at all.
-    if found.is_empty() && me.scribe_access == ScribeAccess::Read {
-        let _ = tx.send(event("done", json!({ "answer": null, "cited": [] }))).await;
-        return Ok(());
-    }
     let messages = |system: String| {
         let mut messages = vec![json!({ "role": "system", "content": system })];
         messages.extend(earlier.iter().map(|(role, text)| json!({ "role": role, "content": text })));
@@ -508,14 +542,29 @@ async fn turn(state: AppState, me: User, embed_cfg: ChatConfig, chat_cfg: ChatCo
         messages
     };
 
-    // Otherwise the model may act; a service that rejects the tools falls back to the
-    // answer-only turn below.
-    match scribe_turn(&state, &me, &chat_cfg, &messages(scribe_prompt(me.scribe_access, &found, &passages)), found.len(), &tx).await {
-        Ok(()) => return Ok(()),
-        Err(AppError::ToolsRejected) => {
-            TOOLS_REJECTED.store(true, Ordering::Relaxed);
+    // The model may act, and searches when it needs to; a service that rejects the tools falls
+    // back to the answer-only turn below.
+    if !tools_rejected() {
+        let tree = load_tree(&state, &me).await?;
+        match scribe_turn(&state, &me, &chat_cfg, &messages(scribe_prompt(me.scribe_access, &tree)), &tx).await {
+            Ok(()) => return Ok(()),
+            Err(AppError::ToolsRejected) => {
+                TOOLS_REJECTED.store(true, Ordering::Relaxed);
+            }
+            Err(e) => return Err(e),
         }
-        Err(e) => return Err(e),
+    }
+
+    let query = if earlier.is_empty() { question.clone() } else { standalone(&state, &chat_cfg, &earlier, &question).await? };
+    let (found, passages) = retrieve(&state, &me.id, &embed_cfg, &query).await?;
+    let terms = search::question_terms(&query);
+    if tx.send(event("sources", json!({ "query": query, "terms": terms, "notes": found }))).await.is_err() {
+        return Ok(());
+    }
+    // With nothing found, the model isn't asked at all.
+    if found.is_empty() {
+        let _ = tx.send(event("done", json!({ "answer": null, "cited": [] }))).await;
+        return Ok(());
     }
 
     let mut system = format!("{ASK_PROMPT}\nNotes:\n");
@@ -550,12 +599,13 @@ async fn turn(state: AppState, me: User, embed_cfg: ChatConfig, chat_cfg: ChatCo
 }
 
 /// A turn that can act: the model calls tools, the server runs them as `me` (sending an
-/// `action` event for each change), the results go back, until the model writes its answer,
-/// which is streamed as it's written. `messages` ends with the user's message; `n_notes` is how
-/// many numbered notes the answer may cite.
-async fn scribe_turn(state: &AppState, me: &User, cfg: &ChatConfig, messages: &[Value], n_notes: usize, tx: &mpsc::Sender<Event>) -> ApiResult<()> {
+/// `action` event for each change, and a `sources` event with every note found so far after each
+/// search), the results go back, until the model writes its answer, which is streamed as it's
+/// written. `messages` ends with the user's message.
+async fn scribe_turn(state: &AppState, me: &User, cfg: &ChatConfig, messages: &[Value], tx: &mpsc::Sender<Event>) -> ApiResult<()> {
     let tools = tools_for(me.scribe_access);
     let mut messages = messages.to_vec();
+    let mut found = Found::default();
     for round in 0..MAX_TOOL_CALLS {
         let mut reply = String::new();
         let mut sent = 0;
@@ -581,7 +631,7 @@ async fn scribe_turn(state: &AppState, me: &User, cfg: &ChatConfig, messages: &[
             let done = if answer.is_empty() || is_no_answer(&answer) {
                 json!({ "answer": null, "cited": [] })
             } else {
-                let cited: Vec<usize> = citations(&answer).into_iter().filter(|n| (1..=n_notes).contains(n)).collect();
+                let cited: Vec<usize> = citations(&answer).into_iter().filter(|n| (1..=found.notes.len()).contains(n)).collect();
                 json!({ "answer": answer, "cited": cited })
             };
             let _ = tx.send(event("done", done)).await;
@@ -592,10 +642,13 @@ async fn scribe_turn(state: &AppState, me: &User, cfg: &ChatConfig, messages: &[
         for call in &calls {
             let name = call["function"]["name"].as_str().unwrap_or_default();
             let args: Value = serde_json::from_str(call["function"]["arguments"].as_str().unwrap_or("{}")).unwrap_or(json!({}));
-            let (result, action) = match run_tool(state, me, name, &args).await {
+            let (result, action) = match run_tool(state, me, name, &args, &mut found).await {
                 Ok(r) => r,
                 Err(e) => (json!({ "error": e.to_string() }).to_string(), None),
             };
+            if name == "search_notes" && tx.send(event("sources", json!({ "query": found.query, "terms": found.terms, "notes": found.notes }))).await.is_err() {
+                return Ok(());
+            }
             if let Some(action) = action {
                 if tx.send(event("action", serde_json::to_value(action).unwrap())).await.is_err() {
                     return Ok(());
@@ -611,19 +664,34 @@ async fn scribe_turn(state: &AppState, me: &User, cfg: &ChatConfig, messages: &[
     })
     .await?;
     let answer = crate::summary::clean(shown(&content).unwrap_or_default());
-    let _ = tx.send(event("done", json!({ "answer": if answer.is_empty() || is_no_answer(&answer) { Value::Null } else { Value::String(answer) }, "cited": [] }))).await;
+    let done = if answer.is_empty() || is_no_answer(&answer) {
+        json!({ "answer": null, "cited": [] })
+    } else {
+        let cited: Vec<usize> = citations(&answer).into_iter().filter(|n| (1..=found.notes.len()).contains(n)).collect();
+        json!({ "answer": answer, "cited": cited })
+    };
+    let _ = tx.send(event("done", done)).await;
     Ok(())
+}
+
+/// The notes a Scribe turn's searches found, numbered in the order first found, and the latest
+/// search's words, for the app to mark.
+#[derive(Default)]
+struct Found {
+    query: String,
+    terms: Vec<String>,
+    notes: Vec<FoundNote>,
 }
 
 /// One tool call, run as `me`. Returns what goes back to the model, and the `action` event when
 /// the call changed something. A refused call says so, so the model can tell the person.
-async fn run_tool(state: &AppState, me: &User, name: &str, args: &Value) -> Result<(String, Option<Action>), ToolError> {
+async fn run_tool(state: &AppState, me: &User, name: &str, args: &Value, found: &mut Found) -> Result<(String, Option<Action>), ToolError> {
     let err = |message: &str| Err(ToolError::Other(message.to_owned()));
     // A tool above the level isn't offered, but a model may still call it; refuse it then.
     let required = match name {
         "search_notes" | "read_note" | "list_tasks" => ScribeAccess::Read,
-        "create_note" | "append_to_note" | "add_task" | "set_task_done" => ScribeAccess::Add,
-        "replace_in_note" | "move_note" | "trash_note" => ScribeAccess::Full,
+        "create_note" | "create_notebook" | "append_to_note" | "add_task" | "set_task_done" => ScribeAccess::Add,
+        "replace_in_note" | "move_note" | "trash_note" | "rename_notebook" | "move_notebook" => ScribeAccess::Full,
         _ => return Err(ToolError::Other(format!("Unknown tool {name}"))),
     };
     if me.scribe_access.rank() < required.rank() {
@@ -641,27 +709,36 @@ async fn run_tool(state: &AppState, me: &User, name: &str, args: &Value) -> Resu
                 return err("Send the words to search for");
             };
             let embed = state.embed.read().await.clone();
-            let (found, _) = match embed.as_ref() {
+            let (hits, passages) = match embed.as_ref() {
                 Some(cfg) => retrieve(state, &me.id, cfg, query).await?,
                 None => {
                     let terms = search::question_terms(query);
                     let hits = search::any_terms(state, &me.id, &terms, NOTES as i64).await?;
-                    (
-                        hits
-                            .into_iter()
-                            .map(|r| Found { n: 0, note: r.note, title: r.title, snippet: r.snippet })
-                            .collect(),
-                        Vec::new(),
-                    )
+                    (hits.into_iter().map(|r| FoundNote { n: 0, note: r.note, title: r.title, snippet: r.snippet }).collect(), Vec::new())
                 }
             };
-            let out = json!({
-                "notes": found
-                    .iter()
-                    .map(|f| json!({ "id": f.note, "title": f.title, "snippet": f.snippet.iter().map(|s| s.text.as_str()).collect::<String>() }))
-                    .collect::<Vec<_>>()
-            });
-            Ok((out.to_string(), None))
+            // Numbered across the turn: a note found again keeps its number.
+            found.query = query.to_owned();
+            found.terms = search::question_terms(query);
+            let mut out = Vec::new();
+            for (i, mut hit) in hits.into_iter().enumerate() {
+                let n = match found.notes.iter().find(|f| f.note == hit.note) {
+                    Some(f) => f.n,
+                    None => {
+                        hit.n = found.notes.len() + 1;
+                        let n = hit.n;
+                        found.notes.push(hit);
+                        n
+                    }
+                };
+                let f = found.notes.iter().find(|f| f.n == n).unwrap();
+                let text = match passages.get(i) {
+                    Some(p) => p.join("\n…\n"),
+                    None => f.snippet.iter().map(|s| s.text.as_str()).collect(),
+                };
+                out.push(json!({ "n": n, "id": f.note, "title": f.title, "passages": text }));
+            }
+            Ok((json!({ "notes": out }).to_string(), None))
         }
         "read_note" => {
             let Ok(uuid) = note_id() else { return err("Send the note's id") };
@@ -712,6 +789,60 @@ async fn run_tool(state: &AppState, me: &User, name: &str, args: &Value) -> Resu
             Ok((
                 json!({ "note": id, "title": title }).to_string(),
                 Some(Action { kind: "created".into(), note: id, title, text: text.to_owned(), before: None, after: None, line: None }),
+            ))
+        }
+        "create_notebook" => {
+            let Some(name) = args.get("name").and_then(|v| v.as_str()).filter(|n| !n.trim().is_empty()) else {
+                return err("Send the notebook's name");
+            };
+            let parent = match args.get("parent").and_then(|v| v.as_str()).filter(|n| !n.trim().is_empty()) {
+                Some(p) => Some(find_notebook(state, me, p).await?.ok_or_else(|| AppError::BadRequest(format!("There's no notebook named {p}")))?),
+                None => None,
+            };
+            let id = add_notebook(state, &me.id, name, parent.as_deref()).await?;
+            let path = notebook_path(state, me, &id).await?;
+            Ok((
+                json!({ "notebook": path }).to_string(),
+                Some(Action { kind: "notebook_created".into(), note: id, title: path, text: String::new(), before: None, after: None, line: None }),
+            ))
+        }
+        "rename_notebook" => {
+            let Some(target) = args.get("notebook").and_then(|v| v.as_str()).filter(|n| !n.trim().is_empty()) else {
+                return err("Send the notebook's name");
+            };
+            let Some(name) = args.get("name").and_then(|v| v.as_str()).filter(|n| !n.trim().is_empty()) else {
+                return err("Send the new name");
+            };
+            let id = find_notebook(state, me, target).await?.ok_or_else(|| AppError::BadRequest(format!("There's no notebook named {target} you can change")))?;
+            let old_path = notebook_path(state, me, &id).await?;
+            let old: String = sqlx::query_scalar("SELECT name FROM notebooks WHERE id = ?").bind(&id).fetch_one(&state.db).await?;
+            change_notebook(state, &me.id, &id, Some(name), None).await?;
+            let new: String = sqlx::query_scalar("SELECT name FROM notebooks WHERE id = ?").bind(&id).fetch_one(&state.db).await?;
+            Ok((
+                json!({ "ok": true }).to_string(),
+                Some(Action { kind: "notebook_renamed".into(), note: id, title: old_path, text: new, before: Some(old), after: None, line: None }),
+            ))
+        }
+        "move_notebook" => {
+            let Some(target) = args.get("notebook").and_then(|v| v.as_str()).filter(|n| !n.trim().is_empty()) else {
+                return err("Send the notebook's name");
+            };
+            let id = find_notebook(state, me, target).await?.ok_or_else(|| AppError::BadRequest(format!("There's no notebook named {target} you can change")))?;
+            let into = args.get("into").and_then(|v| v.as_str()).filter(|n| !n.trim().is_empty());
+            let into_id = match into {
+                Some(p) => Some(find_notebook(state, me, p).await?.ok_or_else(|| AppError::BadRequest(format!("There's no notebook named {p}")))?),
+                None => None,
+            };
+            let old: Option<String> = sqlx::query_scalar("SELECT parent_id FROM notebooks WHERE id = ?").bind(&id).fetch_one(&state.db).await?;
+            change_notebook(state, &me.id, &id, None, Some(into_id.as_deref())).await?;
+            let name: String = sqlx::query_scalar("SELECT name FROM notebooks WHERE id = ?").bind(&id).fetch_one(&state.db).await?;
+            let to = match &into_id {
+                Some(p) => notebook_path(state, me, p).await?,
+                None => "Notes".into(),
+            };
+            Ok((
+                json!({ "ok": true }).to_string(),
+                Some(Action { kind: "notebook_moved".into(), note: id, title: name, text: to, before: old, after: None, line: None }),
             ))
         }
         "append_to_note" => {
@@ -936,35 +1067,53 @@ impl ToolError {
     }
 }
 
-/// A notebook the user can edit, by its name or "A/B" path, case-insensitive.
-async fn find_notebook(state: &AppState, me: &User, name: &str) -> ApiResult<Option<String>> {
-    let tree = load_tree(state, me).await?;
-    let target = name.trim().to_lowercase();
-    let mut out = None;
-    for nb in &tree.notebooks {
-        if nb.role < Role::Editor {
-            continue;
-        }
-        let path: Vec<String> = {
-            let mut parts = vec![nb.name.to_lowercase()];
-            let mut cur = nb.parent_id.clone();
-            while let Some(parent) = cur {
+/// Each notebook the user can see with its "A/B" path, A–Z by path.
+fn notebook_paths(tree: &Tree) -> Vec<(&crate::tree::TreeNotebook, String)> {
+    let mut out: Vec<_> = tree
+        .notebooks
+        .iter()
+        .map(|nb| {
+            let mut parts = vec![nb.name.as_str()];
+            let mut cur = nb.parent_id.as_deref();
+            // A parent the user can't see ends the path; a cycle can't happen, but stop anyway.
+            while let Some(parent) = cur.filter(|_| parts.len() < 64) {
                 match tree.notebooks.iter().find(|n| n.id == parent) {
                     Some(p) => {
-                        parts.insert(0, p.name.to_lowercase());
-                        cur = p.parent_id.clone();
+                        parts.insert(0, p.name.as_str());
+                        cur = p.parent_id.as_deref();
                     }
                     None => break,
                 }
             }
-            parts
-        };
-        if path.join("/").eq(&target) || path.last().unwrap().eq(&target) {
-            out = Some(nb.id.clone());
-            break;
-        }
+            (nb, parts.join("/"))
+        })
+        .collect();
+    out.sort_by_key(|(_, path)| path.to_lowercase());
+    out
+}
+
+/// A notebook the user can edit, by its "A/B" path or its name, case-insensitive. A path wins
+/// over a name, and a name that's in more than one place is too unclear to pick.
+async fn find_notebook(state: &AppState, me: &User, name: &str) -> ApiResult<Option<String>> {
+    let tree = load_tree(state, me).await?;
+    let target = name.trim().trim_matches('/').to_lowercase();
+    let paths = notebook_paths(&tree);
+    let editable = || paths.iter().filter(|(nb, _)| nb.role >= Role::Editor);
+    if let Some((nb, _)) = editable().find(|(_, path)| path.to_lowercase() == target) {
+        return Ok(Some(nb.id.clone()));
     }
-    Ok(out)
+    let by_name: Vec<_> = editable().filter(|(nb, _)| nb.name.to_lowercase() == target).collect();
+    match by_name.as_slice() {
+        [(nb, _)] => Ok(Some(nb.id.clone())),
+        [] => Ok(None),
+        _ => Err(AppError::BadRequest(format!("More than one notebook is named {name}; send its \"A/B\" path"))),
+    }
+}
+
+/// A notebook's "A/B" path, as the user sees it.
+async fn notebook_path(state: &AppState, me: &User, id: &str) -> ApiResult<String> {
+    let tree = load_tree(state, me).await?;
+    Ok(notebook_paths(&tree).into_iter().find(|(nb, _)| nb.id == id).map(|(_, p)| p).unwrap_or_default())
 }
 
 /// A note the user can see, by its title, case-insensitive.
@@ -986,6 +1135,30 @@ pub struct UndoBody {
 
 pub async fn undo(State(state): State<AppState>, CurrentUser(me): CurrentUser, Json(body): Json<UndoBody>) -> ApiResult<Json<Value>> {
     let a = &body.action;
+    // A notebook's changes go back through the same checks as the app's own.
+    match a.kind.as_str() {
+        "notebook_created" => {
+            trash_notebook(&state, &me.id, &a.note).await?;
+            return Ok(Json(json!({ "ok": true })));
+        }
+        "notebook_renamed" => {
+            let Some(old) = &a.before else { return Err(AppError::Conflict("Nothing to put back".into())) };
+            let now: Option<String> = sqlx::query_scalar("SELECT name FROM notebooks WHERE id = ? AND deleted_at IS NULL")
+                .bind(&a.note)
+                .fetch_optional(&state.db)
+                .await?;
+            if now.as_deref() != Some(a.text.as_str()) {
+                return Err(AppError::Conflict("That notebook has been renamed since".into()));
+            }
+            change_notebook(&state, &me.id, &a.note, Some(old), None).await?;
+            return Ok(Json(json!({ "ok": true })));
+        }
+        "notebook_moved" => {
+            change_notebook(&state, &me.id, &a.note, None, Some(a.before.as_deref())).await?;
+            return Ok(Json(json!({ "ok": true })));
+        }
+        _ => {}
+    }
     let id = Uuid::parse_str(&a.note).map_err(|_| AppError::NotFound)?;
     // The action comes back from the app, so it's checked like any edit: the note must be one
     // this user may change, whatever the action says.

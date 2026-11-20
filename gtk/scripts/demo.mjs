@@ -74,9 +74,24 @@ function standInAI(port) {
           }
           return res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: "Added a line to Groceries." } }] }));
         }
+        // Scribe, asked for an emoji on Home, renames it, without searching, then says so.
+        const tools = Array.isArray(body.tools) && body.tools.length;
+        if (tools && asked.includes("add an emoji to Home")) {
+          if (body.messages.some((m) => m.role === "tool")) return res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: "Renamed Home." } }] }));
+          return res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: "", tool_calls: [{ id: "call_rename", type: "function", function: { name: "rename_notebook", arguments: JSON.stringify({ notebook: "Home", name: "🏠 Home" }) } }] } }] }));
+        }
+        // Scribe searches first: the conversation's first question plus the follow-up.
+        const users = body.messages.filter((m) => m.role === "user").map((m) => m.content);
+        if (tools && !body.messages.some((m) => m.role === "tool")) {
+          const query = users.length > 1 ? `${users[0]} ${asked}` : asked;
+          return res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: "", tool_calls: [{ id: "call_search", type: "function", function: { name: "search_notes", arguments: JSON.stringify({ query }) } }] } }] }));
+        }
         // Ask: a sentence for each note it knows, cited by its number, streamed.
         const lines = { Groceries: "You still need spinach, lemons and milk", Pantry: "Rice, beans and flour are in the pantry" };
-        const said = [...first.content.matchAll(/^\[(\d+)\] (\w+)$/gm)].filter((m) => lines[m[2]]).map((m) => `${lines[m[2]]} [${m[1]}].`);
+        const known = tools
+          ? body.messages.filter((m) => m.role === "tool").flatMap((m) => JSON.parse(m.content).notes ?? []).map((n) => [n.n, n.title])
+          : [...first.content.matchAll(/^\[(\d+)\] (\w+)$/gm)].map((m) => [m[1], m[2]]);
+        const said = known.filter(([, t]) => lines[t]).map(([n, t]) => `${lines[t]} [${n}].`);
         res.setHeader("content-type", "text/event-stream");
         for (const text of (said.join(" ") || "NO_ANSWER").match(/.{1,8}/g)) {
           res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\n`);

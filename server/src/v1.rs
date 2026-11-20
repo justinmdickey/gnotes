@@ -9,7 +9,7 @@ use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, FromRequest, FromRequestParts, Multipart, Path, Request, State},
     http::request::Parts,
-    routing::{get, post},
+    routing::{get, patch, post},
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
@@ -25,7 +25,7 @@ use crate::{
     search::{SearchResult, by_words},
     semantic::by_meaning,
     tasks,
-    tree::{add_note, add_notebook, load_tree, move_note, trash_note},
+    tree::{add_note, add_notebook, change_notebook, load_tree, move_note, trash_note},
     util::{double_option, new_id, parse_id},
 };
 
@@ -39,6 +39,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/me", get(me))
         .route("/notebooks", get(list_notebooks).post(create_notebook))
+        .route("/notebooks/{id}", patch(update_notebook))
         .route("/notes", get(list_notes).post(create_note))
         .route("/notes/{id}", get(get_note).patch(update_note).delete(delete_note))
         .route("/notes/{id}/append", post(append))
@@ -168,11 +169,40 @@ struct NewNotebook {
 /// `POST /v1/notebooks`: makes a notebook, at the top level or inside `parent_id`.
 async fn create_notebook(State(state): State<AppState>, key: KeyUser, Body(body): Body<NewNotebook>) -> ApiResult<Json<Notebook>> {
     let id = add_notebook(&state, &key.user.id, &body.name, body.parent_id.as_deref()).await?;
-    let tree = load_tree(&state, &key.user).await?;
+    load_notebook(&state, &key.user, &id).await
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NotebookPatch {
+    name: Option<String>,
+    /// Moves the notebook into this one; `null` moves it to the top level.
+    #[serde(default, deserialize_with = "double_option")]
+    parent_id: Option<Option<String>>,
+}
+
+/// `PATCH /v1/notebooks/:id`: renames a notebook, moves it, or both.
+async fn update_notebook(
+    State(state): State<AppState>,
+    key: KeyUser,
+    Path(id): Path<String>,
+    Body(body): Body<NotebookPatch>,
+) -> ApiResult<Json<Notebook>> {
+    let id = parse_id(&id).ok_or(AppError::NotFound)?;
+    if body.name.is_none() && body.parent_id.is_none() {
+        return Err(AppError::BadRequest("Send name, parent_id or both".into()));
+    }
+    change_notebook(&state, &key.user.id, &id, body.name.as_deref(), body.parent_id.as_ref().map(|p| p.as_deref())).await?;
+    load_notebook(&state, &key.user, &id).await
+}
+
+/// One notebook as the lists show it.
+async fn load_notebook(state: &AppState, user: &crate::auth::User, id: &str) -> ApiResult<Json<Notebook>> {
+    let tree = load_tree(state, user).await?;
     let nb = tree.notebooks.iter().find(|nb| nb.id == id).ok_or(AppError::NotFound)?;
     Ok(Json(Notebook {
-        id,
-        parent_id: nb.parent_id.clone(),
+        id: id.to_owned(),
+        parent_id: nb.parent_id.clone().filter(|p| tree.notebooks.iter().any(|x| &x.id == p)),
         name: nb.name.clone(),
         owner: nb.owner.clone(),
         role: nb.role,

@@ -263,13 +263,13 @@
           <li class="pick">
             <label class="choice">
               <input type="radio" name="scribe" value="add" bind:group={scribe} onchange={saveScribe} />
-              <span class="label">Add<span class="dim sub">Also make notes, add to the end of a note, add tasks and tick tasks</span></span>
+              <span class="label">Add<span class="dim sub">Also make notes and notebooks, add to the end of a note, add tasks and tick tasks</span></span>
             </label>
           </li>
           <li class="pick">
             <label class="choice">
               <input type="radio" name="scribe" value="full" bind:group={scribe} onchange={saveScribe} />
-              <span class="label">Full<span class="dim sub">Also change text inside a note, move notes, and move notes you own to the trash</span></span>
+              <span class="label">Full<span class="dim sub">Also change text inside a note, rename and move notebooks, move notes, and move notes you own to the trash</span></span>
             </label>
           </li>
           {#if !app.features.ask_actions}
