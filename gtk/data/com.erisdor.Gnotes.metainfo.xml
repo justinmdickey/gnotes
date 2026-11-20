@@ -30,6 +30,11 @@
     <control>keyboard</control>
   </supports>
   <releases>
+    <release version="1.10.0" date="2026-11-20">
+      <description>
+        <p>Scribe searches your notes only when it needs to, so it answers sooner when you ask it to do something. It can now make, rename and move notebooks, each with an Undo, and a notebook's change row opens that notebook.</p>
+      </description>
+    </release>
     <release version="1.9.2" date="2026-11-16">
       <description>
         <p>Files dropped on a note are attached again, and a paperclip on the format bar adds one. Scribe's change rows stay two lines tall however much it wrote.</p>
